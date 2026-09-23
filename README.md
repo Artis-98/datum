@@ -561,13 +561,16 @@ the target machine wants 2D paths and does its own depth passes.
 
 ## Releasing
 
-DATUM itself is about four megabytes of Python. The Qt and OpenCASCADE
-runtime under it is closer to six hundred. That single fact decides how
-releases work: shipping the whole application again for every fix would be
-a six hundred megabyte download to change a line, and nobody would take
-one. So a release publishes a manifest of every file with its hash, and an
-update fetches only the files whose hashes changed. A Python-only release
-is a few megabytes.
+DATUM itself is about four megabytes of Python. The runtime under it is
+571 MB, which is what a 0.2.0 build measures: 264 MB of VTK, 155 MB of
+OpenCASCADE, 91 MB of Qt after the exclude list has taken it down from
+641, and 21 MB of numpy. The installer compresses that to 106 MB.
+
+That decides how releases work. Shipping the whole application again for
+every fix would be a 571 MB download to change a line, and nobody would
+take one. So a release publishes a manifest of every file with its hash,
+and an update fetches only the files whose hashes changed. A Python-only
+release is a few megabytes.
 
 ```bash
 python tools/release.py 0.2.1 --notes "Hatched sections and parts lists."
@@ -594,6 +597,12 @@ publish it.
 Program Files install would need an administrator prompt to update, which
 an application cannot raise for itself, so silent updates would be
 impossible.
+
+Inno writes its uninstaller into that folder *after* the build is made, so
+`unins000.exe` is in no manifest. Treating "not in the manifest" as
+"delete" would have destroyed the uninstaller on the first update and left
+DATUM listed in Add or Remove Programs with nothing behind it, so
+`update.KEEP_ALWAYS` spares it.
 
 **The swap.** Windows will let a program rename its own executable but not
 touch a DLL it has loaded, and an installed DATUM has Qt, OpenCASCADE and

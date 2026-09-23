@@ -144,6 +144,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.doc_tabs = doctabs.DocumentTabs(self)
 
+        self._closing_for_update = False
         self.updater = updater.UpdateController(self)
 
         centre = QtWidgets.QWidget(self)
@@ -2563,7 +2564,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self._plane_drag_finished(10.0)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        if self._confirm_discard():
+        # Restarting for an update has already asked about unsaved work,
+        # and asking twice would be its own small insult.
+        if self._closing_for_update or self._confirm_discard():
             self.spacemouse.stop()
             event.accept()
         else:

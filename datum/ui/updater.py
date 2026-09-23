@@ -385,7 +385,12 @@ class UpdateController(QtCore.QObject):
         except update.UpdateError as exc:
             self.banner.problem(str(exc))
             return
-        QtWidgets.QApplication.quit()
+        # close() rather than quit(), so closeEvent runs and the SpaceMouse
+        # gives its device back.  The swap script is sitting there watching
+        # for this process to disappear, so leaving anything holding it
+        # open would strand the update rather than break it.
+        self.host._closing_for_update = True
+        self.host.close()
 
     # ---------------------------------------------------------------- extras
 

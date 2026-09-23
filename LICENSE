@@ -19,25 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
-
----------------------------------------------------------------------------
-Third-party software
----------------------------------------------------------------------------
-
-DATUM is distributed with libraries that carry their own licences. The MIT
-licence above covers DATUM's own source only.
-
-  Qt, via PySide6            LGPL-3.0
-  OpenCASCADE, via
-    cadquery-ocp             LGPL-2.1 with the OCCT exception
-  VTK                        BSD 3-clause
-    (not used by DATUM, but linked by OpenCASCADE's Python binding, so it
-     has to be present for the kernel to load at all)
-  NumPy                      BSD 3-clause
-  cryptography               Apache-2.0 / BSD 3-clause
-  Python                     PSF
-
-In a built installation each of these stays a separate file under
-_internal/, rather than being linked into DATUM itself, which is what lets
-anybody replace one with their own build as the LGPL requires.

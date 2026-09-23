@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Build output.  A release is rebuilt from a tag, never committed.
+build/
+dist/
+release/
+*.manifest
+
+# Signing keys.  The private key never goes in the repo, ever: it is the
+# one thing that decides whether an update DATUM installs is really yours.
+*.pem
+*.key
+signing-key*
+!signing-key.pub
+
+# Editors and OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# Scratch
+scratch/
+tmp/
+*.log

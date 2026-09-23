@@ -1,0 +1,17 @@
+# Store every file exactly as it is on disk.
+#
+# This is not the usual advice, and it is deliberate.  main_window.py is
+# UTF-8 with a BOM and CRLF endings; other modules are LF.  Letting git
+# normalise line endings would rewrite those files on checkout, and a BOM
+# that moves or a CRLF that becomes LF is the kind of change that breaks a
+# build without showing up as anything readable in a diff.
+* -text
+
+# Binary, so git does not try to diff or merge them
+*.png binary
+*.pdat binary
+*.adat binary
+*.cdat binary
+*.ddat binary
+*.step binary
+*.pdf binary

@@ -1,0 +1,1060 @@
+"""Thin, well-behaved wrapper around the OpenCASCADE modelling calls.
+
+Everything that touches OCCT lives here so the rest of the application deals
+in plain Python.  Each operation validates its result and raises
+:class:`KernelError` with a readable message instead of letting a failed
+algorithm return a null shape that explodes three calls later.
+"""
+
+from __future__ import annotations
+
+import math
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+
+from OCP.BRep import BRep_Builder, BRep_Tool
+from OCP.BRepAlgoAPI import (
+    BRepAlgoAPI_Common, BRepAlgoAPI_Cut, BRepAlgoAPI_Fuse, BRepAlgoAPI_Section,
+)
+from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_Copy, BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakePolygon, BRepBuilderAPI_MakeVertex,
+    BRepBuilderAPI_MakeWire, BRepBuilderAPI_Sewing, BRepBuilderAPI_Transform,
+)
+from OCP.BRepCheck import BRepCheck_Analyzer
+from OCP.BRepFilletAPI import BRepFilletAPI_MakeChamfer, BRepFilletAPI_MakeFillet
+from OCP.BRepGProp import BRepGProp
+from OCP.BRepOffsetAPI import BRepOffsetAPI_MakeThickSolid, BRepOffsetAPI_MakePipe
+from OCP.BRepPrimAPI import (
+    BRepPrimAPI_MakeBox, BRepPrimAPI_MakeCone, BRepPrimAPI_MakeCylinder,
+    BRepPrimAPI_MakePrism, BRepPrimAPI_MakeRevol, BRepPrimAPI_MakeSphere,
+    BRepPrimAPI_MakeTorus,
+)
+from OCP.BRepOffset import BRepOffset_Mode
+from OCP.Bnd import Bnd_Box
+from OCP.BRepBndLib import BRepBndLib
+from OCP.GProp import GProp_GProps
+from OCP.GeomAPI import GeomAPI_PointsToBSpline
+from OCP.GeomAbs import GeomAbs_JoinType
+from OCP.ShapeFix import ShapeFix_Face, ShapeFix_Shape
+from OCP.TColgp import TColgp_Array1OfPnt
+from OCP.TopAbs import (
+    TopAbs_EDGE, TopAbs_FACE, TopAbs_ShapeEnum, TopAbs_SOLID, TopAbs_VERTEX,
+    TopAbs_WIRE, TopAbs_COMPOUND,
+)
+from OCP.TopExp import TopExp_Explorer
+from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
+from OCP.TopTools import TopTools_ListOfShape
+from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Edge, TopoDS_Face, TopoDS_Shape
+from OCP.gp import (
+    gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec,
+)
+
+from .sketch import Sketch, SketchPlane, point_in_polygon, polygon_area
+
+MakePolygon = BRepBuilderAPI_MakePolygon
+
+TOL = 1e-7
+
+
+class KernelError(RuntimeError):
+    """A modelling operation failed."""
+
+
+# ==========================================================================
+# small helpers
+# ==========================================================================
+
+
+def pnt(xyz: Sequence[float]) -> gp_Pnt:
+    return gp_Pnt(float(xyz[0]), float(xyz[1]), float(xyz[2]))
+
+
+def vec(xyz: Sequence[float]) -> gp_Vec:
+    return gp_Vec(float(xyz[0]), float(xyz[1]), float(xyz[2]))
+
+
+def direction(xyz: Sequence[float]) -> gp_Dir:
+    return gp_Dir(float(xyz[0]), float(xyz[1]), float(xyz[2]))
+
+
+def plane_ax2(plane: SketchPlane) -> gp_Ax2:
+    return gp_Ax2(pnt(plane.origin), direction(plane.normal), direction(plane.xdir))
+
+
+def plane_gp(plane: SketchPlane) -> gp_Pln:
+    return gp_Pln(gp_Ax3(plane_ax2(plane)))
+
+
+def explore(shape: TopoDS_Shape, kind: TopAbs_ShapeEnum) -> List[TopoDS_Shape]:
+    """All sub-shapes of ``kind``, de-duplicated, in deterministic order."""
+    out: List[TopoDS_Shape] = []
+    seen: List[TopoDS_Shape] = []
+    exp = TopExp_Explorer(shape, kind)
+    while exp.More():
+        cur = exp.Current()
+        if not any(cur.IsSame(s) for s in seen):
+            seen.append(cur)
+            out.append(cur)
+        exp.Next()
+    return out
+
+
+def faces(shape: TopoDS_Shape) -> List[TopoDS_Face]:
+    return [TopoDS.Face_s(f) for f in explore(shape, TopAbs_FACE)]
+
+
+def edges(shape: TopoDS_Shape) -> List[TopoDS_Edge]:
+    return [TopoDS.Edge_s(e) for e in explore(shape, TopAbs_EDGE)]
+
+
+def vertices(shape: TopoDS_Shape) -> List[TopoDS_Shape]:
+    return explore(shape, TopAbs_VERTEX)
+
+
+def is_valid(shape: Optional[TopoDS_Shape]) -> bool:
+    return shape is not None and not shape.IsNull()
+
+
+def bounding_box(shape: TopoDS_Shape) -> Tuple[float, float, float, float, float, float]:
+    box = Bnd_Box()
+    BRepBndLib.Add_s(shape, box, True)
+    if box.IsVoid():
+        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    return box.Get()
+
+
+def volume(shape: TopoDS_Shape) -> float:
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    return props.Mass()
+
+
+def surface_area(shape: TopoDS_Shape) -> float:
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(shape, props)
+    return props.Mass()
+
+
+def centre_of_mass(shape: TopoDS_Shape) -> Tuple[float, float, float]:
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    p = props.CentreOfMass()
+    return (p.X(), p.Y(), p.Z())
+
+
+def edge_length(edge: TopoDS_Edge) -> float:
+    props = GProp_GProps()
+    BRepGProp.LinearProperties_s(edge, props)
+    return props.Mass()
+
+
+def face_area(face: TopoDS_Face) -> float:
+    props = GProp_GProps()
+    BRepGProp.SurfaceProperties_s(face, props)
+    return props.Mass()
+
+
+def shape_centre(shape: TopoDS_Shape) -> Tuple[float, float, float]:
+    """Geometric centre of a sub-shape, used for persistent naming."""
+    props = GProp_GProps()
+    if shape.ShapeType() == TopAbs_VERTEX:
+        p = BRep_Tool.Pnt_s(TopoDS.Vertex_s(shape))
+        return (p.X(), p.Y(), p.Z())
+    if shape.ShapeType() == TopAbs_EDGE:
+        BRepGProp.LinearProperties_s(shape, props)
+    else:
+        BRepGProp.SurfaceProperties_s(shape, props)
+    p = props.CentreOfMass()
+    return (p.X(), p.Y(), p.Z())
+
+
+def copy_shape(shape: TopoDS_Shape) -> TopoDS_Shape:
+    return BRepBuilderAPI_Copy(shape).Shape()
+
+
+def compound(shapes: Sequence[TopoDS_Shape]) -> TopoDS_Compound:
+    comp = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(comp)
+    for s in shapes:
+        if is_valid(s):
+            builder.Add(comp, s)
+    return comp
+
+
+def heal(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """Repair small inconsistencies that upstream algorithms can leave."""
+    try:
+        fixer = ShapeFix_Shape(shape)
+        fixer.Perform()
+        fixed = fixer.Shape()
+        return fixed if is_valid(fixed) else shape
+    except Exception:
+        return shape
+
+
+def check(shape: TopoDS_Shape, what: str) -> TopoDS_Shape:
+    if not is_valid(shape):
+        raise KernelError("%s produced no geometry" % what)
+    if not BRepCheck_Analyzer(shape).IsValid():
+        shape = heal(shape)
+        if not BRepCheck_Analyzer(shape).IsValid():
+            raise KernelError("%s produced an invalid solid" % what)
+    return shape
+
+
+# ==========================================================================
+# sketch -> topology
+# ==========================================================================
+
+
+def _sketch_edge(sketch: Sketch, eid: int) -> Optional[TopoDS_Edge]:
+    ent = sketch.entities[eid]
+    plane = sketch.plane
+
+    if ent.kind == "line":
+        a = sketch.points[ent.points[0]]
+        b = sketch.points[ent.points[1]]
+        if math.hypot(b.x - a.x, b.y - a.y) < 1e-9:
+            return None
+        mk = BRepBuilderAPI_MakeEdge(pnt(plane.to_3d(a.x, a.y)),
+                                     pnt(plane.to_3d(b.x, b.y)))
+        return mk.Edge() if mk.IsDone() else None
+
+    if ent.kind in ("circle", "arc"):
+        if ent.radius < 1e-9:
+            return None
+        c = sketch.points[ent.points[0]]
+        ax2 = gp_Ax2(pnt(plane.to_3d(c.x, c.y)),
+                     direction(plane.normal), direction(plane.xdir))
+        circ = gp_Circ(ax2, ent.radius)
+        if ent.kind == "circle":
+            mk = BRepBuilderAPI_MakeEdge(circ)
+        else:
+            a0, a1 = sketch.arc_angles(eid)
+            if abs(a1 - a0) < 1e-9:
+                return None
+            mk = BRepBuilderAPI_MakeEdge(circ, a0, a1)
+        return mk.Edge() if mk.IsDone() else None
+
+    if ent.kind == "spline":
+        pts = [sketch.points[p] for p in ent.points]
+        if len(pts) < 2:
+            return None
+        arr = TColgp_Array1OfPnt(1, len(pts))
+        for i, p in enumerate(pts, start=1):
+            arr.SetValue(i, pnt(plane.to_3d(p.x, p.y)))
+        curve = GeomAPI_PointsToBSpline(arr).Curve()
+        mk = BRepBuilderAPI_MakeEdge(curve)
+        return mk.Edge() if mk.IsDone() else None
+
+    return None
+
+
+def _chains(sketch: Sketch) -> Tuple[List[List[int]], List[List[int]]]:
+    """Split a sketch's geometry into (closed loops, open chains)."""
+    ents = {eid: e for eid, e in sketch.entities.items()
+            if not e.construction and e.kind in ("line", "arc", "circle", "spline")}
+
+    loops: List[List[int]] = []
+    open_chains: List[List[int]] = []
+
+    # circles are self-closed
+    for eid, e in list(ents.items()):
+        if e.kind == "circle":
+            loops.append([eid])
+            del ents[eid]
+
+    def ends(eid: int) -> Tuple[int, int]:
+        e = ents[eid]
+        if e.kind == "arc":
+            return e.points[1], e.points[2]
+        return e.points[0], e.points[-1]
+
+    adjacency: Dict[int, List[int]] = {}
+    for eid in ents:
+        a, b = ends(eid)
+        adjacency.setdefault(a, []).append(eid)
+        adjacency.setdefault(b, []).append(eid)
+
+    unused = set(ents)
+    while unused:
+        start = min(unused)
+        chain = [start]
+        unused.discard(start)
+        a, b = ends(start)
+        head, tail = a, b
+
+        while True:
+            nxt = None
+            for cand in adjacency.get(tail, []):
+                if cand in unused:
+                    nxt = cand
+                    break
+            if nxt is None:
+                break
+            unused.discard(nxt)
+            chain.append(nxt)
+            ca, cb = ends(nxt)
+            tail = cb if ca == tail else ca
+            if tail == head:
+                break
+
+        if tail == head and len(chain) >= 2:
+            loops.append(chain)
+        elif chain:
+            open_chains.append(chain)
+
+    return loops, open_chains
+
+
+def _loops(sketch: Sketch) -> List[List[int]]:
+    """Closed chains of sketch entities, walking the connectivity graph."""
+    return _chains(sketch)[0]
+
+
+def sketch_path_wire(sketch: Sketch) -> Any:
+    """The longest open chain in a sketch, as a wire - a sweep path.
+
+    A closed loop is accepted too, so a sweep can follow a full profile.
+    """
+    loops, open_chains = _chains(sketch)
+    candidates = sorted(open_chains + loops, key=len, reverse=True)
+    for chain in candidates:
+        mk = BRepBuilderAPI_MakeWire()
+        ok = True
+        for eid in chain:
+            edge = _sketch_edge(sketch, eid)
+            if edge is None:
+                ok = False
+                break
+            mk.Add(edge)
+        if ok and mk.IsDone():
+            return mk.Wire()
+    raise KernelError("sketch '%s' has no usable path curve" % sketch.name)
+
+
+def sketch_wires(sketch: Sketch) -> List[Any]:
+    """Closed wires built from a sketch's non-construction geometry."""
+    out = []
+    for loop in _loops(sketch):
+        mk = BRepBuilderAPI_MakeWire()
+        ok = True
+        for eid in loop:
+            e = _sketch_edge(sketch, eid)
+            if e is None:
+                ok = False
+                break
+            mk.Add(e)
+        if ok and mk.IsDone():
+            out.append(mk.Wire())
+    return out
+
+
+def _loop_polyline(sketch: Sketch, loop: Sequence[int]) -> List[Tuple[float, float]]:
+    pts: List[Tuple[float, float]] = []
+    for eid in loop:
+        pts.extend(sketch.entity_polyline(eid, 24))
+    return pts
+
+
+def _iterate_shapes(collection) -> List[TopoDS_Shape]:
+    """OCCT shape lists are not uniformly iterable from Python."""
+    try:
+        return [s for s in collection]
+    except TypeError:
+        pass
+    out: List[TopoDS_Shape] = []
+    try:
+        from OCP.TopTools import TopTools_ListIteratorOfListOfShape
+
+        it = TopTools_ListIteratorOfListOfShape(collection)
+        while it.More():
+            out.append(it.Value())
+            it.Next()
+    except Exception:
+        pass
+    return out
+
+
+def _split_at_intersections(edge_list: Sequence[TopoDS_Edge]
+                            ) -> List[TopoDS_Edge]:
+    """Cut every edge where another crosses it.
+
+    Without this, three overlapping circles are three closed curves; with
+    it they become the twelve arcs that bound the seven regions a Venn
+    diagram actually has.
+    """
+    if len(edge_list) < 2:
+        return list(edge_list)
+
+    from OCP.BOPAlgo import BOPAlgo_Builder
+
+    try:
+        builder = BOPAlgo_Builder()
+        for edge in edge_list:
+            builder.AddArgument(edge)
+        builder.SetRunParallel(False)
+        builder.SetFuzzyValue(1e-7)
+        builder.Perform()
+        if builder.HasErrors():
+            return list(edge_list)
+        result = builder.Shape()
+        if not is_valid(result):
+            return list(edge_list)
+        split = edges(result)
+        return split or list(edge_list)
+    except Exception:
+        return list(edge_list)
+
+
+def _host_face(sketch: Sketch, margin: float = 1.6):
+    """A rectangle on the sketch plane comfortably bigger than the sketch."""
+    umin, vmin, umax, vmax = sketch.bounds()
+    du = max(umax - umin, 1.0) * margin
+    dv = max(vmax - vmin, 1.0) * margin
+    cu, cv = (umin + umax) / 2.0, (vmin + vmax) / 2.0
+
+    poly = BRepBuilderAPI_MakePolygon()
+    for u, v in ((cu - du, cv - dv), (cu + du, cv - dv),
+                 (cu + du, cv + dv), (cu - du, cv + dv)):
+        poly.Add(pnt(sketch.plane.to_3d(u, v)))
+    poly.Close()
+    if not poly.IsDone():
+        raise KernelError("could not build the sketch's working plane")
+    return BRepBuilderAPI_MakeFace(poly.Wire()).Face(), (cu, cv, du, dv)
+
+
+def sketch_regions_faces(sketch: Sketch) -> List[TopoDS_Face]:
+    """Every smallest closed region the sketch's curves bound.
+
+    This is a real planar decomposition rather than a walk over closed
+    loops: a sheet covering the sketch is split by every curve, and the
+    pieces that do not reach the sheet's border are the enclosed regions.
+    Three overlapping circles come back as seven separately selectable
+    areas, which is what you would expect to be able to extrude.
+    """
+    from OCP.BRepAlgoAPI import BRepAlgoAPI_Splitter
+
+    curves: List[TopoDS_Edge] = []
+    for eid, entity in sketch.entities.items():
+        if entity.construction:
+            continue
+        edge = _sketch_edge(sketch, eid)
+        if edge is not None:
+            curves.append(edge)
+    if not curves:
+        return []
+
+    try:
+        host, (cu, cv, du, dv) = _host_face(sketch)
+
+        arguments = TopTools_ListOfShape()
+        arguments.Append(host)
+        tools = TopTools_ListOfShape()
+        for edge in curves:
+            tools.Append(edge)
+
+        splitter = BRepAlgoAPI_Splitter()
+        splitter.SetArguments(arguments)
+        splitter.SetTools(tools)
+        splitter.SetFuzzyValue(1e-7)
+        splitter.SetRunParallel(False)
+        splitter.Build()
+        if not splitter.IsDone():
+            return []
+        pieces = faces(splitter.Shape())
+    except Exception:
+        return []
+
+    out: List[TopoDS_Face] = []
+    for face in pieces:
+        if face_area(face) < 1e-9:
+            continue
+        if _touches_border(face, sketch, cu, cv, du, dv):
+            continue                  # leftover sheet outside the sketch
+        out.append(face)
+
+    # deterministic order, so a region keeps its place between rebuilds
+    out.sort(key=lambda f: (round(-face_area(f), 6),
+                            round(shape_centre(f)[0], 6),
+                            round(shape_centre(f)[1], 6),
+                            round(shape_centre(f)[2], 6)))
+    return out
+
+
+def _touches_border(face: TopoDS_Face, sketch: Sketch, cu: float, cv: float,
+                    du: float, dv: float) -> bool:
+    for vertex in vertices(face):
+        u, v = sketch.plane.to_2d(shape_centre(vertex))
+        if abs(abs(u - cu) - du) < 1e-6 or abs(abs(v - cv) - dv) < 1e-6:
+            return True
+    return False
+
+
+def sketch_faces(sketch: Sketch) -> List[TopoDS_Face]:
+    """Planar faces from a sketch, with nested loops turned into holes.
+
+    Nesting is resolved in 2D on the sketch itself (parity of containment),
+    which is far more reliable than trying to infer it from the built wires.
+    """
+    loops = _loops(sketch)
+    if not loops:
+        return []
+
+    polys = [_loop_polyline(sketch, lp) for lp in loops]
+    wires = []
+    for lp in loops:
+        mk = BRepBuilderAPI_MakeWire()
+        ok = True
+        for eid in lp:
+            e = _sketch_edge(sketch, eid)
+            if e is None:
+                ok = False
+                break
+            mk.Add(e)
+        wires.append(mk.Wire() if ok and mk.IsDone() else None)
+
+    # depth[i] = how many other loops contain loop i
+    depth = [0] * len(loops)
+    for i, poly_i in enumerate(polys):
+        if not poly_i:
+            continue
+        probe = poly_i[len(poly_i) // 3]
+        for j, poly_j in enumerate(polys):
+            if i == j or len(poly_j) < 3:
+                continue
+            if point_in_polygon(probe, poly_j):
+                depth[i] += 1
+
+    pln = plane_gp(sketch.plane)
+    result: List[TopoDS_Face] = []
+
+    for i, wire in enumerate(wires):
+        if wire is None or depth[i] % 2 == 1:
+            continue  # None = unbuildable, odd depth = a hole in someone else
+        mk = BRepBuilderAPI_MakeFace(pln, wire)
+        if not mk.IsDone():
+            continue
+        face = mk.Face()
+        # add every loop that sits directly inside this one as a hole
+        for j, inner in enumerate(wires):
+            if inner is None or j == i or depth[j] != depth[i] + 1:
+                continue
+            if not polys[j] or not point_in_polygon(
+                    polys[j][len(polys[j]) // 3], polys[i]):
+                continue
+            addition = BRepBuilderAPI_MakeFace(face)
+            addition.Add(inner)
+            if addition.IsDone():
+                face = addition.Face()
+        fixer = ShapeFix_Face(face)
+        fixer.FixOrientation()
+        result.append(fixer.Face())
+
+    return result
+
+
+def sketch_regions(sketch: Sketch) -> List[Dict[str, Any]]:
+    """Every closed region of a sketch, with a fingerprint to identify it.
+
+    Regions come from a planar decomposition, so overlapping curves give the
+    smallest enclosed areas - three overlapping circles yield seven regions,
+    each selectable on its own.
+    """
+    faces = sketch_regions_faces(sketch)
+    if not faces:
+        faces = sketch_faces(sketch)      # fall back to whole closed loops
+
+    out: List[Dict[str, Any]] = []
+    for index, face in enumerate(faces):
+        # the identity point is one guaranteed to lie *on* the region: a
+        # crescent's centre of mass falls outside it, which would make two
+        # regions indistinguishable
+        inside = _inside_point(face, sketch)
+        out.append({
+            "index": index,
+            "face": face,
+            "centre": inside,
+            "centroid": sketch.plane.to_2d(shape_centre(face)),
+            "area": face_area(face),
+        })
+    return out
+
+
+def _inside_point(face: TopoDS_Face, sketch: Sketch) -> Tuple[float, float]:
+    """A point that really lies on the face, in sketch coordinates.
+
+    A crescent's centre of mass falls outside it, so the centroid alone is
+    not enough to tell two regions apart or to hit-test one.
+    """
+    from OCP.BRepTopAdaptor import BRepTopAdaptor_FClass2d
+    from OCP.TopAbs import TopAbs_OUT
+    from OCP.BRepTools import BRepTools
+    from OCP.ElSLib import ElSLib
+    from OCP.gp import gp_Pnt2d
+
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+
+    centre = sketch.plane.to_2d(shape_centre(face))
+    try:
+        classifier = BRepTopAdaptor_FClass2d(face, 1e-6)
+        surface = BRepAdaptor_Surface(face)
+
+        # the centre of mass is the natural choice whenever it is on the
+        # face; only a concave region needs the search below
+        try:
+            projected = surface.Plane()
+            location = gp_Pnt(*sketch.plane.to_3d(centre[0], centre[1]))
+            u, v = ElSLib.Parameters_s(projected, location)
+            if classifier.Perform(gp_Pnt2d(u, v)) != TopAbs_OUT:
+                return centre
+        except Exception:
+            pass
+
+        umin, umax, vmin, vmax = BRepTools.UVBounds_s(face)
+        steps = 12
+        for i in range(1, steps):
+            for j in range(1, steps):
+                u = umin + (umax - umin) * i / steps
+                v = vmin + (vmax - vmin) * j / steps
+                if classifier.Perform(gp_Pnt2d(u, v)) != TopAbs_OUT:
+                    point = surface.Value(u, v)
+                    return sketch.plane.to_2d((point.X(), point.Y(),
+                                               point.Z()))
+    except Exception:
+        pass
+    return centre
+
+
+def project_to_plane(shape: TopoDS_Shape, plane: SketchPlane
+                     ) -> List[Tuple[str, Any]]:
+    """Flatten a model edge onto a sketch plane, as sketch-space geometry.
+
+    Returns primitives the sketcher can turn into real entities: straight
+    edges stay lines, circles stay circles when they are parallel to the
+    plane, and anything else is approximated by a polyline.  A circle seen
+    edge-on collapses to a line, which is the geometrically honest answer.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GCPnts import GCPnts_QuasiUniformDeflection
+    from OCP.GeomAbs import GeomAbs_CurveType
+
+    results: List[Tuple[str, Any]] = []
+
+    for edge in edges(shape):
+        try:
+            curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+            kind = curve.GetType()
+            first, last = curve.FirstParameter(), curve.LastParameter()
+        except Exception:
+            continue
+
+        def flat(point):
+            return plane.to_2d((point.X(), point.Y(), point.Z()))
+
+        if kind == GeomAbs_CurveType.GeomAbs_Line:
+            a, b = flat(curve.Value(first)), flat(curve.Value(last))
+            if math.dist(a, b) > 1e-9:
+                results.append(("line", (a, b)))
+            continue
+
+        if kind == GeomAbs_CurveType.GeomAbs_Circle:
+            circ = curve.Circle()
+            axis = circ.Axis().Direction()
+            alignment = abs(axis.X() * plane.normal[0]
+                            + axis.Y() * plane.normal[1]
+                            + axis.Z() * plane.normal[2])
+            if abs(alignment - 1.0) < 1e-6:
+                centre = flat(circ.Location())
+                if abs((last - first) - 2 * math.pi) < 1e-6:
+                    results.append(("circle", (centre, circ.Radius())))
+                else:
+                    start, end = flat(curve.Value(first)), flat(curve.Value(last))
+                    a0 = math.atan2(start[1] - centre[1], start[0] - centre[0])
+                    a1 = math.atan2(end[1] - centre[1], end[0] - centre[0])
+                    results.append(("arc", (centre, circ.Radius(), a0, a1)))
+                continue
+
+        try:
+            sampler = GCPnts_QuasiUniformDeflection(curve, 0.02)
+            if sampler.IsDone() and sampler.NbPoints() >= 2:
+                points = [flat(sampler.Value(i))
+                          for i in range(1, sampler.NbPoints() + 1)]
+                results.append(("polyline", points))
+                continue
+        except Exception:
+            pass
+
+        a, b = flat(curve.Value(first)), flat(curve.Value(last))
+        if math.dist(a, b) > 1e-9:
+            results.append(("line", (a, b)))
+
+    return results
+
+
+def sketch_profile(sketch: Sketch,
+                   regions: Optional[Sequence[Dict[str, Any]]] = None
+                   ) -> TopoDS_Shape:
+    """The material a sketch contributes, optionally only chosen regions."""
+    if regions is not None:
+        fs = [r["face"] for r in regions]
+    else:
+        fs = sketch_faces(sketch)
+    if not fs:
+        raise KernelError("sketch '%s' has no closed profile" % sketch.name)
+    if len(fs) == 1:
+        return fs[0]
+    return compound(fs)
+
+
+# ==========================================================================
+# modelling operations
+# ==========================================================================
+
+
+def extrude(profile: TopoDS_Shape, dir_vec: Sequence[float], distance: float,
+            taper_deg: float = 0.0) -> TopoDS_Shape:
+    if abs(distance) < 1e-9:
+        raise KernelError("extrude distance is zero")
+    v = vec((dir_vec[0] * distance, dir_vec[1] * distance, dir_vec[2] * distance))
+
+    if abs(taper_deg) > 1e-9:
+        return _tapered_extrude(profile, dir_vec, distance, taper_deg)
+
+    mk = BRepPrimAPI_MakePrism(profile, v)
+    if not mk.IsDone():
+        raise KernelError("extrude failed")
+    return check(mk.Shape(), "Extrude")
+
+
+def _tapered_extrude(profile: TopoDS_Shape, dir_vec: Sequence[float],
+                     distance: float, taper_deg: float) -> TopoDS_Shape:
+    """Draft-angled extrusion, built as a loft between scaled profiles."""
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+    src_faces = faces(profile) or [profile]
+    solids = []
+    for face in src_faces:
+        wires_ = explore(face, TopAbs_WIRE)
+        if not wires_:
+            continue
+        outer = TopoDS.Wire_s(wires_[0])
+        cx, cy, cz = shape_centre(outer)
+
+        # approximate offset: scale the profile about its own centre so the
+        # wall leans by the requested angle over the extrusion length
+        radius = max(
+            (math.dist((cx, cy, cz), shape_centre(e)) for e in edges(outer)),
+            default=1.0,
+        ) or 1.0
+        grow = distance * math.tan(math.radians(taper_deg))
+        scale = max(0.02, (radius + grow) / radius)
+
+        trsf = gp_Trsf()
+        trsf.SetScale(gp_Pnt(cx, cy, cz), scale)
+        top = BRepBuilderAPI_Transform(outer, trsf, True).Shape()
+        move = gp_Trsf()
+        move.SetTranslation(vec((dir_vec[0] * distance, dir_vec[1] * distance,
+                                 dir_vec[2] * distance)))
+        top = BRepBuilderAPI_Transform(top, move, True).Shape()
+
+        loft = BRepOffsetAPI_ThruSections(True, True, 1e-6)
+        loft.AddWire(outer)
+        loft.AddWire(TopoDS.Wire_s(top))
+        loft.Build()
+        if loft.IsDone():
+            solids.append(loft.Shape())
+
+    if not solids:
+        raise KernelError("tapered extrude failed")
+    if len(solids) == 1:
+        return check(solids[0], "Extrude")
+    result = solids[0]
+    for s in solids[1:]:
+        result = boolean(result, s, "join")
+    return result
+
+
+def revolve(profile: TopoDS_Shape, axis_origin: Sequence[float],
+            axis_dir: Sequence[float], angle_deg: float) -> TopoDS_Shape:
+    if abs(angle_deg) < 1e-9:
+        raise KernelError("revolve angle is zero")
+    ax = gp_Ax1(pnt(axis_origin), direction(axis_dir))
+    mk = BRepPrimAPI_MakeRevol(profile, ax, math.radians(angle_deg))
+    if not mk.IsDone():
+        raise KernelError("revolve failed")
+    return check(mk.Shape(), "Revolve")
+
+
+def sweep(profile: TopoDS_Shape, path_wire: Any) -> TopoDS_Shape:
+    mk = BRepOffsetAPI_MakePipe(path_wire, profile)
+    mk.Build()
+    if not mk.IsDone():
+        raise KernelError("sweep failed")
+    return check(mk.Shape(), "Sweep")
+
+
+def loft(profiles: Sequence[Any], solid: bool = True,
+         ruled: bool = False) -> TopoDS_Shape:
+    from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+
+    if len(profiles) < 2:
+        raise KernelError("loft needs at least two profiles")
+    mk = BRepOffsetAPI_ThruSections(solid, ruled, 1e-6)
+    for prof in profiles:
+        wires_ = explore(prof, TopAbs_WIRE)
+        if not wires_:
+            raise KernelError("loft profile has no wire")
+        mk.AddWire(TopoDS.Wire_s(wires_[0]))
+    mk.Build()
+    if not mk.IsDone():
+        raise KernelError("loft failed")
+    return check(mk.Shape(), "Loft")
+
+
+def boolean(base: TopoDS_Shape, tool: TopoDS_Shape, op: str) -> TopoDS_Shape:
+    """``op`` is one of join / cut / intersect."""
+    if not is_valid(base):
+        return tool
+    if not is_valid(tool):
+        return base
+    builders = {
+        "join": BRepAlgoAPI_Fuse,
+        "cut": BRepAlgoAPI_Cut,
+        "intersect": BRepAlgoAPI_Common,
+    }
+    if op not in builders:
+        raise KernelError("unknown boolean operation %r" % op)
+    algo = builders[op](base, tool)
+    algo.SetRunParallel(True)
+    algo.SetFuzzyValue(1e-6)
+    algo.Build()
+    if not algo.IsDone():
+        raise KernelError("%s operation failed" % op)
+    result = algo.Shape()
+    if not is_valid(result) or not explore(result, TopAbs_SOLID):
+        raise KernelError("%s removed all material" % op)
+    return heal(result)
+
+
+def unify(shape: TopoDS_Shape) -> TopoDS_Shape:
+    """Merge faces that lie in the same surface, and edges in the same curve.
+
+    A boolean leaves its seams behind: fuse a boss onto a plate at the same
+    height and the top comes back as two coplanar faces with a line between
+    them.  The line is real topology, not a drawing artefact - it splits the
+    face you want to sketch on and it exports to DXF.  Inventor merges them,
+    so this does too.
+
+    Failure is not an error.  A shape that will not unify is returned as it
+    was, because a visible seam is a much smaller problem than a rebuild
+    that stops.
+    """
+    if not is_valid(shape):
+        return shape
+    solid = bool(explore(shape, TopAbs_SOLID))
+    try:
+        before = volume(shape) if solid else surface_area(shape)
+        tool = ShapeUpgrade_UnifySameDomain(shape, True, True, False)
+        tool.SetSafeInputMode(True)
+        tool.Build()
+        result = tool.Shape()
+    except Exception:
+        return shape
+    if not is_valid(result):
+        return shape
+    if solid and not explore(result, TopAbs_SOLID):
+        return shape
+    try:
+        # a unify that changed the size has done something other than tidy
+        # the topology, and is not to be trusted
+        after = volume(result) if solid else surface_area(result)
+        if abs(after - before) > max(1e-6, abs(before) * 1e-9):
+            return shape
+    except Exception:
+        return shape
+    return result
+
+
+def fuse_all(shapes: Sequence[TopoDS_Shape]) -> Optional[TopoDS_Shape]:
+    """Fuse a list into one shape, merging anything that touches.
+
+    Pieces that do not touch stay separate inside the result, which is what
+    lets one extrude cover several islands of a sketch.
+    """
+    live = [s for s in shapes if is_valid(s)]
+    if not live:
+        return None
+    if len(live) == 1:
+        return live[0]
+
+    arguments = TopTools_ListOfShape()
+    arguments.Append(live[0])
+    tools = TopTools_ListOfShape()
+    for shape in live[1:]:
+        tools.Append(shape)
+
+    try:
+        algo = BRepAlgoAPI_Fuse()
+        algo.SetArguments(arguments)
+        algo.SetTools(tools)
+        algo.SetRunParallel(True)
+        algo.SetFuzzyValue(1e-6)
+        algo.Build()
+        if algo.IsDone() and is_valid(algo.Shape()):
+            return algo.Shape()
+    except Exception:
+        pass
+    return compound(live)
+
+
+def fillet(shape: TopoDS_Shape, edge_list: Sequence[TopoDS_Edge],
+           radius: float) -> TopoDS_Shape:
+    if radius <= 0:
+        raise KernelError("fillet radius must be positive")
+    if not edge_list:
+        raise KernelError("no edges selected for fillet")
+    mk = BRepFilletAPI_MakeFillet(shape)
+    for e in edge_list:
+        mk.Add(float(radius), e)
+    mk.Build()
+    if not mk.IsDone():
+        raise KernelError("fillet failed - radius %.3f is probably too large"
+                          % radius)
+    return check(mk.Shape(), "Fillet")
+
+
+def chamfer(shape: TopoDS_Shape, edge_list: Sequence[TopoDS_Edge],
+            distance: float) -> TopoDS_Shape:
+    if distance <= 0:
+        raise KernelError("chamfer distance must be positive")
+    if not edge_list:
+        raise KernelError("no edges selected for chamfer")
+    mk = BRepFilletAPI_MakeChamfer(shape)
+    for e in edge_list:
+        mk.Add(float(distance), e)
+    mk.Build()
+    if not mk.IsDone():
+        raise KernelError("chamfer failed - distance %.3f is probably too large"
+                          % distance)
+    return check(mk.Shape(), "Chamfer")
+
+
+def shell(shape: TopoDS_Shape, open_faces: Sequence[TopoDS_Face],
+          thickness: float) -> TopoDS_Shape:
+    """Hollow a solid out, leaving ``open_faces`` removed.
+
+    OCCT's thick-solid builder is fussy - whether it succeeds depends on the
+    tolerance, whether self-intersections are resolved, and the join style.
+    Rather than surface the first failure, work through the settings that are
+    known to rescue awkward cases before giving up.
+    """
+    if abs(thickness) < 1e-9:
+        raise KernelError("shell thickness is zero")
+
+    removed = TopTools_ListOfShape()
+    for f in open_faces:
+        removed.Append(f)
+
+    attempts = (
+        (1e-4, False, GeomAbs_JoinType.GeomAbs_Arc),
+        (1e-4, True, GeomAbs_JoinType.GeomAbs_Arc),
+        (1e-3, True, GeomAbs_JoinType.GeomAbs_Arc),
+        (1e-3, True, GeomAbs_JoinType.GeomAbs_Intersection),
+        (1e-5, True, GeomAbs_JoinType.GeomAbs_Intersection),
+    )
+
+    last_error = ""
+    for tolerance, intersect, join in attempts:
+        try:
+            mk = BRepOffsetAPI_MakeThickSolid()
+            mk.MakeThickSolidByJoin(shape, removed, -abs(thickness), tolerance,
+                                    BRepOffset_Mode.BRepOffset_Skin,
+                                    intersect, False, join, False)
+            mk.Build()
+            if not mk.IsDone():
+                continue
+            result = mk.Shape()
+            if not is_valid(result) or not explore(result, TopAbs_SOLID):
+                continue
+            return check(result, "Shell")
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+
+    raise KernelError(
+        "shell failed - the wall is probably too thick for the smallest "
+        "feature on the body%s" % (": %s" % last_error if last_error else ""))
+
+
+def translate(shape: TopoDS_Shape, delta: Sequence[float]) -> TopoDS_Shape:
+    t = gp_Trsf()
+    t.SetTranslation(vec(delta))
+    return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+
+def rotate(shape: TopoDS_Shape, axis_origin: Sequence[float],
+           axis_dir: Sequence[float], angle_deg: float) -> TopoDS_Shape:
+    t = gp_Trsf()
+    t.SetRotation(gp_Ax1(pnt(axis_origin), direction(axis_dir)),
+                  math.radians(angle_deg))
+    return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+
+def mirror(shape: TopoDS_Shape, plane: SketchPlane) -> TopoDS_Shape:
+    t = gp_Trsf()
+    t.SetMirror(gp_Ax2(pnt(plane.origin), direction(plane.normal),
+                       direction(plane.xdir)))
+    return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+
+def scale(shape: TopoDS_Shape, factor: float,
+          about: Sequence[float] = (0, 0, 0)) -> TopoDS_Shape:
+    t = gp_Trsf()
+    t.SetScale(pnt(about), float(factor))
+    return BRepBuilderAPI_Transform(shape, t, True).Shape()
+
+
+# -- primitives -------------------------------------------------------------
+
+
+def box(dx: float, dy: float, dz: float,
+        origin: Sequence[float] = (0, 0, 0), centred: bool = False) -> TopoDS_Shape:
+    if min(dx, dy, dz) <= 0:
+        raise KernelError("box dimensions must be positive")
+    o = list(origin)
+    if centred:
+        o = [o[0] - dx / 2, o[1] - dy / 2, o[2] - dz / 2]
+    return BRepPrimAPI_MakeBox(pnt(o), dx, dy, dz).Shape()
+
+
+def cylinder(radius: float, height: float, origin: Sequence[float] = (0, 0, 0),
+             axis: Sequence[float] = (0, 0, 1)) -> TopoDS_Shape:
+    if radius <= 0 or height <= 0:
+        raise KernelError("cylinder radius and height must be positive")
+    ax2 = gp_Ax2(pnt(origin), direction(axis))
+    return BRepPrimAPI_MakeCylinder(ax2, radius, height).Shape()
+
+
+def cone(r1: float, r2: float, height: float,
+         origin: Sequence[float] = (0, 0, 0),
+         axis: Sequence[float] = (0, 0, 1)) -> TopoDS_Shape:
+    if height <= 0 or (r1 <= 0 and r2 <= 0):
+        raise KernelError("invalid cone dimensions")
+    ax2 = gp_Ax2(pnt(origin), direction(axis))
+    return BRepPrimAPI_MakeCone(ax2, r1, r2, height).Shape()
+
+
+def sphere(radius: float, origin: Sequence[float] = (0, 0, 0)) -> TopoDS_Shape:
+    if radius <= 0:
+        raise KernelError("sphere radius must be positive")
+    return BRepPrimAPI_MakeSphere(pnt(origin), radius).Shape()
+
+
+def torus(r1: float, r2: float, origin: Sequence[float] = (0, 0, 0),
+          axis: Sequence[float] = (0, 0, 1)) -> TopoDS_Shape:
+    if r1 <= 0 or r2 <= 0:
+        raise KernelError("torus radii must be positive")
+    return BRepPrimAPI_MakeTorus(gp_Ax2(pnt(origin), direction(axis)),
+                                 r1, r2).Shape()

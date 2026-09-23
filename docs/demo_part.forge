@@ -1,0 +1,465 @@
+{
+ "format": "forge-part",
+ "version": 1,
+ "units": "mm",
+ "material": "Generic",
+ "density": 1.0,
+ "next_id": 7,
+ "rollback": null,
+ "parameters": [
+  {
+   "name": "d1",
+   "expression": "50",
+   "unit": "mm",
+   "comment": "example parameter"
+  },
+  {
+   "name": "wall",
+   "expression": "3",
+   "unit": "mm",
+   "comment": ""
+  },
+  {
+   "name": "boss_d",
+   "expression": "20",
+   "unit": "mm",
+   "comment": ""
+  }
+ ],
+ "features": [
+  {
+   "id": 1,
+   "name": "Sketch",
+   "type": "sketch",
+   "suppressed": false,
+   "sketch": {
+    "name": "Sketch",
+    "plane": {
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "normal": [
+      0.0,
+      0.0,
+      1.0
+     ],
+     "xdir": [
+      1.0,
+      0.0,
+      0.0
+     ],
+     "name": "XY Plane"
+    },
+    "next_id": 18,
+    "points": [
+     {
+      "id": 1,
+      "x": -45.00000000000001,
+      "y": -30.000000000000004,
+      "fixed": true
+     },
+     {
+      "id": 2,
+      "x": 74.99999999999999,
+      "y": -30.000000000000004,
+      "fixed": false
+     },
+     {
+      "id": 3,
+      "x": 74.99999999999997,
+      "y": 39.99999999999999,
+      "fixed": false
+     },
+     {
+      "id": 4,
+      "x": -45.00000000000001,
+      "y": 39.99999999999999,
+      "fixed": false
+     },
+     {
+      "id": 13,
+      "x": 0.0,
+      "y": 0.0,
+      "fixed": false
+     }
+    ],
+    "entities": [
+     {
+      "id": 5,
+      "kind": "line",
+      "points": [
+       1,
+       2
+      ],
+      "radius": 0.0,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 6,
+      "kind": "line",
+      "points": [
+       2,
+       3
+      ],
+      "radius": 0.0,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 7,
+      "kind": "line",
+      "points": [
+       3,
+       4
+      ],
+      "radius": 0.0,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 8,
+      "kind": "line",
+      "points": [
+       4,
+       1
+      ],
+      "radius": 0.0,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 14,
+      "kind": "circle",
+      "points": [
+       13
+      ],
+      "radius": 15.0,
+      "construction": false,
+      "ccw": true
+     }
+    ],
+    "constraints": [
+     {
+      "id": 9,
+      "kind": "horizontal",
+      "points": [],
+      "entities": [
+       5
+      ],
+      "value": 0.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "id": 10,
+      "kind": "horizontal",
+      "points": [],
+      "entities": [
+       7
+      ],
+      "value": 0.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "id": 11,
+      "kind": "vertical",
+      "points": [],
+      "entities": [
+       6
+      ],
+      "value": 0.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "id": 12,
+      "kind": "vertical",
+      "points": [],
+      "entities": [
+       8
+      ],
+      "value": 0.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       0.0,
+       0.0
+      ]
+     },
+     {
+      "id": 15,
+      "kind": "distance_x",
+      "points": [
+       1,
+       2
+      ],
+      "entities": [],
+      "value": 120.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       0.0,
+       -14.0
+      ]
+     },
+     {
+      "id": 16,
+      "kind": "distance_y",
+      "points": [
+       1,
+       4
+      ],
+      "entities": [],
+      "value": 70.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       -16.0,
+       0.0
+      ]
+     },
+     {
+      "id": 17,
+      "kind": "diameter",
+      "points": [],
+      "entities": [
+       14
+      ],
+      "value": 30.0,
+      "expression": "",
+      "driving": true,
+      "label_offset": [
+       10.0,
+       12.0
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "id": 2,
+   "name": "Extrude",
+   "type": "extrude",
+   "suppressed": false,
+   "sketch_id": 1,
+   "distance": "12",
+   "extent": "distance",
+   "operation": "new",
+   "reversed": false,
+   "taper": "0"
+  },
+  {
+   "id": 3,
+   "name": "Fillet",
+   "type": "fillet",
+   "suppressed": false,
+   "radius": "10",
+   "refs": [
+    {
+     "kind": "edge",
+     "index": 0,
+     "centre": [
+      -45.0,
+      -30.0,
+      6.0
+     ],
+     "size": 12.0,
+     "geom": "GeomAbs_CurveType.GeomAbs_Line"
+    },
+    {
+     "kind": "edge",
+     "index": 1,
+     "centre": [
+      75.0,
+      -30.0,
+      6.0
+     ],
+     "size": 12.0,
+     "geom": "GeomAbs_CurveType.GeomAbs_Line"
+    },
+    {
+     "kind": "edge",
+     "index": 4,
+     "centre": [
+      75.0,
+      40.0,
+      6.0
+     ],
+     "size": 12.0,
+     "geom": "GeomAbs_CurveType.GeomAbs_Line"
+    },
+    {
+     "kind": "edge",
+     "index": 7,
+     "centre": [
+      -45.0,
+      40.0,
+      6.0
+     ],
+     "size": 12.0,
+     "geom": "GeomAbs_CurveType.GeomAbs_Line"
+    },
+    {
+     "kind": "edge",
+     "index": 12,
+     "centre": [
+      15.0,
+      0.0,
+      6.0
+     ],
+     "size": 12.0,
+     "geom": "GeomAbs_CurveType.GeomAbs_Line"
+    }
+   ],
+   "all_edges": false
+  },
+  {
+   "id": 4,
+   "name": "Shell",
+   "type": "shell",
+   "suppressed": false,
+   "thickness": "wall",
+   "refs": [
+    {
+     "kind": "face",
+     "index": 4,
+     "centre": [
+      16.393776,
+      5.464592,
+      12.0
+     ],
+     "size": 7607.300918,
+     "geom": "GeomAbs_SurfaceType.GeomAbs_Plane"
+    }
+   ]
+  },
+  {
+   "id": 5,
+   "name": "Sketch1",
+   "type": "sketch",
+   "suppressed": false,
+   "sketch": {
+    "name": "Mount Holes",
+    "plane": {
+     "origin": [
+      0.0,
+      0.0,
+      0.0
+     ],
+     "normal": [
+      0.0,
+      0.0,
+      1.0
+     ],
+     "xdir": [
+      1.0,
+      0.0,
+      0.0
+     ],
+     "name": "XY Plane"
+    },
+    "next_id": 9,
+    "points": [
+     {
+      "id": 1,
+      "x": -45.0,
+      "y": -22.0,
+      "fixed": false
+     },
+     {
+      "id": 3,
+      "x": 45.0,
+      "y": -22.0,
+      "fixed": false
+     },
+     {
+      "id": 5,
+      "x": -45.0,
+      "y": 22.0,
+      "fixed": false
+     },
+     {
+      "id": 7,
+      "x": 45.0,
+      "y": 22.0,
+      "fixed": false
+     }
+    ],
+    "entities": [
+     {
+      "id": 2,
+      "kind": "circle",
+      "points": [
+       1
+      ],
+      "radius": 2.5,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 4,
+      "kind": "circle",
+      "points": [
+       3
+      ],
+      "radius": 2.5,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 6,
+      "kind": "circle",
+      "points": [
+       5
+      ],
+      "radius": 2.5,
+      "construction": false,
+      "ccw": true
+     },
+     {
+      "id": 8,
+      "kind": "circle",
+      "points": [
+       7
+      ],
+      "radius": 2.5,
+      "construction": false,
+      "ccw": true
+     }
+    ],
+    "constraints": []
+   }
+  },
+  {
+   "id": 6,
+   "name": "Hole",
+   "type": "hole",
+   "suppressed": false,
+   "sketch_id": 5,
+   "diameter": "5",
+   "depth": "10",
+   "through": true,
+   "hole_type": "simple",
+   "cb_diameter": "10",
+   "cb_depth": "4",
+   "cs_angle": "90",
+   "flip": false
+  }
+ ]
+}

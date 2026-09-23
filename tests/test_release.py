@@ -214,6 +214,64 @@ else:
 
 
 # ==========================================================================
+print("a signed release is checked the whole way through")
+
+from cryptography.hazmat.primitives import serialization           # noqa: E402
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (    # noqa: E402
+    Ed25519PrivateKey)
+
+private = Ed25519PrivateKey.generate()
+public_hex = private.public_key().public_bytes(
+    encoding=serialization.Encoding.Raw,
+    format=serialization.PublicFormat.Raw).hex()
+
+for name in (update.FEED_FILE, os.path.join("0.2.1", "manifest.json")):
+    path = os.path.join(server, name)
+    with open(path, "rb") as handle:
+        signature = private.sign(handle.read()).hex()
+    with open(path + ".sig", "w", encoding="ascii") as handle:
+        handle.write(signature)
+
+real_key = update.PUBLIC_KEY_HEX
+update.PUBLIC_KEY_HEX = public_hex
+real_fetch = update.fetch
+update.fetch = lambda url, timeout=30.0: serve(url)
+try:
+    signed = update.check(BASE)
+    check("a correctly signed feed is accepted", signed.version == "0.2.1",
+          signed.version)
+    body = update.fetch_signed(BASE, signed.manifest)
+    check("and so is its manifest", b'"version": "0.2.1"' in body)
+
+    print("but a tampered one is refused, and nothing is downloaded")
+    feed_path = os.path.join(server, update.FEED_FILE)
+    with open(feed_path, encoding="utf-8") as handle:
+        good = handle.read()
+    with open(feed_path, "w", encoding="utf-8") as handle:
+        handle.write(good.replace('"0.2.1"', '"9.9.9"'))
+    try:
+        update.check(BASE)
+        check("it refuses", False, "a tampered feed was accepted")
+    except update.UpdateError as exc:
+        check("it refuses", "not signed by IITEG" in str(exc), exc)
+        check("and says nothing was changed", "Nothing has been changed"
+              in str(exc), exc)
+    with open(feed_path, "w", encoding="utf-8") as handle:
+        handle.write(good)
+
+    print("a release with no signature at all is refused too")
+    os.remove(os.path.join(server, update.FEED_FILE + ".sig"))
+    try:
+        update.check(BASE)
+        check("it refuses", False, "an unsigned feed was accepted")
+    except update.UpdateError:
+        check("it refuses", True)
+finally:
+    update.PUBLIC_KEY_HEX = real_key
+    update.fetch = real_fetch
+
+
+# ==========================================================================
 print("release.py is runnable and says what it wants")
 
 result = subprocess.run(

@@ -25,7 +25,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, Optional, Sequence
 
 from . import update
 

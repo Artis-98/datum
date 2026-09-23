@@ -25,7 +25,6 @@ import json
 import os
 import ssl
 import sys
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -48,7 +47,8 @@ FEED_FILE = "latest.json"
 # that then runs as the user, so the difference matters: if the host were
 # ever compromised, a signature check is the thing standing between that
 # and every DATUM install executing somebody else's code.
-PUBLIC_KEY_HEX = ""
+PUBLIC_KEY_HEX = \
+    "fef85a4d8378f0242f337153806c79f734ce1f97894b70dcd6707ce72ce11b91"
 
 STAGING = ".staging"
 

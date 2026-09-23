@@ -12,10 +12,9 @@ neither belongs on the thread that is drawing the application.
 
 from __future__ import annotations
 
-import os
 from typing import Optional
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from .. import __version__
 from ..core import swap, update
@@ -74,8 +73,8 @@ class Worker(QtCore.QThread):
         self.found.emit(release)
 
     def _download(self) -> None:
-        manifest_url = self.release.base + self.release.manifest
         import json
+
         raw = update.fetch_signed(self.release.base, self.release.manifest)
         manifest = json.loads(raw.decode("utf-8"))
         plan = update.plan_for(manifest, update.install_dir(),
@@ -84,8 +83,7 @@ class Worker(QtCore.QThread):
         if plan.empty:
             self.staged.emit(plan)
             return
-        update.download(plan, self.release,
-                        progress=self._tick)
+        update.download(plan, self.release, progress=self._tick)
         self.staged.emit(plan)
 
     def _tick(self, done: int, total: int) -> bool:

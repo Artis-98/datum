@@ -259,10 +259,17 @@ for body in (b"{}", b"not json at all", b'{"version": ""}'):
 # ==========================================================================
 print("signatures")
 
-check("an unset key means signing is off, and it says so",
-      not update.signing_enabled())
-check("and verification does not pretend to have checked",
-      update.verify(b"anything", "", ""))
+check("this build has a release key, so it checks what it downloads",
+      update.signing_enabled(), update.PUBLIC_KEY_HEX)
+check("the key is a real Ed25519 public key",
+      len(update.PUBLIC_KEY_HEX) == 64
+      and all(c in "0123456789abcdef" for c in update.PUBLIC_KEY_HEX),
+      update.PUBLIC_KEY_HEX)
+check("this build refuses an unsigned payload",
+      not update.verify(b"anything", ""))
+check("and an empty key argument cannot switch the check off, it falls "
+      "back to the built-in one",
+      not update.verify(b"anything", "", ""))
 
 try:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (

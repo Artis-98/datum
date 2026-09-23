@@ -346,7 +346,12 @@ layout, so it ends up as:
     /datum/%s/...               the files themselves
 
 Installed copies pick it up within six hours, or at once from
-File then Check for Updates.""" % (folder, version, version))
+File then Check for Updates.
+
+Only the newest version folder is ever fetched from, whatever version
+somebody is updating from, so older ones can be deleted from the server
+and from release/ once a release has settled.  Keep one behind if you
+want somewhere to roll back to.""" % (folder, version, version))
     return 0
 
 

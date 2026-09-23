@@ -90,11 +90,38 @@ def selftest(report_path: str = "") -> int:
         note("ok  projected %d line(s)" % len(projection.lines))
 
         from PySide6 import QtWidgets as _widgets
-        application = _widgets.QApplication.instance() or _widgets.QApplication([])
+        application = (_widgets.QApplication.instance()
+                       or _widgets.QApplication([]))
         from .ui import icons
-        from .ui.main_window import MainWindow
+        from .ui.main_window import MainWindow          # noqa: F401
         icons.app_icon()
         note("ok  Qt started and the interface imported")
+
+        # Export really is exercised, not just imported.  The build's
+        # exclude list is what keeps PySide6 from adding hundreds of
+        # megabytes, and the way it goes wrong is by dropping a module
+        # that only one feature needs: QtSvg for SVG, QtPrintSupport for
+        # PDF and printing.  Importing them proves they are bundled;
+        # writing a file with them proves they work.
+        import tempfile as _temp
+
+        from .core import drawing as _dwg
+        from .ui import drawingexport
+
+        sheet_doc = _dwg.DrawingDocument()
+        sheet = sheet_doc.add_sheet("A4")
+        folder = _temp.mkdtemp(prefix="datum-selftest-")
+        pdf = drawingexport.to_pdf(sheet_doc, os.path.join(folder, "t.pdf"))
+        svg = drawingexport.to_svg(sheet_doc, sheet,
+                                   os.path.join(folder, "t.svg"))
+        if os.path.getsize(pdf) < 500 or os.path.getsize(svg) < 200:
+            note("FAIL  export produced an empty file")
+            return 1
+        note("ok  wrote a PDF (%d bytes) and an SVG (%d bytes)"
+             % (os.path.getsize(pdf), os.path.getsize(svg)))
+        import shutil as _shutil
+        _shutil.rmtree(folder, ignore_errors=True)
+
         application.quit()
 
         note("PASS  DATUM %s is a working build" % __version__)

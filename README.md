@@ -1,11 +1,17 @@
 # DATUM
 
 A parametric, history-based solid modeller with an Inventor-style interface,
-built on the OpenCASCADE kernel.
+built on the OpenCASCADE kernel. Sketch with a constraint solver, model
+solids on a feature tree you can go back into, assemble, draw, and cut.
+
+[**Download for Windows**](https://datum.iiteg.com) &nbsp;·&nbsp;
+[datum.iiteg.com](https://datum.iiteg.com) &nbsp;·&nbsp;
+[Changelog](https://datum.iiteg.com/changelog.html) &nbsp;·&nbsp;
+MIT licensed
 
 ![DATUM](docs/screenshot.png)
 
-## Running it
+## Running it from source
 
 ```bash
 datum.bat

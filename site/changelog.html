@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog — DATUM</title>
+<meta name="description" content="What changed in each release of DATUM.">
+<meta name="theme-color" content="#16181b">
+<link rel="icon" href="img/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap nav">
+    <a class="brand" href="./">
+      <svg viewBox="0 0 181 181" aria-hidden="true">
+        <g fill="#69788b" transform="translate(5,6)">
+          <path d="M51 38H105L144 60L145 105L127 114L128 75L96 54H51Z"/>
+          <path d="M51 62H94L119 77V118L74 143H36L25 137V100L45 89V128L47 129L79 111H100V84L93 79H51Z"/>
+        </g>
+        <g fill="#d5dee8">
+          <path d="M51 38H105L144 60L145 105L127 114L128 75L96 54H51Z"/>
+          <path d="M51 62H94L119 77V118L74 143H36L25 137V100L45 89V128L47 129L79 111H100V84L93 79H51Z"/>
+        </g>
+      </svg>
+      DATUM
+    </a>
+    <a class="link" href="./#what">What it is</a>
+    <a class="link" href="./#tour">Tour</a>
+    <a class="link here" href="changelog.html">Changelog</a>
+    <a class="link" href="https://github.com/iiteg/datum">Source</a>
+    <a class="link" href="./#contact">Contact</a>
+  </div>
+</header>
+
+<div class="hero" style="padding-bottom:0">
+  <div class="wrap">
+    <div class="inner">
+      <div class="eyebrow"><span class="dot"></span>
+        <span id="live-version">Latest: 0.2.0</span></div>
+      <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
+      <p class="lede">
+        Every release, what changed in it, and why. DATUM updates itself,
+        so you do not need to come back here to get any of this — it is
+        just here so you can see what arrived.
+      </p>
+      <a class="btn ghost" id="get-latest"
+         href="https://api.iiteg.com/datum/0.2.0/DATUM-0.2.0-setup.exe">
+        Download the current version</a>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="wrap" style="max-width:820px;margin-left:0">
+
+    <!-- Newest first.  Add a new block above this comment for each
+         release, and keep the wording about what somebody can now DO,
+         not about which function was renamed. -->
+
+    <div class="release current">
+      <div class="head">
+        <span class="ver">0.2.0</span>
+        <span class="when">23 September 2026</span>
+        <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        The first public release. Everything below is what DATUM can do
+        as of this version.
+      </p>
+      <ul>
+        <li><strong>Modelling.</strong> History-based solids on
+          OpenCASCADE: extrude, revolve, sweep, loft, fillet, chamfer,
+          shell, holes, rectangular and circular patterns, mirror and
+          booleans. Features stay editable, and edges keep their fillets
+          when dimensions upstream change.</li>
+        <li><strong>Sketching.</strong> Lines, arcs, circles, splines,
+          rectangles, fillet, trim and offset, with coincident,
+          horizontal, vertical, parallel, perpendicular, tangent, equal,
+          concentric, collinear, midpoint, point-on and symmetric
+          constraints. Dimensions can be named and referenced by other
+          dimensions, and accept expressions like
+          <code>(10-2+d2)/2</code>.</li>
+        <li><strong>Assemblies.</strong> Place parts by reference rather
+          than by copy, constrain them mate or flush with an offset, and
+          see which way a face points before you pick the second one.
+          Editing a part in its own tab updates the assembly.</li>
+        <li><strong>Drawings.</strong> Base, projected, section, detail
+          and auxiliary views with hidden line removal. Sections hatch
+          their cut faces from the model's material. Parts lists read the
+          assembly and balloons take their numbers from the list.
+          Dimensions snap to model vertices and follow the model when it
+          changes. True vector PDF, SVG, DXF and print.</li>
+        <li><strong>2D CAM.</strong> Nest flat parts on a sheet, offset
+          toolpaths for the cutter, add leads and dogbone corner relief,
+          and export DXF.</li>
+        <li><strong>Projects.</strong> An Inventor-style project file per
+          folder, with its own recent files and its own drawing
+          templates.</li>
+        <li><strong>Updates.</strong> DATUM checks for new versions and
+          fetches only the files that changed, so a typical update is a
+          few megabytes rather than another full install. Releases are
+          signed, and an update that does not verify is refused.</li>
+        <li><strong>3Dconnexion SpaceMouse</strong> support, over raw HID
+          or the 3DxWare driver, whichever is available.</li>
+      </ul>
+    </div>
+
+  </div>
+</section>
+
+<section class="rule">
+  <div class="wrap">
+    <div class="download-panel">
+      <h2>Get the current version</h2>
+      <p class="section-lede">
+        Already have DATUM? It will offer the update itself, or you can
+        ask it now from File then Check for Updates.
+      </p>
+      <a class="btn primary" id="get-latest-2"
+         href="https://api.iiteg.com/datum/0.2.0/DATUM-0.2.0-setup.exe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+             aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>
+        </svg>
+        DATUM <span id="latest-ver">0.2.0</span> for Windows
+      </a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h4>DATUM</h4>
+        <a href="./#what">What it is</a>
+        <a href="./#tour">Tour</a>
+        <a href="./#download">Download</a>
+        <a href="changelog.html">Changelog</a>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <a href="mailto:datum@iiteg.com">datum@iiteg.com</a>
+        <a href="https://iiteg.com">iiteg.com</a>
+      </div>
+      <div>
+        <h4>Built on</h4>
+        <a href="https://dev.opencascade.org/">OpenCASCADE</a>
+        <a href="https://www.qt.io/qt-for-python">Qt for Python</a>
+        <a href="https://www.python.org/">Python</a>
+        <a href="licences.html">Licences and notices</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>DATUM is made by SIA IITEG in Latvia.</span>
+      <span>Exploring what comes next.</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+/* Same feed the application reads, so this page cannot claim a version
+ * that was never published. */
+(function () {
+  fetch("https://api.iiteg.com/datum/latest.json", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (feed) {
+      if (!feed || !feed.version) { return; }
+      var live = document.getElementById("live-version");
+      if (live) { live.textContent = "Latest: " + feed.version; }
+      var ver = document.getElementById("latest-ver");
+      if (ver) { ver.textContent = feed.version; }
+      if (feed.installer) {
+        var url = "https://api.iiteg.com/datum/" + feed.installer;
+        ["get-latest", "get-latest-2"].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) { el.href = url; }
+        });
+      }
+    })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Licences — DATUM</title>
+<meta name="description" content="The open source libraries DATUM is built on, and what their licences require.">
+<meta name="theme-color" content="#16181b">
+<link rel="icon" href="img/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap nav">
+    <a class="brand" href="./">
+      <svg viewBox="0 0 181 181" aria-hidden="true">
+        <g fill="#69788b" transform="translate(5,6)">
+          <path d="M51 38H105L144 60L145 105L127 114L128 75L96 54H51Z"/>
+          <path d="M51 62H94L119 77V118L74 143H36L25 137V100L45 89V128L47 129L79 111H100V84L93 79H51Z"/>
+        </g>
+        <g fill="#d5dee8">
+          <path d="M51 38H105L144 60L145 105L127 114L128 75L96 54H51Z"/>
+          <path d="M51 62H94L119 77V118L74 143H36L25 137V100L45 89V128L47 129L79 111H100V84L93 79H51Z"/>
+        </g>
+      </svg>
+      DATUM
+    </a>
+    <a class="link" href="./#what">What it is</a>
+    <a class="link" href="./#tour">Tour</a>
+    <a class="link" href="changelog.html">Changelog</a>
+    <a class="link" href="./#contact">Contact</a>
+  </div>
+</header>
+
+<div class="hero" style="padding-bottom:0">
+  <div class="wrap">
+    <div class="inner">
+      <h1 style="font-size:clamp(32px,5vw,48px)">Licences and notices</h1>
+      <p class="lede">
+        DATUM is MIT licensed, and built on other people's open source.
+        This page says which, under what, and where to get it.
+      </p>
+    </div>
+  </div>
+</div>
+
+<section>
+  <div class="wrap" style="max-width:860px;margin-left:0">
+
+    <h2>DATUM</h2>
+    <p style="color:var(--dim)">
+      Copyright &copy; 2026 SIA IITEG, under the
+      <strong>MIT licence</strong>. You may use it, copy it, change it,
+      and build and sell your own thing on top of it. The one condition is
+      that the copyright notice travels with the source.
+    </p>
+    <p style="color:var(--dim)">
+      It is provided as it is, with no warranty of any kind. Keep backups
+      of work that matters to you.
+    </p>
+    <p style="margin-top:20px">
+      <a class="btn ghost" href="https://github.com/iiteg/datum">Read the source</a>
+    </p>
+
+    <h2 style="margin-top:52px">Libraries DATUM includes</h2>
+    <p class="section-lede">
+      These are shipped inside the installer. Each is used unmodified,
+      and each stays a separate file in the install folder rather than
+      being compiled into DATUM, which is what lets you replace one if
+      you want to.
+    </p>
+
+    <div class="grid" style="margin-bottom:34px">
+      <div class="card">
+        <h3>Qt, through PySide6</h3>
+        <p style="margin-bottom:12px">The interface, the drawing
+          painter, the PDF and SVG output and the printing all run on Qt.
+          Used under the <strong>LGPL version 3</strong>.</p>
+        <p style="margin-bottom:14px">The Qt DLLs sit in
+          <code>_internal\PySide6</code> in the install folder. You may
+          replace them with your own build of the same version.</p>
+        <a class="btn ghost" href="https://www.gnu.org/licenses/lgpl-3.0.html">LGPL-3.0</a>
+      </div>
+
+      <div class="card">
+        <h3>OpenCASCADE, through cadquery-ocp</h3>
+        <p style="margin-bottom:12px">The geometry kernel. Every solid,
+          boolean, fillet and hidden-line projection is OpenCASCADE doing
+          the work. Used under the
+          <strong>LGPL version 2.1 with the OCCT exception</strong>.</p>
+        <p style="margin-bottom:14px">Its libraries sit in
+          <code>_internal\cadquery_ocp.libs</code> and
+          <code>_internal\vtk.libs</code> and may likewise be replaced.</p>
+        <a class="btn ghost" href="https://dev.opencascade.org/caslicense">OCCT licence</a>
+      </div>
+
+      <div class="card">
+        <h3>VTK</h3>
+        <p style="margin-bottom:12px">Not used by DATUM directly, but
+          OpenCASCADE's Python binding links it, so it has to be present
+          for the kernel to load at all. <strong>BSD 3-clause</strong>.</p>
+        <a class="btn ghost" href="https://vtk.org/about/#license">VTK licence</a>
+      </div>
+
+      <div class="card">
+        <h3>Python</h3>
+        <p style="margin-bottom:12px">The runtime DATUM is written in,
+          under the <strong>PSF licence</strong>, together with NumPy
+          (BSD) for the numerical work and the <em>cryptography</em>
+          library (Apache 2.0 / BSD) for checking that an update really
+          came from IITEG.</p>
+        <a class="btn ghost" href="https://docs.python.org/3/license.html">PSF licence</a>
+      </div>
+    </div>
+
+    <div class="note">
+      <strong>If you want the source of any of these libraries,</strong>
+      each project publishes it at the links above, and the exact versions
+      DATUM ships are listed in the install folder's
+      <code>_internal</code> directory. If you would rather have it from
+      me, write to <a href="mailto:datum@iiteg.com">datum@iiteg.com</a>
+      and I will send it.
+    </div>
+
+    <h2 style="margin-top:52px">Trademarks</h2>
+    <p style="color:var(--dim)">
+      Autodesk, Inventor, SolidWorks, Windows and any other product names
+      mentioned on this site belong to their respective owners and are
+      referred to only to describe what DATUM is like. DATUM is not
+      affiliated with, endorsed by or derived from any of them.
+    </p>
+
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h4>DATUM</h4>
+        <a href="./#what">What it is</a>
+        <a href="./#tour">Tour</a>
+        <a href="./#download">Download</a>
+        <a href="changelog.html">Changelog</a>
+      </div>
+      <div>
+        <h4>Contact</h4>
+        <a href="mailto:datum@iiteg.com">datum@iiteg.com</a>
+        <a href="https://iiteg.com">iiteg.com</a>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <a href="licences.html">Licences and notices</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>DATUM is made by SIA IITEG in Latvia.</span>
+      <span>Exploring what comes next.</span>
+    </div>
+  </div>
+</footer>
+</body>
+</html>

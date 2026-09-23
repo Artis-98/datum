@@ -25,7 +25,7 @@ from ..core.features import (
 from ..core.naming import RefSet, ShapeRef
 from ..core.sketch import STANDARD_PLANES, Sketch, SketchPlane
 from . import dialogs, icons
-from . import doctabs, session
+from . import doctabs, session, updater
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
 from .cam_ui import CamController
@@ -144,10 +144,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.doc_tabs = doctabs.DocumentTabs(self)
 
+        self.updater = updater.UpdateController(self)
+
         centre = QtWidgets.QWidget(self)
         layout = QtWidgets.QVBoxLayout(centre)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        # the update banner sits above everything and is hidden until it
+        # has something to say, so it costs no space the rest of the time
+        layout.addWidget(self.updater.banner, 0)
         layout.addWidget(self.stack, 1)
         layout.addWidget(self.doc_tabs, 0)
         self.setCentralWidget(centre)
@@ -610,6 +615,8 @@ class MainWindow(QtWidgets.QMainWindow):
         menu.addSeparator()
         item("params", "Parameters...", "Ctrl+P", self.edit_parameters)
         item("open", "Projects...", "", self.choose_project)
+        item("rollback", "Check for Updates...", "",
+             lambda: self.updater.check(quiet=False))
         item("dimension", "Save as Template...", "",
              lambda: self.drawing_ui.save_as_template())
         menu.addSeparator()

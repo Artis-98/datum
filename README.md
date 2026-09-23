@@ -559,6 +559,62 @@ surfacing, no machine simulation, and no true nesting optimisation — layout is
 bounding-box grid plus hand adjustment. It exports DXF, not G-code, because
 the target machine wants 2D paths and does its own depth passes.
 
+## Releasing
+
+DATUM itself is about four megabytes of Python. The Qt and OpenCASCADE
+runtime under it is closer to six hundred. That single fact decides how
+releases work: shipping the whole application again for every fix would be
+a six hundred megabyte download to change a line, and nobody would take
+one. So a release publishes a manifest of every file with its hash, and an
+update fetches only the files whose hashes changed. A Python-only release
+is a few megabytes.
+
+```bash
+python tools/release.py 0.2.1 --notes "Hatched sections and parts lists."
+```
+
+That bumps `__version__`, runs the tests, builds, starts the built copy to
+check it really works, writes and signs the manifest and the feed, builds
+the installer, and tags the commit. Nothing is published if any of it
+fails. Then copy `release/` to `https://api.iiteg.com/datum/`, keeping the
+layout.
+
+**One thing in the build is not optional.** `cadquery-ocp` links
+OpenCASCADE's VTK bridge into a single `OCP.pyd`, so the VTK DLLs must be
+bundled even though DATUM never imports VTK and has no use for it. Without
+them the build looks perfectly fine and dies on first import with `DLL
+load failed`. `OCP/__init__.py` also calls `os.add_dll_directory` on
+`vtk.libs` and `cadquery_ocp.libs` by name, so those folders have to keep
+their names. PyInstaller cannot work any of this out, because the
+dependency is a link and not an import, which is why `tools/datum.spec`
+collects them by hand and why `release.py` starts the build before it will
+publish it.
+
+**Installing is per user**, into `%LOCALAPPDATA%\Programs\DATUM`. A
+Program Files install would need an administrator prompt to update, which
+an application cannot raise for itself, so silent updates would be
+impossible.
+
+**The swap.** Windows will let a program rename its own executable but not
+touch a DLL it has loaded, and an installed DATUM has Qt, OpenCASCADE and
+the Python runtime all mapped in. So the files cannot be replaced by the
+application using them. Downloads go to a staging folder inside the
+install and are all verified before anything is applied; on restart a
+small batch script waits for DATUM to exit, moves the staged files over,
+and starts it again. If it cannot finish, it leaves staging alone and
+DATUM offers it again next time, which is safe because everything in there
+was checked before it was written.
+
+**Signing.** `tools/release.py --make-key` makes an Ed25519 key; the
+public half goes in `datum/core/update.py` and the private half never goes
+near the repository. HTTPS proves you are talking to api.iiteg.com but not
+that what it is serving came from IITEG, and an update is code that then
+runs as the user. Until the key is set, `signing_enabled()` reports false
+rather than quietly passing unchecked downloads off as verified.
+
+Code signing the executable is a separate thing and is not set up. Without
+it SmartScreen warns on first run and on every update.
+
 ## Requirements
 
 Python 3.14, `cadquery-ocp` (OpenCASCADE 7.9), `PySide6`, `numpy`.

@@ -175,6 +175,10 @@ def builtin_appearances() -> List[Appearance]:
         Appearance("Paint, Gloss White", "Paint", "#f2f4f5", 0.12, False),
         Appearance("Powder Coat, Grey", "Paint", "#6f757b", 0.60, False),
         Appearance("Powder Coat, RAL 3020", "Paint", "#a3161a", 0.55, False),
+        # machine paint: the yellow every excavator, loader and telehandler
+        # on a site is wearing, and the charcoal its undercarriage is
+        Appearance("Paint, Machine Yellow", "Paint", "#e3a615", 0.44, False),
+        Appearance("Paint, Machine Charcoal", "Paint", "#3a4046", 0.58, False),
 
         Appearance("Glass, Clear", "Glass", "#cfe0e6", 0.05, False, 0.28),
         Appearance("Acrylic, Frosted", "Glass", "#dde4e7", 0.55, False, 0.62),

@@ -36,7 +36,7 @@ asm = open_any(os.path.join(SRC, "Excavator.adat"))
 report = asm.rebuild()
 check("it rebuilds without error", report.ok and not report.errors,
       report.message)
-check("all 45 components are there", len(asm.occurrences) == 45,
+check("all 48 components are there", len(asm.occurrences) == 48,
       len(asm.occurrences))
 check("every one of them built a shape",
       all(o.shape is not None for o in asm.occurrences),
@@ -44,11 +44,11 @@ check("every one of them built a shape",
 
 counts = collections.Counter(os.path.basename(o.ref.path)
                              for o in asm.occurrences)
-check("25 unique parts", len(counts) == 25, len(counts))
+check("26 unique parts", len(counts) == 26, len(counts))
 check("the long pin does the five main pivots",
       counts.get("Pivot Pin.pdat") == 5, counts.get("Pivot Pin.pdat"))
-check("and the short one the five ram eyes",
-      counts.get("Ram Pin.pdat") == 5, counts.get("Ram Pin.pdat"))
+check("and the short one the six ram eyes",
+      counts.get("Ram Pin.pdat") == 6, counts.get("Ram Pin.pdat"))
 check("the bucket has its five teeth", counts.get("Bucket Tooth.pdat") == 5,
       counts.get("Bucket Tooth.pdat"))
 
@@ -73,14 +73,24 @@ bucket = next((o for o in asm.occurrences
                if o.name.split(":")[0] == "Bucket"), None)
 check("the bucket is in there", bucket is not None)
 if bucket is not None and len(links) == 2:
-    ear = bucket.placement.apply_point((200, 0, 170))
+    ear = bucket.placement.apply_point((200, 0, 170))   # the ear pin bore
+    # The link is cut to the gap the pose left it, so its length is not a
+    # number anybody typed: read it back off the part.  It is a 160 wide
+    # slot with a round end at each hole, so the holes are that much
+    # shorter than the plate.
+    plate = open_any(os.path.join(SRC, "Bucket Link.pdat"))
+    plate.rebuild()
+    pbox = kernel.bounding_box(plate.shape)
+    centres = (pbox[3] - pbox[0]) - 160.0
+    check("the bucket link is about 350 mm between centres",
+          300 < centres < 400, centres)
     for link in links:
         # The far hole should land on the ear pin's axis, 160 mm across
         # from the pin's centre, which is exactly how far outboard the
         # link was placed.  Measuring the gap in 3D rather than in plan is
         # the point: the slew turns the machine's Y into the world's, so a
         # check written flat would fail on a perfectly good linkage.
-        far = link.placement.apply_point((380, 0, 0))
+        far = link.placement.apply_point((centres, 0, 0))
         gap = abs(math.dist(far, ear) - 160.0)
         check("%s reaches the bucket's ear" % link.name, gap < 0.001, gap)
 

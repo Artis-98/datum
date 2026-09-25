@@ -1,6 +1,6 @@
 # Excavator
 
-A tracked excavator: 25 parts, 45 components, one assembly. The tote next
+A tracked excavator: 26 parts, 48 components, one assembly. The tote next
 door is the sample that shows the CAM side - a real sheet, a real cutter,
 a real DXF - and it is a box. This is the one that shows what the modeller
 carries: plate, castings, glass, rubber and polished rod, every part its
@@ -19,16 +19,16 @@ rebuilds normally.
 
 ## What it is
 
-4.4 m over the bucket, 3.2 m tall, tracks 2.1 m long at 1.2 m gauge.
+4.3 m over the bucket, 3.2 m tall, tracks 2.1 m long at 1.2 m gauge.
 
 | part | off | material | appearance |
 |------|-----|----------|------------|
 | Bucket Tooth | 5 | Steel, Mild | Steel, Mill Finish |
 | Pivot Pin | 5 | Steel, Mild | Steel, Polished |
-| Ram Pin | 5 | Steel, Mild | Steel, Polished |
+| Ram Pin | 6 | Steel, Mild | Steel, Polished |
 | Ram Barrel | 2 | Steel, Mild | Paint, Machine Charcoal |
 | Ram Rod | 2 | Steel, Mild | Steel, Polished |
-| Blade Arm, Bucket Link | 2 each | Steel, Mild | Paint, Machine Charcoal |
+| Blade Arm, Bucket Link, Idler Link | 2 each | Steel, Mild | Paint, Machine Charcoal |
 | Drive Sprocket, Idler Wheel | 2 each | Steel, Mild | Paint, Machine Charcoal |
 | Rubber Track | 2 | Rubber, EPDM | Rubber, Black |
 | Work Light | 2 | ABS | Plastic, Matte Black |
@@ -63,7 +63,7 @@ two lists and not one.
 ## The pose is worked out, not typed in
 
 Three angles decide the machine: the boom 38 degrees up, the arm 60 down
-from the boom tip, the bucket at 25 below horizontal, ready to dig. Everything after that is
+from the boom tip, the bucket curled 40 degrees. Everything after that is
 asked for rather than measured:
 
     boom_at    = Placement(BOOM_PIVOT, turn_y(-BOOM_ANGLE))
@@ -98,7 +98,7 @@ The build prints the check:
 
     Boom Ram      1062 mm between eyes, piston  282 mm into the tube  ok
     Arm Ram       1302 mm between eyes, piston  522 mm into the tube  ok
-    Bucket Ram     714 mm between eyes, piston  254 mm into the tube  ok
+    Bucket Ram     612 mm between eyes, piston  152 mm into the tube  ok
 
 If a pose were changed far enough that a piston left its tube, that line
 would say so instead of quietly drawing a rod hanging in mid-air. It is
@@ -120,9 +120,26 @@ notices.  The boom ram has the same problem at the other end, which is why
 the boom pivot sits high on a tall bracket: from a mount below it, the ram
 reaches the boom's underside without crossing its root.
 
-## The bucket is a solid with the inside taken out
+## It digs towards itself, so the bucket is drawn mirrored
 
 ![the bucket](part-bucket.png)
+
+An excavator is not a loader.  It drags the bucket in towards the machine,
+so the mouth faces home and the teeth are pulled through the cut, and the
+bucket is drawn with its lip at -X and its back plate, where both pins
+are, at +X.  Drawn the other way round it can be rotated all day and never
+look right: the body hangs below the pivot only when the mouth is facing
+away, which is a loader bucket on an excavator arm.
+
+Two more things fall out of that.  The bucket link and the idler link are
+**cut to fit the pose** - their length is the gap between two holes on
+parts that were placed by angle, so the pose is worked out first, the two
+lengths come out of it, and the plates are built to suit.  And the joint
+those links meet on is the floating one: the bucket ram's rod eye, two
+links out to the bucket and two back to the arm all share that pin.  Leave
+the idlers out and the mechanism has a degree of freedom nobody put there.
+
+## The bucket is a solid with the inside taken out
 
 The outline is the bucket's whole silhouette, mouth closed off, extruded
 620 wide. The pocket is a second profile cut 520 wide, so 50 mm of side

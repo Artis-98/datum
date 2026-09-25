@@ -68,7 +68,7 @@ SLEW_Z = 560.0        # top of the undercarriage: where the house turns
 BOOM_PIVOT = (600.0, -140.0, 1150.0)
 BOOM_ANGLE = 38.0     # degrees above horizontal
 ARM_ANGLE = -60.0     # degrees, hanging forward and down from the boom tip
-BUCKET_ANGLE = -25.0  # where the mouth points: below horizontal, ready to dig
+BUCKET_ANGLE = 40.0   # curl: 40 hangs the bucket with its mouth facing home
 SLEW = 18.0           # the house turned off centre, because square is dull
 BOOM_RAM_BASE = (560.0, 740.0)   # in the bracket clevis, below the pivot
 LINK = 380.0          # centres of the bucket link
@@ -242,6 +242,73 @@ def save(doc, name):
              bb[5] - bb[2], len(kernel.faces(doc.shape)), grams / 1000.0,
              doc.appearance or doc.material))
     return path
+
+
+# ==========================================================================
+# the pose
+#
+# Worked out before anything is modelled, because two of the parts are cut
+# to fit it: a link is only as long as the gap between the two holes it
+# joins, and those holes are on parts placed by angle.  Deriving the link
+# and then building it is the way round that cannot disagree with itself.
+# ==========================================================================
+
+
+def turn_y(deg):
+    """Rotate about Y: a positive angle tips the part's own +X downwards."""
+    return [0.0, math.radians(deg), 0.0]
+
+
+def turn_z(deg):
+    return [0.0, 0.0, math.radians(deg)]
+
+
+def compose(outer, inner):
+    """``inner`` placed, and then moved again by ``outer``.
+
+    This is what lets the whole upper works be built square to the world
+    and then swung: the slew goes on the outside of every placement in the
+    group, so the boom, its rams and all eleven pins turn with the house
+    and stay where the linkage put them.
+    """
+    ro = outer.matrix()
+    where = ro @ np.asarray(inner.position, dtype=float)         + np.asarray(outer.position, dtype=float)
+    return Placement(list(where),
+                     list(rotation_vector(ro @ inner.matrix())))
+
+
+def aim(frm, to):
+    """The rotation that swings a part's own +X onto the line frm -> to.
+
+    Every ram in this machine lies in the plane the boom swings through, so
+    this only ever needs to turn about Y, which is the one turn a rotation
+    vector can express without any trigonometry going astray.
+    """
+    return turn_y(math.degrees(math.atan2(-(to[2] - frm[2]), to[0] - frm[0])))
+
+
+def span(a, b):
+    return math.dist((a[0], a[2]), (b[0], b[2]))
+
+
+boom_at = Placement(list(BOOM_PIVOT), turn_y(-BOOM_ANGLE))
+arm_pivot = boom_at.apply_point((2260, 0, 232))
+arm_at = Placement(list(arm_pivot), turn_y(-ARM_ANGLE))
+bucket_pivot = arm_at.apply_point((1250, 0, 0))
+bucket_at = Placement(list(bucket_pivot), turn_y(-BUCKET_ANGLE))
+
+# The linkage.  The joint is the floating one - the rod eye and four links
+# meet on it and nothing else holds it - so it is the one point here that
+# is chosen rather than found, and both link lengths come out of it.
+EAR_ON_BUCKET = (200.0, 0.0, 170.0)
+JOINT_ON_ARM = (727.0, 0.0, 310.0)
+IDLER_ON_ARM = (1080.0, 0.0, 160.0)
+
+ear = bucket_at.apply_point(EAR_ON_BUCKET)
+joint = arm_at.apply_point(JOINT_ON_ARM)
+idler_lug = arm_at.apply_point(IDLER_ON_ARM)
+LINK = span(joint, ear)         # bucket link, joint to the bucket's ear
+IDLER_LINK = span(joint, idler_lug)   # idler link, joint back to the arm
 
 
 # ==========================================================================
@@ -562,9 +629,9 @@ ends.sketch.add_circle((0, 0), 130)
 ends.sketch.add_circle((1250, 0), 95)
 extrude(arm, ends, 240, JOIN)
 
-sketch_on(arm, "Bucket Ram Boss").sketch.add_circle((230, 210), 105)
+sketch_on(arm, "Bucket Ram Boss").sketch.add_circle((120, 235), 130)
 extrude(arm, arm.features[-1], 240, JOIN)
-box(arm, (200, 100, 180), (130, -50, 150), CUT, label="Clevis Slot")
+box(arm, (280, 100, 280), (-20, -50, 110), CUT, label="Clevis Slot")
 
 # The heel: the arm reaches back past its own pivot, and the arm ram
 # pulls on the end of it.  Without that the ram would have to reach a lug
@@ -575,33 +642,42 @@ heel.sketch.add_slot((0, 0), (-220, 330), 200)
 extrude(arm, heel, 240, JOIN)
 box(arm, (220, 90, 220), (-330, -45, 220), CUT, label="Heel Clevis")
 
-# the two links straddle this one, so it is narrower than the arm
-sketch_on(arm, "Link Boss").sketch.add_circle((1080, 160), 85)
-extrude(arm, arm.features[-1], 220, JOIN)
+# the idler links straddle this one, so it is a tab, not the full width
+sketch_on(arm, "Link Boss").sketch.add_circle(
+    (IDLER_ON_ARM[0], IDLER_ON_ARM[2]), 85)
+extrude(arm, arm.features[-1], 100, JOIN)
 
 drill(arm, "Pin Bores",
-      [(0, 0), (1250, 0), (230, 210), (-220, 330), (1080, 160)], diameter=96)
+      [(0, 0), (1250, 0), (120, 235), (-220, 330),
+       (IDLER_ON_ARM[0], IDLER_ON_ARM[2])], diameter=96)
 ARM = save(arm, "Arm")
 
 # ---- bucket: a shell cut out of a solid, with an ear plate on the back --
+# An excavator digs towards itself.  The mouth faces back at the machine
+# and the teeth are dragged in, so the bucket is drawn with its lip at -X
+# and its back plate, where both pins are, at +X: mirrored from the way a
+# loader bucket would be drawn, and the reason no amount of rotating the
+# other one ever looked right.
 bucket = new_part(STEEL, YELLOW)
 loop(sketch_on(bucket, "Bucket Section"),
-     [(0, 0), (-70, -300), (-40, -560), (260, -680), (640, -610), (680, -540)])
+     [(0, 0), (70, -300), (40, -560), (-260, -680), (-640, -610),
+      (-680, -540)])
 extrude(bucket, bucket.features[-1], 620, NEW_BODY, "Bucket")
 
 # The pocket runs past the mouth on purpose: the last edge of it sits
 # outside the solid, which is what opens the bucket rather than leaving a
 # lid on it.  Cut 520 of the 620 width, so 50 mm of side plate stays.
 loop(sketch_on(bucket, "Bucket Pocket"),
-     [(55, -70), (-10, -300), (15, -530), (270, -630), (615, -565),
-      (700, -500), (90, 80)])
+     [(-55, -70), (10, -300), (-15, -530), (-270, -630), (-615, -565),
+      (-700, -500), (-90, 80)])
 extrude(bucket, bucket.features[-1], 520, CUT)
 
-ear = sketch_on(bucket, "Ear Plate")
-ear.sketch.add_slot((0, 0), (200, 170), 190)
-ear.sketch.add_slot((-40, -300), (0, 0), 170)
-extrude(bucket, ear, 240, JOIN)
-drill(bucket, "Pin Bores", [(0, 0), (200, 170)], diameter=96)
+ears = sketch_on(bucket, "Ear Plate")
+ears.sketch.add_slot((0, 0), (EAR_ON_BUCKET[0], EAR_ON_BUCKET[2]), 190)
+ears.sketch.add_slot((40, -300), (0, 0), 170)
+extrude(bucket, ears, 240, JOIN)
+drill(bucket, "Pin Bores",
+      [(0, 0), (EAR_ON_BUCKET[0], EAR_ON_BUCKET[2])], diameter=96)
 BUCKET = save(bucket, "Bucket")
 
 # ---- bucket tooth ------------------------------------------------------
@@ -688,12 +764,24 @@ def pivot_pin(name, radius, length, head_r):
 PIN = pivot_pin("Pivot Pin", 48, 360, 62)
 RAM_PIN = pivot_pin("Ram Pin", 40, 240, 52)
 
-# ---- bucket link -------------------------------------------------------
-link = new_part(STEEL, CHARCOAL)
-sketch_on(link, "Link Plate").sketch.add_slot((0, 0), (LINK, 0), 160)
-extrude(link, link.features[-1], 70, NEW_BODY, "Bucket Link")
-drill(link, "Pin Bores", [(0, 0), (LINK, 0)], diameter=96)
-LINK_PLATE = save(link, "Bucket Link")
+# ---- the two links, each made to the gap the pose left it --------------
+#
+# The joint they meet on is the floating one: the bucket ram's rod eye,
+# two bucket links out to the bucket's ear and two idler links back to the
+# arm all share that pin, and nothing else holds it.  Leave the idlers out
+# and the mechanism has a degree of freedom nobody put there.
+
+
+def link_plate(name, centres, width):
+    doc = new_part(STEEL, CHARCOAL)
+    sketch_on(doc, "Link Plate").sketch.add_slot((0, 0), (centres, 0), width)
+    extrude(doc, doc.features[-1], 70, NEW_BODY, name)
+    drill(doc, "Pin Bores", [(0, 0), (centres, 0)], diameter=96)
+    return save(doc, name)
+
+
+LINK_PLATE = link_plate("Bucket Link", LINK, 160)
+IDLER_PLATE = link_plate("Idler Link", IDLER_LINK, 150)
 
 
 # ==========================================================================
@@ -707,45 +795,6 @@ LINK_PLATE = save(link, "Bucket Link")
 
 print()
 print("assembly")
-
-
-def turn_y(deg):
-    """Rotate about Y: a positive angle tips the part's own +X downwards."""
-    return [0.0, math.radians(deg), 0.0]
-
-
-def turn_z(deg):
-    return [0.0, 0.0, math.radians(deg)]
-
-
-def compose(outer, inner):
-    """``inner`` placed, and then moved again by ``outer``.
-
-    This is what lets the whole upper works be built square to the world
-    and then swung: the slew goes on the outside of every placement in the
-    group, so the boom, its rams and all eleven pins turn with the house
-    and stay where the linkage put them.
-    """
-    ro = outer.matrix()
-    where = ro @ np.asarray(inner.position, dtype=float) \
-        + np.asarray(outer.position, dtype=float)
-    return Placement(list(where),
-                     list(rotation_vector(ro @ inner.matrix())))
-
-
-def aim(frm, to):
-    """The rotation that swings a part's own +X onto the line frm -> to.
-
-    Every ram in this machine lies in the plane the boom swings through, so
-    this only ever needs to turn about Y, which is the one turn a rotation
-    vector can express without any trigonometry going astray.
-    """
-    return turn_y(math.degrees(math.atan2(-(to[2] - frm[2]), to[0] - frm[0])))
-
-
-def span(a, b):
-    return math.dist((a[0], a[2]), (b[0], b[2]))
-
 
 asm = AssemblyDocument()
 asm.path = os.path.join(OUT, "Excavator.adat")
@@ -783,31 +832,23 @@ for path, label in ((HOUSE, "House"), (WEIGHT, "Counterweight"),
 for y in (200, 640):
     put(LIGHT, (596, y, 2138), label="Work Light", outer=slew)
 
-# ---- the boom group, by angle -------------------------------------------
-boom_at = Placement(list(BOOM_PIVOT), turn_y(-BOOM_ANGLE))
-arm_pivot = boom_at.apply_point((2260, 0, 232))
-arm_at = Placement(list(arm_pivot), turn_y(-ARM_ANGLE))
-bucket_pivot = arm_at.apply_point((1250, 0, 0))
-bucket_at = Placement(list(bucket_pivot), turn_y(-BUCKET_ANGLE))
-
+# ---- the boom group, at the angles the pose was worked out from --------
 put(BOOM, boom_at.position, boom_at.rotation, "Boom", outer=slew)
 put(ARM, arm_at.position, arm_at.rotation, "Arm", outer=slew)
 put(BUCKET, bucket_at.position, bucket_at.rotation, "Bucket", outer=slew)
 
 for i in range(5):
-    put(TOOTH, (620, -240 + i * 120, -570), turn_y(20), "Bucket Tooth",
+    put(TOOTH, (-620, -240 + i * 120, -570), turn_y(160), "Bucket Tooth",
         outer=compose(slew, bucket_at))
 
-# the linkage: the ear on the bucket, and the joint one link away from it
-ear = bucket_at.apply_point((200, 0, 170))
-back = np.asarray(arm_pivot) - np.asarray(ear)
-back = back / math.hypot(back[0], back[2])
-joint = tuple(np.asarray(ear) + back * LINK)
+# the linkage, on the joint the pose put it on.  160 and 90 either side of
+# that joint, which is not on the centreline: the whole boom group is
+# offset, so the links follow it.
 for side in (1, -1):
-    # 160 either side of the joint, which is not on the centreline: the
-    # whole boom group is offset, so the links follow it
     put(LINK_PLATE, (joint[0], joint[1] + side * 160, joint[2]),
         aim(joint, ear), "Bucket Link", outer=slew)
+    put(IDLER_PLATE, (joint[0], joint[1] + side * 90, joint[2]),
+        aim(joint, idler_lug), "Idler Link", outer=slew)
 
 # the rams, each one placed from its two mounts and no other number
 RAMS = [
@@ -815,7 +856,7 @@ RAMS = [
      boom_at.apply_point((700, 0, 100)), BARREL, ROD, BIG_RAM, BIG_ROD),
     ("Arm Ram", boom_at.apply_point((1350, 0, 700)),
      arm_at.apply_point((-220, 0, 330)), BARREL, ROD, BIG_RAM, BIG_ROD),
-    ("Bucket Ram", arm_at.apply_point((230, 0, 210)), joint,
+    ("Bucket Ram", arm_at.apply_point((120, 0, 235)), joint,
      BARREL_S, ROD_S, SMALL_RAM, SMALL_ROD),
 ]
 for label, base, head, barrel_path, rod_path, tube, rodlen in RAMS:
@@ -835,7 +876,8 @@ for where in ((BOOM_RAM_BASE[0], BOOM_PIVOT[1], BOOM_RAM_BASE[1]),
               boom_at.apply_point((700, 0, 100)),
               boom_at.apply_point((1350, 0, 700)),
               arm_at.apply_point((-220, 0, 330)),
-              arm_at.apply_point((230, 0, 210))):
+              arm_at.apply_point((120, 0, 235)),
+              idler_lug):
     put(RAM_PIN, where, label="Ram Pin", outer=slew)
 
 report = asm.rebuild()
@@ -843,6 +885,8 @@ print("  %s" % report.message)
 if report.errors:
     print("  errors:", report.errors)
 bb = kernel.bounding_box(asm.shape)
+print("  links: bucket %.0f mm centres, idler %.0f mm"
+      % (LINK, IDLER_LINK))
 print("  %d components from %d parts"
       % (placed_count[0], len({o.ref.path for o in asm.occurrences})))
 print("  %.0f long, %.0f wide, %.0f tall"

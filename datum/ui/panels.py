@@ -172,17 +172,14 @@ class PropertiesPanel(QtWidgets.QWidget):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(8)
 
-        material = QtWidgets.QHBoxLayout()
-        material.addWidget(QtWidgets.QLabel("Material"))
-        self.material = QtWidgets.QComboBox()
-        for name, density in (("Generic", 1.0), ("ABS", 1.04), ("PLA", 1.24),
-                              ("PETG", 1.27), ("Nylon", 1.14),
-                              ("Aluminium 6061", 2.70), ("Steel", 7.85),
-                              ("Stainless 304", 8.00), ("Brass", 8.50),
-                              ("Titanium", 4.51)):
-            self.material.addItem(name, density)
-        material.addWidget(self.material, 1)
-        layout.addLayout(material)
+        # Material used to be picked here, from a short hard-coded list,
+        # and update_from wrote it back onto the document every time the
+        # panel refreshed.  That fought the real picker on the top strip
+        # and quietly reset any material this list had never heard of.
+        # It reads the material now, and never writes one.
+        self.material_label = QtWidgets.QLabel("")
+        self.material_label.setProperty("hint", True)
+        layout.addWidget(self.material_label)
 
         self.table = QtWidgets.QTableWidget(0, 2)
         self.table.horizontalHeader().setVisible(False)
@@ -196,11 +193,16 @@ class PropertiesPanel(QtWidgets.QWidget):
         layout.addWidget(self.table, 1)
 
     def update_from(self, doc: Document) -> None:
-        index = self.material.findText(doc.material)
-        if index >= 0:
-            self.material.setCurrentIndex(index)
-        doc.density = float(self.material.currentData() or 1.0)
-        doc.material = self.material.currentText()
+        if doc is None:
+            self.material_label.setText("")
+            self.table.setRowCount(0)
+            return
+        look = getattr(doc, "appearance", "")
+        self.material_label.setText(
+            "%s  ·  %.2f g/cm³%s"
+            % (getattr(doc, "material", "Generic"),
+               getattr(doc, "density", 1.0),
+               ("  ·  %s" % look) if look else ""))
 
         # a document with no solid - a CAM sheet - says what it does have
         # instead of reporting a volume of nothing

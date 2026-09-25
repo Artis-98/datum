@@ -253,6 +253,15 @@ class Ribbon(QtWidgets.QWidget):
         qat_layout.addLayout(self.quick_access)
         qat_layout.addStretch(1)
 
+        # Material and appearance sit up here rather than in a panel,
+        # because what a part is made of is a property of the part and not
+        # a command you run.  Inventor puts them in the same place.
+        self.material_slot = QtWidgets.QHBoxLayout()
+        self.material_slot.setContentsMargins(0, 0, 0, 0)
+        self.material_slot.setSpacing(0)
+        qat_layout.addLayout(self.material_slot)
+        qat_layout.addSpacing(12)
+
         self.document_label = QtWidgets.QLabel("")
         self.document_label.setStyleSheet(
             "color: %s; font-size: 11px;" % C.text_dim)

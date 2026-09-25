@@ -31,6 +31,7 @@ from .browser import ModelBrowser
 from .cam_ui import CamController
 from .drawing_ui import DrawingController
 from .sheet_canvas import SheetCanvas
+from .materials_ui import MaterialBar, MaterialBrowser
 from .panels import (
     MeasureDialog, ParametersDialog, PropertiesPanel, SpaceMouseDialog,
 )
@@ -169,6 +170,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ribbon()
         self._build_docks()
+        self._build_material_bar()
         self._build_status_bar()
         self._build_shortcuts()
 
@@ -655,16 +657,85 @@ class MainWindow(QtWidgets.QMainWindow):
         dock.setMinimumWidth(230)
         self.browser_dock = dock
 
+        # The Properties panel used to sit under the tree taking a third
+        # of it.  Material and appearance now live on the top strip where
+        # they belong, and the numbers it showed - mass, volume, bounding
+        # box - are a dialog, because they are something you go and look
+        # at rather than something you watch.  It is still built, just not
+        # docked, so everything that feeds it keeps working.
         self.properties = PropertiesPanel(self)
-        pdock = QtWidgets.QDockWidget("Properties", self)
-        pdock.setObjectName("PropertiesDock")
-        pdock.setWidget(self.properties)
-        pdock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable
-                          | QtWidgets.QDockWidget.DockWidgetFloatable
-                          | QtWidgets.QDockWidget.DockWidgetClosable)
-        self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, pdock)
-        self.properties_dock = pdock
-        self.resizeDocks([dock, pdock], [520, 300], QtCore.Qt.Vertical)
+        self.properties_dock = None
+
+    def _build_material_bar(self) -> None:
+        self.material_bar = MaterialBar(self)
+        self.ribbon.material_slot.addWidget(self.material_bar)
+        self.material_bar.material_changed.connect(self.set_material)
+        self.material_bar.appearance_changed.connect(self.set_appearance)
+        self.material_bar.browse_requested.connect(self.browse_materials)
+
+    def _material_target(self):
+        """Whichever open document has a material: the part or the assembly."""
+        document = self.assembly if self.in_assembly else self.document
+        return document if hasattr(document, "material") else None
+
+    def set_material(self, name: str) -> None:
+        document = self._material_target()
+        if document is None or not name or document.material == name:
+            return
+        document.push_undo()
+        document.material = name
+        # the density moves with it, so anything holding an override from
+        # an older file has to let go or the mass will not follow
+        document._density_override = None
+        document.modified = True
+        self._material_changed()
+        self.status_message.setStyleSheet("")
+        mass = None
+        try:
+            mass = document.mass_properties().get("mass_g")
+        except Exception:
+            pass
+        self.status_message.setText(
+            "Material: %s%s" % (name, ("  -  %.1f g" % mass)
+                                if mass else ""))
+
+    def set_appearance(self, name: str) -> None:
+        document = self._material_target()
+        if document is None or getattr(document, "appearance", "") == name:
+            return
+        document.push_undo()
+        document.appearance = name
+        document.modified = True
+        self._material_changed()
+        self.status_message.setStyleSheet("")
+        self.status_message.setText(
+            "Appearance: %s" % (name or "from the material"))
+
+    def _material_changed(self) -> None:
+        """Redraw with the new look, and refresh everything that shows it."""
+        if self.in_assembly:
+            self.assembly_ui.rebuild()
+        elif self.document is not None:
+            self.viewport.set_shape(
+                self.document.shape, keep_camera=True,
+                appearance=self.document.material_appearance)
+        self.properties.update_from(self._material_target())
+        self.material_bar.set_document(self._material_target())
+        self.update_title()
+
+    def browse_materials(self, appearance: bool = False) -> None:
+        document = self._material_target()
+        current = ""
+        if document is not None:
+            current = (getattr(document, "appearance", "") if appearance
+                       else document.material)
+        dialog = MaterialBrowser(self, appearance, current)
+        dialog.chosen.connect(
+            lambda name, is_appearance:
+            self.set_appearance(name) if is_appearance
+            else self.set_material(name))
+        dialog.exec()
+        self.material_bar.set_document(self._material_target())
 
     # -- status bar ---------------------------------------------------------
 
@@ -792,8 +863,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.editor.hint_changed.connect(self.ribbon.set_hint)
         self.editor.tool_finished.connect(self._sync_tool_buttons)
 
-        self.properties.material.currentIndexChanged.connect(
-            lambda _i: self.properties.update_from(self.document))
 
     def _on_viewport_ready(self) -> None:
         self.rebuild(keep_camera=False)
@@ -848,7 +917,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.stack.setCurrentWidget(self.start_page)
         self.ribbon.setEnabled(False)
         self.browser_dock.setVisible(False)
-        self.properties_dock.setVisible(False)
         self.doc_tabs.select(doctabs.HOME)
         self.status_message.setText(
             "Start a new part, or open one you saved earlier."
@@ -865,7 +933,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.viewport.sync_size()
         self.ribbon.setEnabled(True)
         self.browser_dock.setVisible(True)
-        self.properties_dock.setVisible(True)
 
     @property
     def on_start_page(self) -> bool:
@@ -1563,7 +1630,9 @@ class MainWindow(QtWidgets.QMainWindow):
         entry = self.session.by_document(self.document)
         if entry is not None:
             entry.note_change()
-        self.viewport.set_shape(self.document.shape, keep_camera=keep_camera)
+        self.viewport.set_shape(self.document.shape,
+                                keep_camera=keep_camera,
+                                appearance=self.document.material_appearance)
         self._draw_visible_planes()
         self._draw_visible_sketches()
         self.browser.refresh()
@@ -2101,7 +2170,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._saved_rollback = self.document.rollback_index
         self.document.rollback_index = self.document.index_of(feature_id) + 1
         self.document.rebuild()
-        self.viewport.set_shape(self.document.shape, keep_camera=True)
+        self.viewport.set_shape(
+            self.document.shape, keep_camera=True,
+            appearance=self.document.material_appearance)
 
         self.editor.begin(feature.sketch, self.document.params)
         self._draw_visible_planes()      # clears them while sketching
@@ -2321,9 +2392,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.measure_dialog.raise_()
 
     def show_properties(self) -> None:
-        self.properties_dock.show()
-        self.properties_dock.raise_()
+        """Mass, volume and bounding box, in a window of their own.
+
+        These used to sit permanently under the tree taking a third of it,
+        for numbers nobody watches continuously.  Material and appearance,
+        which people do change often, moved to the top strip instead.
+        """
+        if getattr(self, "properties_window", None) is None:
+            window = QtWidgets.QDialog(self)
+            window.setWindowTitle("Properties")
+            window.setMinimumWidth(320)
+            layout = QtWidgets.QVBoxLayout(window)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(self.properties)
+            self.properties_window = window
         self.properties.update_from(self.active_document)
+        self.properties_window.show()
+        self.properties_window.raise_()
 
     def edit_parameters(self) -> None:
         dialog = ParametersDialog(self.active_document, self)

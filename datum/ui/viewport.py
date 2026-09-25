@@ -379,8 +379,54 @@ class Viewport(QtWidgets.QWidget):
 
     # --------------------------------------------------------- model display
 
+    def apply_appearance(self, ais, appearance=None) -> None:
+        """Dress a body in an appearance.
+
+        Roughness and metallic are the two knobs worth having.  OCCT's
+        fixed-function shading does not take them directly, so they are
+        turned into the ambient, specular and shininess it does take: a
+        metal keeps a tight bright highlight and picks up its own colour in
+        the ambient, while a matte plastic spreads the highlight out until
+        it disappears.  Without that, every material looks like the same
+        grey plastic in a different colour.
+        """
+        if appearance is None:
+            colour, rough, metallic, opacity = C.material, 0.45, False, 1.0
+        else:
+            colour = appearance.colour
+            rough = appearance.roughness
+            metallic = appearance.metallic
+            opacity = appearance.opacity
+
+        base = _col(colour)
+        material = Graphic3d_MaterialAspect(
+            Graphic3d_NameOfMaterial.Graphic3d_NOM_PLASTER)
+
+        # shininess runs the other way from roughness, and the useful range
+        # is the bottom half: past about 0.6 everything reads as a mirror
+        shine = max(0.02, min(0.9, (1.0 - rough) ** 2 * 0.85))
+        if metallic:
+            # a metal's highlight is its own colour, not white, which is
+            # what stops steel looking like painted plastic
+            specular = QtGui.QColor(colour).darker(140)
+            material.SetSpecularColor(_col(specular.name()))
+            material.SetAmbientColor(_col(QtGui.QColor(colour)
+                                          .darker(320).name()))
+        else:
+            material.SetSpecularColor(_col((0.09, 0.10, 0.12)))
+            material.SetAmbientColor(_col((0.26, 0.28, 0.31)))
+        material.SetDiffuseColor(base)
+        material.SetShininess(shine)
+
+        ais.SetMaterial(material)
+        ais.SetColor(base)
+        if opacity < 0.999:
+            ais.SetTransparency(1.0 - opacity)
+        else:
+            ais.SetTransparency(0.0)
+
     def set_shape(self, shape: Optional[TopoDS_Shape],
-                  keep_camera: bool = True) -> None:
+                  keep_camera: bool = True, appearance=None) -> None:
         """Show the document body, preserving selection-free camera state."""
         if not self._ready:
             return
@@ -393,17 +439,7 @@ class Viewport(QtWidgets.QWidget):
 
         if shape is not None and not shape.IsNull():
             ais = AIS_Shape(shape)
-            ais.SetColor(_col(C.material))
-            # a soft, low-specular surface: shiny metal blows out to white
-            # the moment a face faces the camera square-on
-            material = Graphic3d_MaterialAspect(
-                Graphic3d_NameOfMaterial.Graphic3d_NOM_PLASTER)
-            material.SetAmbientColor(_col((0.26, 0.28, 0.31)))
-            material.SetDiffuseColor(_col(C.material))
-            material.SetSpecularColor(_col((0.09, 0.10, 0.12)))
-            material.SetShininess(0.22)
-            ais.SetMaterial(material)
-            ais.SetColor(_col(C.material))
+            self.apply_appearance(ais, appearance)
 
             drawer = ais.Attributes()
             drawer.SetFaceBoundaryDraw(True)

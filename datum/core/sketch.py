@@ -513,6 +513,23 @@ class Sketch:
                        expression: str = "") -> int:
         if kind not in CONSTRAINT_KINDS:
             raise ValueError("unknown constraint %r" % kind)
+
+        # Grounding is held on the point, not as an equation: the solver
+        # drops fixed points out of the system rather than adding a pull
+        # towards where they were, so a grounded edge really does not move.
+        # Recording the constraint alone would therefore look like it had
+        # worked and do nothing at all, so the flag is set here too.
+        if kind in ("fix", "ground"):
+            targets = list(points or [])
+            for eid in (entities or []):
+                entity = self.entities.get(eid)
+                if entity is not None:
+                    targets.extend(entity.points)
+            for pid in targets:
+                point = self.points.get(pid)
+                if point is not None:
+                    point.fixed = True
+
         cid = self._new_id()
         self.constraints[cid] = Constraint(
             cid, kind, list(points or []), list(entities or []),

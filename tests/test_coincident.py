@@ -181,6 +181,43 @@ check("and the point is on the line, not near it", distance < 1e-3,
 
 
 # ==========================================================================
+print("grounding really holds, from both the button and the core call")
+
+# The solver keeps grounding on the point rather than as an equation, so a
+# call that records the constraint but never sets the flag looks like it
+# worked and does nothing.  Both routes are checked because only one of
+# them used to set it.
+for route in ("button", "add_constraint"):
+    win.new_document()
+    pump(3)
+    win.start_sketch_on_plane("XY")
+    pump(8)
+    s = ed.sketch
+    edge = s.add_line((0.0, 0.0), (100.0, 0.0), weld=False)
+    drop = s.add_line((30.0, 40.0), (50.0, 20.0), weld=False)
+    loose = s.entities[drop].points[1]
+    a, b = s.entities[edge].points
+
+    if route == "button":
+        ed.clear_selection()
+        ed.selected_entities = [edge]
+        ed.apply_constraint("ground")
+    else:
+        s.add_constraint("ground", entities=[edge])
+    pump(3)
+
+    s.add_constraint("point_on", points=[loose], entities=[edge])
+    ed.solve()
+    pump(3)
+    held = abs(s.points[a].y) < 1e-6 and abs(s.points[b].y) < 1e-6
+    landed = abs(s.points[loose].y) < 1e-3
+    check("%s: the grounded edge did not move" % route, held,
+          (at(s, a), at(s, b)))
+    check("%s: and the loose point came to it instead" % route, landed,
+          at(s, loose))
+
+
+# ==========================================================================
 print("the hint says both things it accepts")
 
 description = ed.NEEDS["coincident"][0]

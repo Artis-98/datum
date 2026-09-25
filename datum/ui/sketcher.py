@@ -95,7 +95,9 @@ TOOL_HINTS = {
     "fillet2d": "Fillet: click two lines that meet.",
     "trim": "Trim: click the piece of geometry to remove.",
     "offset": "Offset: click a line, then click the side to offset towards.",
-    "dimension": "Dimension: click geometry or two points, then type the value.",
+    "dimension": "Dimension: click one thing for its own size, or two for "
+                 "the distance or angle between them. Click clear of them "
+                 "to place the label.",
 }
 
 
@@ -166,6 +168,9 @@ class SketchEditor(QtCore.QObject):
 
         # dimension placement
         self._dim_target: Optional[Dict[str, Any]] = None
+        # the picks that produced _dim_target, kept so a further pick can
+        # reconsider what is being measured instead of placing the label
+        self._dim_picks: List[Tuple[str, int]] = []
         self._dim_offset: Tuple[float, float] = (0.0, 0.0)
 
         # a constraint waiting for the user to pick its geometry
@@ -185,6 +190,10 @@ class SketchEditor(QtCore.QObject):
 
         self.selected_entities: List[int] = []
         self.selected_points: List[int] = []
+        # lines picked by their middle rather than anywhere along them, so
+        # Coincident can tell "attach to this line" from "attach to the
+        # middle of this line" the way Inventor's midpoint snap does
+        self._midpoint_picks: set = set()
         self._drag_point: Optional[int] = None
         # rubber-band selection: where it started, and where it is now
         self._box_start: Optional[Tuple[float, float]] = None
@@ -231,6 +240,7 @@ class SketchEditor(QtCore.QObject):
         self._pending = []
         self._chain_from = None
         self._dim_target = None
+        self._dim_picks = []
         self.set_tool("select")
         self.viewport.enter_plane_mode(sketch.plane, self.grid_step,
                                        self.show_grid)
@@ -241,6 +251,7 @@ class SketchEditor(QtCore.QObject):
         self.sketch = None
         self._pending = []
         self._dim_target = None
+        self._dim_picks = []
         self.live.dismiss()
         self.value_popup.hide()
         self.viewport.leave_plane_mode()
@@ -267,6 +278,7 @@ class SketchEditor(QtCore.QObject):
         self._pending = []
         self._chain_from = None
         self._dim_target = None
+        self._dim_picks = []
         self.live.dismiss()
         self.viewport.clear_preview()
         self.hint_changed.emit(TOOL_HINTS.get(tool, ""))
@@ -295,6 +307,7 @@ class SketchEditor(QtCore.QObject):
         self._start_target = None
         self._pending_constraint = None
         self._dim_target = None
+        self._dim_picks = []
         self.live.dismiss()
         self.viewport.clear_preview()
         self.constraint_armed.emit("")
@@ -317,6 +330,7 @@ class SketchEditor(QtCore.QObject):
             return
         if self._dim_target is not None:
             self._dim_target = None
+            self._dim_picks = []
             self.viewport.clear_preview()
             self.render()
             return
@@ -540,9 +554,26 @@ class SketchEditor(QtCore.QObject):
                 return c.id
         return None
 
+    def _picked_midpoint(self, eid: int, u: float, v: float) -> bool:
+        """Whether this click landed on a line's middle rather than its run.
+
+        Held to the same reach as the drawing snap, so the spot that shows
+        a midpoint marker while drawing is the spot that means the midpoint
+        while constraining.
+        """
+        entity = self.sketch.entities.get(eid)
+        if entity is None or entity.kind != "line":
+            return False
+        a = self.sketch.points[entity.points[0]]
+        b = self.sketch.points[entity.points[1]]
+        mid = ((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
+        tol = SNAP_PIXELS * self.viewport.pixel_scale()
+        return math.hypot(mid[0] - u, mid[1] - v) <= tol
+
     def clear_selection(self) -> None:
         self.selected_entities = []
         self.selected_points = []
+        self._midpoint_picks = set()
         self._box_start = self._box_end = None
         self._hover_point = None
         self._hover_entity = None
@@ -631,6 +662,7 @@ class SketchEditor(QtCore.QObject):
         target._next_id = restored._next_id
         self._pending = []
         self._dim_target = None
+        self._dim_picks = []
         self.clear_selection()
         self.solve()
         self.render()
@@ -1286,6 +1318,7 @@ class SketchEditor(QtCore.QObject):
         if not additive:
             self.selected_entities = []
             self.selected_points = []
+            self._midpoint_picks = set()
         if pid is not None:
             if pid in self.selected_points:
                 self.selected_points.remove(pid)
@@ -1294,8 +1327,11 @@ class SketchEditor(QtCore.QObject):
         elif eid is not None:
             if eid in self.selected_entities:
                 self.selected_entities.remove(eid)
+                self._midpoint_picks.discard(eid)
             else:
                 self.selected_entities.append(eid)
+                if self._picked_midpoint(eid, u, v):
+                    self._midpoint_picks.add(eid)
         self.render()
         self._check_pending_constraint()
 
@@ -1602,7 +1638,32 @@ class SketchEditor(QtCore.QObject):
     def _tool_dimension(self, point, modifiers) -> None:
         """Pick what to measure, then place the label, then type the value."""
         if self._dim_target is not None:
-            # second click sets where the dimension sits; then ask for a value
+            # A line on its own is a length, so one pick is already something
+            # measurable and the tool arms immediately.  That made everything
+            # needing two picks unreachable: a line and a point, or two lines,
+            # could never be asked for, because the second pick was read as
+            # placing the label.  So a pick that lands on geometry the current
+            # target does not already cover means they are still choosing what
+            # to measure, and only a click clear of it places the label.
+            more = self._extra_dimension_pick(point)
+            if more is not None:
+                self._pending = self._dim_picks + [more]
+                target = self._dimension_target()
+                if target is not None:
+                    self._dim_picks = list(self._pending)
+                    self._pending = []
+                    self._dim_target = target
+                    self._retarget(target, point)
+                    self._dim_offset = self._dimension_offset(target, point)
+                    self.hint_changed.emit(self._dimension_hint(target))
+                else:
+                    self._pending = []
+                    self.hint_changed.emit(
+                        "Those two cannot be dimensioned together. Pick two "
+                        "points, two lines, or a line and a point.")
+                return
+
+            # a click clear of the geometry: put the label there
             self._dim_offset = self._dimension_offset(self._dim_target, point)
             target = self._dim_target
             self._ask_value(
@@ -1612,6 +1673,7 @@ class SketchEditor(QtCore.QObject):
                 caption=self.DIMENSION_CAPTIONS.get(target["kind"],
                                                     "Distance"))
             self._dim_target = None
+            self._dim_picks = []
             return
 
         eid, pid = self.pick(*point)
@@ -1632,11 +1694,40 @@ class SketchEditor(QtCore.QObject):
             return
 
         if target is not None:
+            self._dim_picks = list(self._pending)
             self._pending = []
             self._dim_target = target
             self._retarget(target, point)
             self._dim_offset = self._dimension_offset(target, point)
             self.hint_changed.emit(self._dimension_hint(target))
+
+    def _extra_dimension_pick(self, point):
+        """A pick that adds to what is being measured, or None to place.
+
+        Only geometry the armed target does not already account for counts.
+        Clicking the very line whose length is being dimensioned is somebody
+        putting the label on it, not asking to measure it against itself.
+        """
+        if not self._dim_picks:
+            return None
+        eid, pid = self.pick(*point)
+        if pid is None and eid is None:
+            return None
+
+        seen_entities = {i for k, i in self._dim_picks if k == "entity"}
+        seen_points = {i for k, i in self._dim_picks if k == "point"}
+        # the ends of a line already picked are part of that line, so
+        # clicking one of them is not a new thing to measure against
+        for e in seen_entities:
+            entity = self.sketch.entities.get(e)
+            if entity is not None:
+                seen_points.update(entity.points)
+
+        if pid is not None and pid not in seen_points:
+            return ("point", pid)
+        if pid is None and eid is not None and eid not in seen_entities:
+            return ("entity", eid)
+        return None
 
     # -- what the current selection can be dimensioned as --------------------
 
@@ -1980,6 +2071,7 @@ class SketchEditor(QtCore.QObject):
         self._value_apply = None
         self._editing_dimension = None
         self._dim_target = None
+        self._dim_picks = []
         self.viewport.clear_preview()
         self.viewport.setFocus()
         self.render()
@@ -2203,11 +2295,18 @@ class SketchEditor(QtCore.QObject):
                     for p in pts[1:]:
                         s.add_constraint("coincident", points=[pts[0], p])
                 elif len(pts) == 1 and ents:
-                    # a point against a curve is point_on, which is the same
-                    # thing Inventor calls Coincident when one side is an edge
+                    # A point against a curve is point_on, which is the same
+                    # thing Inventor calls Coincident when one side is an
+                    # edge.  Picked on the line's middle it means the middle,
+                    # which is a different constraint and the one people
+                    # reach for when centring a rib or a hole on a face.
                     for e in ents:
-                        s.add_constraint("point_on", points=[pts[0]],
-                                         entities=[e])
+                        if e in self._midpoint_picks:
+                            s.add_constraint("midpoint", points=[pts[0]],
+                                             entities=[e])
+                        else:
+                            s.add_constraint("point_on", points=[pts[0]],
+                                             entities=[e])
                 else:
                     self._complain(
                         "Select two points, or a point and a line.")

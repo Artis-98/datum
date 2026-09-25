@@ -163,6 +163,65 @@ class ParametersDialog(QtWidgets.QDialog):
         self.changed.emit()
 
 
+class DocumentProperties(QtWidgets.QWidget):
+    """What the document says about itself, and what it is called.
+
+    Inventor calls these iProperties, and they are the other half of the
+    Preferences window: your name is set once, in Preferences, and lands
+    here on every new document, where it can be changed for this one
+    document without changing who you are.  A title block and a parts list
+    read these fields, which is the whole reason they exist.
+    """
+
+    changed = QtCore.Signal()
+
+    FIELDS = (
+        ("Title", "Title"),
+        ("PartNumber", "Part Number"),
+        ("Designer", "Designer"),
+        ("Company", "Company"),
+        ("Revision", "Revision"),
+        ("Description", "Description"),
+    )
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.document = None
+        form = QtWidgets.QFormLayout(self)
+        form.setContentsMargins(10, 8, 10, 4)
+        form.setSpacing(6)
+        self.edits = {}
+        for key, label in self.FIELDS:
+            edit = QtWidgets.QLineEdit()
+            edit.editingFinished.connect(self._write)
+            self.edits[key] = edit
+            form.addRow(label, edit)
+
+    def update_from(self, doc) -> None:
+        self.document = doc if hasattr(doc, "properties") else None
+        held = getattr(self.document, "properties", None) or {}
+        self.setEnabled(self.document is not None)
+        for key, edit in self.edits.items():
+            was = edit.blockSignals(True)
+            edit.setText(str(held.get(key, "")))
+            edit.blockSignals(was)
+
+    def _write(self) -> None:
+        if self.document is None:
+            return
+        held = dict(self.document.properties)
+        for key, edit in self.edits.items():
+            text = edit.text().strip()
+            if text:
+                held[key] = text
+            else:
+                held.pop(key, None)
+        if held != self.document.properties:
+            self.document.properties = held
+            self.document.modified = True
+            self.changed.emit()
+
+
 class PropertiesPanel(QtWidgets.QWidget):
     """Mass properties and bounding box of the current body."""
 

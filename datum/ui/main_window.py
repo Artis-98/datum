@@ -33,7 +33,8 @@ from .drawing_ui import DrawingController
 from .sheet_canvas import SheetCanvas
 from .materials_ui import MaterialBar, MaterialBrowser
 from .panels import (
-    MeasureDialog, ParametersDialog, PropertiesPanel, SpaceMouseDialog,
+    DocumentProperties, MeasureDialog, ParametersDialog, PropertiesPanel,
+    SpaceMouseDialog,
 )
 from .ribbon import Ribbon
 from .sketcher import SketchEditor
@@ -625,6 +626,7 @@ class MainWindow(QtWidgets.QMainWindow):
         menu.addSeparator()
         item("params", "Parameters...", "Ctrl+P", self.edit_parameters)
         item("open", "Projects...", "", self.choose_project)
+        item("edit", "Preferences...", "", self.edit_preferences)
         item("rollback", "Check for Updates...", "",
              lambda: self.updater.check(quiet=False))
         item("dimension", "Save as Template...", "",
@@ -1273,6 +1275,19 @@ class MainWindow(QtWidgets.QMainWindow):
         self.new_document(prompt=False)
         self.status_message.setText(
             "New part in its own tab. Save it, then place it in the assembly.")
+
+    def edit_preferences(self) -> None:
+        """Who you are, and how you want it to look."""
+        from .prefs_ui import open_dialog
+
+        open_dialog(self, self._preferences_applied)
+
+    def _preferences_applied(self) -> None:
+        """Repaint with whatever Preferences just changed."""
+        self.viewport.apply_background()
+        if self.editor.active:
+            self.editor.render()
+        self.viewport.redraw()
 
     def choose_project(self) -> None:
         """Pick which project the work goes into, from anywhere in the app."""
@@ -2481,15 +2496,26 @@ class MainWindow(QtWidgets.QMainWindow):
             window.setMinimumWidth(320)
             layout = QtWidgets.QVBoxLayout(window)
             layout.setContentsMargins(0, 0, 0, 0)
+            layout.setSpacing(0)
+            # what the document is called and who drew it, above what it
+            # happens to weigh: the first is typed, the second is measured
+            self.doc_properties = DocumentProperties(window)
+            self.doc_properties.changed.connect(self._title_changed)
+            layout.addWidget(self.doc_properties)
             layout.addWidget(self.properties)
             # it was explicitly hidden so it would not draw over the
             # window with no layout to hold it, and an explicit hide
             # survives being re-parented
             self.properties.show()
             self.properties_window = window
+        self.doc_properties.update_from(self.active_document)
         self.properties.update_from(self.active_document)
         self.properties_window.show()
         self.properties_window.raise_()
+
+    def _title_changed(self) -> None:
+        """A document property was edited, so the tab is out of date."""
+        self.refresh_tabs()
 
     def edit_parameters(self) -> None:
         dialog = ParametersDialog(self.active_document, self)

@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
-from . import fileformat, kernel, materials
+from . import fileformat, kernel, materials, prefs
 from .features import (
     FEATURE_TYPES, BuildContext, Feature, FeatureError, SketchFeature,
 )
@@ -71,6 +71,12 @@ class Document:
         self.doc_type = fileformat.PART
         self.created = fileformat.now()
         self.material = "Generic"
+        # Title, PartNumber, Designer, Description, Revision, Company: what
+        # a title block and a parts list ask of a part.  A new one is
+        # stamped with whoever is at the keyboard; a loaded one keeps
+        # whatever its file says, because who drew it is a fact about the
+        # part and not about the machine it was opened on.
+        self.properties: Dict[str, str] = prefs.prefs().stamp({})
         # "" means "whatever the material comes in", which is what somebody
         # means when they pick a material and nothing else.  Setting it is
         # an override, and it changes not one gram.
@@ -329,6 +335,7 @@ class Document:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "units": self.units,
+            "properties": dict(self.properties),
             "material": self.material,
             "appearance": self.appearance,
             # written so a file still weighs the right thing on a machine
@@ -344,6 +351,8 @@ class Document:
 
     def load_dict(self, data: Dict[str, Any]) -> None:
         self.units = data.get("units", "mm")
+        self.properties = {str(k): str(v)
+                           for k, v in (data.get("properties") or {}).items()}
         self.material = data.get("material", "Generic")
         self.appearance = str(data.get("appearance", ""))
         self._density_override = None

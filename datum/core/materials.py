@@ -22,6 +22,8 @@ from __future__ import annotations
 import copy
 import json
 import os
+
+from . import prefs
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -407,6 +409,9 @@ def library() -> MaterialLibrary:
     global _LIBRARY
     if _LIBRARY is None:
         _LIBRARY = MaterialLibrary()
+        # the user's own materials sit beside their preferences, outside
+        # the installation, so an update cannot take them away
+        _LIBRARY.load_user(prefs.config_path(USER_FILE))
     return _LIBRARY
 
 

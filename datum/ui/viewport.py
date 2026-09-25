@@ -281,9 +281,7 @@ class Viewport(QtWidgets.QWidget):
         if not self._window.IsMapped():
             self._window.Map()
 
-        self.view.SetBgGradientColors(_col(C.bg_top), _col(C.bg_bottom),
-                                      Aspect_GradientFillMethod.
-                                      Aspect_GradientFillMethod_Vertical, True)
+        self.apply_background()
         self.view.SetShadingModel(
             Graphic3d_TypeOfShadingModel.Graphic3d_TypeOfShadingModel_Phong)
 
@@ -1571,6 +1569,12 @@ class Viewport(QtWidgets.QWidget):
         except Exception:
             return False
         return True
+
+    def apply_background(self) -> None:
+        """Paint the backdrop from the palette, which Preferences can change."""
+        self.view.SetBgGradientColors(_col(C.bg_top), _col(C.bg_bottom),
+                                      Aspect_GradientFillMethod.
+                                      Aspect_GradientFillMethod_Vertical, True)
 
     def set_edge_picking(self, on: bool) -> None:
         """Let model edges be picked even though a sketch is open."""

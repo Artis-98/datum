@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import bom, fileformat, hlr
+from . import bom, fileformat, hlr, prefs
 from .fileformat import ComponentRef
 from .naming import ShapeRef
 from .params import ParameterTable
@@ -927,6 +927,8 @@ class DrawingDocument:
             "Title": "", "Author": "", "Company": "", "Revision": "A",
             "Date": "",
         }
+        # a new drawing already knows who is drawing it
+        prefs.prefs().stamp(self.properties, "Author")
         self.params = ParameterTable()
         self.styles: Dict[str, Style] = default_styles()
         self.borders: Dict[str, Border] = {"Standard": Border()}

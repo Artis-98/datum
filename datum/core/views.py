@@ -129,6 +129,14 @@ def model_properties(path: str, shape: Optional[TopoDS_Shape],
         "Model.Units": "mm",
     }
     if document is not None:
+        # what somebody typed into the part's own properties wins over the
+        # file name: that is what those fields are for
+        held = getattr(document, "properties", None) or {}
+        for key, prop in (("Model.Name", "Title"),
+                          ("Model.PartNumber", "PartNumber"),
+                          ("Model.Designer", "Designer")):
+            if held.get(prop):
+                out[key] = str(held[prop])
         out["Model.Material"] = str(getattr(document, "material", "") or "")
         out["Model.Units"] = str(getattr(document, "units", "mm") or "mm")
         number = ""

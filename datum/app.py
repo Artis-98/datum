@@ -165,7 +165,10 @@ def main(argv=None) -> int:
 
     from .ui import icons
     from .ui.main_window import MainWindow
-    from .ui.theme import stylesheet
+    from .ui.theme import apply_colours, stylesheet
+
+    # the user's own colours go on before anything is built with them
+    apply_colours()
 
     app.setWindowIcon(icons.app_icon())
     app.setStyleSheet(stylesheet())

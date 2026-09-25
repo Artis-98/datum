@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any, Dict, Optional
+
 from PySide6 import QtGui
+
+from ..core import prefs as user_prefs
 
 
 class C:
@@ -444,3 +448,51 @@ def stylesheet() -> str:
         on_accent=C.on_accent,
         error=C.error,
     )
+
+
+# --------------------------------------------------------------- overrides
+#
+# The palette above is what DATUM ships with.  A user may repaint a few of
+# it from Preferences - the viewport background and the sketch line
+# colours - and those are theirs, not the document's, so they live in the
+# preferences file and are laid over the palette at startup.
+
+_SHIPPED: Dict[str, Any] = {name: value for name, value in vars(C).items()
+                            if not name.startswith("_")
+                            and isinstance(value, (str, tuple))}
+
+
+def shipped(key: str) -> Any:
+    """The colour DATUM came with, whatever it has been set to since."""
+    return _SHIPPED.get(key)
+
+
+def as_hex(value: Any) -> str:
+    """A palette entry as "#rrggbb", whether it is stored that way or not.
+
+    The viewport wants its background as floats and everything else wants
+    a string, which is an implementation detail no colour picker should
+    have to know about.
+    """
+    if isinstance(value, tuple):
+        return "#%02x%02x%02x" % tuple(
+            max(0, min(255, int(round(c * 255.0)))) for c in value[:3])
+    return str(value)
+
+
+def _as_stored(key: str, text: str) -> Any:
+    if isinstance(_SHIPPED.get(key), tuple):
+        text = text.lstrip("#")
+        return tuple(int(text[i:i + 2], 16) / 255.0 for i in (0, 2, 4))
+    return text
+
+
+def apply_colours(mapping: Optional[Dict[str, str]] = None) -> None:
+    """Lay the user's colours over the palette, or take them off again."""
+    chosen = user_prefs.prefs().colours if mapping is None else mapping
+    for key, shipped_value in _SHIPPED.items():
+        text = chosen.get(key)
+        try:
+            setattr(C, key, _as_stored(key, text) if text else shipped_value)
+        except (ValueError, IndexError):
+            setattr(C, key, shipped_value)

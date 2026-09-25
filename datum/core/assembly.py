@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
-from . import constraints3d, fileformat, kernel, materials
+from . import constraints3d, fileformat, kernel, materials, prefs
 from .constraints3d import (
     Frame, KIND_LABELS, Placement, ResolvedConstraint, frame_from_shape,
 )
@@ -287,6 +287,7 @@ class AssemblyDocument:
         self.modified = False
         self.thumbnail: Optional[bytes] = None
         self.migrated_from: Optional[int] = None
+        self.properties: Dict[str, str] = prefs.prefs().stamp({})
         self.material = "Generic"
         # "" means "whatever the material comes in", which is what somebody
         # means when they pick a material and nothing else.  Setting it is

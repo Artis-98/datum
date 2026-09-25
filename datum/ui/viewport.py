@@ -205,6 +205,13 @@ class Viewport(QtWidgets.QWidget):
         # where the last right-click landed, so the menu can ask what is
         # there after the selection has been rebuilt out from under it
         self._menu_pos: Optional[QtCore.QPoint] = None
+        # dragging a box over empty space to select several components, the
+        # same two directions a sketch uses
+        # only an assembly wants this; a part has one body and
+        # nothing to rubber-band over
+        self.box_select_enabled = False
+        self._sel_box_from: Optional[QtCore.QPoint] = None
+        self._sel_band = None
         # Set by the assembly controller: given an occurrence id, says
         # whether that component is free to be pushed around with no tool
         # armed.  The viewport has no idea what is constrained, and the
@@ -602,6 +609,28 @@ class Viewport(QtWidgets.QWidget):
             ctx.NextSelected()
         return found
 
+    def select_components(self, occurrence_ids) -> None:
+        """Put the selection back on these components.
+
+        Showing an assembly rebuilds every AIS object, which throws the
+        selection away.  Anything that reads the selection straight after
+        a redraw - a context menu, a box select, the Delete key - then
+        finds nothing.  Restoring it here means callers do not each have
+        to work around the same thing.
+        """
+        if not self._ready or not self._component_ais:
+            return
+        ctx = self.context
+        wanted = [self._component_ais.get(int(i)) for i in occurrence_ids]
+        wanted = [ais for ais in wanted if ais is not None]
+        if not wanted:
+            return
+        for ais in wanted:
+            try:
+                ctx.AddOrRemoveSelected(ais, False)
+            except Exception:
+                pass
+
     def selected_component_shapes(self) -> List[Tuple[int, TopoDS_Shape]]:
         """(occurrence, picked sub-shape) for everything currently selected.
 
@@ -625,6 +654,81 @@ class Viewport(QtWidgets.QWidget):
                 out.append((occurrence_id, shape))
             ctx.NextSelected()
         return out
+
+    # -- box selection ------------------------------------------------------
+
+    # Dragged left to right, the box takes only what is completely inside
+    # it; dragged right to left, it takes anything it touches.  That is the
+    # convention every CAD package shares, and the two colours are what
+    # tell you which one you are doing before you let go.
+    BOX_WINDOW = "#4ea3f0"      # left to right: fully enclosed
+    BOX_CROSSING = "#4ee08a"    # right to left: anything touched
+
+    def _draw_selection_box(self, start: QtCore.QPoint,
+                            now: QtCore.QPoint) -> None:
+        from OCP.AIS import AIS_RubberBand
+        from OCP.Graphic3d import Graphic3d_Vec2i
+        from OCP.Quantity import Quantity_Color, Quantity_TOC_RGB
+
+        crossing = now.x() < start.x()
+        colour = QtGui.QColor(self.BOX_CROSSING if crossing
+                              else self.BOX_WINDOW)
+        line = Quantity_Color(colour.redF(), colour.greenF(), colour.blueF(),
+                              Quantity_TOC_RGB)
+
+        if self._sel_band is None:
+            band = AIS_RubberBand(line, Aspect_TypeOfLine.Aspect_TOL_SOLID,
+                                  line, 0.18, 1.6)
+            band.SetZLayer(Graphic3d_ZLayerId_TopOSD)
+            band.SetTransformPersistence(None)
+            self._sel_band = band
+            self.context.Display(band, False)
+        else:
+            self._sel_band.SetLineColor(line)
+            self._sel_band.SetFillColor(line)
+
+        height = self.height()
+        # the rubber band counts from the bottom, the mouse from the top
+        self._sel_band.SetRectangle(min(start.x(), now.x()),
+                                    height - max(start.y(), now.y()),
+                                    max(start.x(), now.x()),
+                                    height - min(start.y(), now.y()))
+        self.context.Redisplay(self._sel_band, False)
+        self.view.RedrawImmediate()
+
+    def _clear_selection_box(self) -> None:
+        if self._sel_band is not None:
+            try:
+                self.context.Remove(self._sel_band, False)
+            except Exception:
+                pass
+            self._sel_band = None
+            self.view.Redraw()
+
+    def select_in_box(self, start: QtCore.QPoint, end: QtCore.QPoint) -> None:
+        """Select everything the dragged box asks for."""
+        from OCP.Graphic3d import Graphic3d_Vec2i
+
+        crossing = end.x() < start.x()
+        selector = self.context.MainSelector()
+        try:
+            selector.AllowOverlapDetection(bool(crossing))
+        except Exception:
+            pass
+        try:
+            self.context.SelectRectangle(
+                Graphic3d_Vec2i(min(start.x(), end.x()),
+                                min(start.y(), end.y())),
+                Graphic3d_Vec2i(max(start.x(), end.x()),
+                                max(start.y(), end.y())),
+                self.view)
+        finally:
+            try:
+                selector.AllowOverlapDetection(False)
+            except Exception:
+                pass
+        self.view.Redraw()
+        self.selection_changed.emit()
 
     def menu_component(self) -> Optional[int]:
         """The component the last right-click was over.
@@ -1830,6 +1934,10 @@ class Viewport(QtWidgets.QWidget):
                     self._component_drag = grabbed
                     self._component_basis = self.screen_basis()
                     self.component_drag_started.emit(grabbed)
+                elif self.box_select_enabled and self.component_under(
+                        pos.x(), pos.y()) is None:
+                    # nothing under the cursor, so this drag is a box
+                    self._sel_box_from = QtCore.QPoint(pos)
                 else:
                     self.context.MoveTo(pos.x(), pos.y(), self.view, False)
 
@@ -1848,6 +1956,11 @@ class Viewport(QtWidgets.QWidget):
                 self.view.Rotation(pos.x(), pos.y())
             else:
                 self.view.Pan(dx, -dy)
+            self._last_pos = pos
+            return
+
+        if self._sel_box_from is not None:
+            self._draw_selection_box(self._sel_box_from, pos)
             self._last_pos = pos
             return
 
@@ -1923,6 +2036,22 @@ class Viewport(QtWidgets.QWidget):
                     self.view.Redraw()
                     self.selection_changed.emit()
                 self._context_menu(pos)
+            self._button = QtCore.Qt.NoButton
+            return
+
+        if (event.button() == QtCore.Qt.LeftButton
+                and self._sel_box_from is not None):
+            start = self._sel_box_from
+            self._sel_box_from = None
+            self._clear_selection_box()
+            if abs(pos.x() - start.x()) > 3 or abs(pos.y() - start.y()) > 3:
+                self.select_in_box(start, pos)
+            else:
+                # a click, not a drag: treat it as one
+                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                self.context.SelectDetected()
+                self.view.Redraw()
+                self.selection_changed.emit()
             self._button = QtCore.Qt.NoButton
             return
 

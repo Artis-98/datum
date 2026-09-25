@@ -303,6 +303,52 @@ check("and none of them a rotating palette colour",
 
 
 # ==========================================================================
+print("Delete removes what is picked, without an interrogation")
+
+before = len(doc.occurrences)
+spare = doc.occurrences[-1]
+ui.browser.selected_occurrence_ids = lambda: [spare.id]
+did = ui.delete_selected()
+pump(4)
+check("it reported that it did something", did)
+check("and the component is gone", len(doc.occurrences) == before - 1,
+      (before, len(doc.occurrences)))
+check("it says what happened rather than asking first",
+      "Deleted" in win.status_message.text(), win.status_message.text())
+check("and mentions the way back",
+      "Ctrl+Z" in win.status_message.text(), win.status_message.text())
+
+print("with nothing picked it does nothing at all")
+ui.browser.selected_occurrence_ids = lambda: []
+win.viewport.selected_components = lambda: []
+count = len(doc.occurrences)
+check("it says so", not ui.delete_selected())
+check("and nothing went", len(doc.occurrences) == count)
+
+
+# ==========================================================================
+print("a box drag selects, and the selection survives the redraw")
+
+check("box selection is on for an assembly",
+      win.viewport.box_select_enabled)
+check("and the view rests on picking components",
+      win.viewport.selection_mode == "assembly",
+      win.viewport.selection_mode)
+
+# the thing that used to break it: showing the assembly rebuilds every
+# AIS object, and the selection lives on those
+kept = []
+win.viewport.selected_components = lambda: list(kept)
+captured = []
+win.viewport.select_components = lambda ids: captured.extend(ids)
+kept[:] = [doc.occurrences[0].id]
+ui.show_components()
+pump(3)
+check("what was picked is put back after the redraw",
+      captured == [doc.occurrences[0].id], captured)
+
+
+# ==========================================================================
 print()
 if FAILS:
     print("%d FAILED" % len(FAILS))

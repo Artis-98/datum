@@ -652,8 +652,27 @@ class AssemblyController(QtCore.QObject):
                 "appearance": look,
                 "highlight": occurrence.id in selected,
             })
+        # Anything the part workspace left lying about goes: a part's
+        # sketches are drawn as an overlay, and switching to an assembly
+        # never cleared them, so one would float in the middle of the
+        # assembly belonging to nothing.  The arrows below are put back
+        # after, because they live in the same overlay.
+        # what was picked has to survive the redraw, because the redraw
+        # rebuilds every AIS object and the selection lives on those
+        held = self.viewport.selected_components()
+
+        self.viewport.box_select_enabled = True
+        if self.tool is None and self.dialog is None:
+            # an assembly picks whole components unless something has
+            # deliberately asked for faces; it used to rest in face mode
+            # until a tool had been used once, which is not the state it
+            # opens in
+            self.viewport.set_selection_mode("assembly")
+        self.viewport.clear_overlay()
         self.viewport.set_shape(None, keep_camera=True)
         self.viewport.set_components(items, keep_camera=keep_camera)
+        if held:
+            self.viewport.select_components(held)
         self.viewport.show_planes(self.visible_planes(), self._plane_size())
         # the components were just rebuilt underneath them, so the arrows
         # have to be put back where the faces now are
@@ -871,21 +890,46 @@ class AssemblyController(QtCore.QObject):
     # -------------------------------------------------------- occurrences
 
     def delete_occurrence(self, occurrence_id: int) -> None:
+        """Delete one component, and say what went with it.
+
+        No confirmation.  Deleting a component is a small, obvious, undoable
+        act, and a dialog in front of every one of them costs more than the
+        mistake it prevents.  What it took with it is reported afterwards
+        instead, which is the part worth knowing.
+        """
+        self.delete_occurrences([occurrence_id])
+
+    def delete_occurrences(self, occurrence_ids) -> None:
         doc = self.document
-        occurrence = doc.occurrence(occurrence_id) if doc else None
-        if occurrence is None:
+        if doc is None:
             return
-        held = doc.constraints_on(occurrence_id)
-        text = "Delete %s?" % occurrence.label
-        if held:
-            text += ("\n\nThese relationships go with it:\n  %s"
-                     % "\n  ".join(c.name for c in held))
-        if QtWidgets.QMessageBox.question(
-                self.host, "Delete", text) != QtWidgets.QMessageBox.Yes:
+        wanted = [oid for oid in occurrence_ids
+                  if doc.occurrence(oid) is not None]
+        if not wanted:
             return
+
+        labels = [doc.occurrence(oid).label for oid in wanted]
+        lost = []
+        for oid in wanted:
+            for constraint in doc.constraints_on(oid):
+                if constraint.name not in lost:
+                    lost.append(constraint.name)
+
         doc.push_undo()
-        doc.remove_occurrence(occurrence_id)
+        for oid in wanted:
+            doc.remove_occurrence(oid)
         self.rebuild()
+
+        told = "Deleted %s." % (labels[0] if len(labels) == 1
+                                else "%d components" % len(labels))
+        if lost:
+            told += "  %d relationship(s) went with %s: %s" % (
+                len(lost), "it" if len(labels) == 1 else "them",
+                ", ".join(lost))
+        told += "  Ctrl+Z puts it back." if len(labels) == 1 \
+            else "  Ctrl+Z puts them back."
+        self.host.status_message.setStyleSheet("")
+        self.host.status_message.setText(told)
 
     def rename_occurrence(self, occurrence_id: int, name: str) -> None:
         doc = self.document
@@ -1001,6 +1045,14 @@ class AssemblyController(QtCore.QObject):
                                                         constraint.summary()))
 
     # -------------------------------------------------- free move / rotate
+
+    def delete_selected(self) -> bool:
+        """The Delete key, in the view or in the tree.  True if it did."""
+        picked = self.selected_occurrences()
+        if not picked:
+            return False
+        self.delete_occurrences(picked)
+        return True
 
     def begin_tool(self, mode: Optional[str]) -> None:
         """Arm dragging components around by hand."""

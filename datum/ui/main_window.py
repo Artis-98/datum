@@ -927,6 +927,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewport.selection_changed.connect(self._on_viewport_selection)
         self.viewport.escape_pressed.connect(self._on_escape)
         self.viewport.context_menu_requested.connect(self._viewport_menu)
+        self.viewport.delete_pressed.connect(self._viewport_delete)
         self.viewport.plane_tool_pressed.connect(self._plane_tool_pressed)
         self.viewport.model_edge_picked.connect(self._project_picked_edge)
         self.viewport.plane_picker_dismissed.connect(self._draw_visible_planes)
@@ -1705,6 +1706,7 @@ class MainWindow(QtWidgets.QMainWindow):
         entry = self.session.by_document(self.document)
         if entry is not None:
             entry.note_change()
+        self.viewport.box_select_enabled = False
         self.viewport.set_shape(self.document.shape,
                                 keep_camera=keep_camera,
                                 appearance=self.document.material_appearance)
@@ -2573,6 +2575,11 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.editor.active:
             return   # the editor handles its own Esc
         self.viewport.clear_selection()
+
+    def _viewport_delete(self) -> None:
+        """Delete in the 3D view, acting on whatever workspace is open."""
+        if self.in_assembly:
+            self.assembly_ui.delete_selected()
 
     def _viewport_menu(self, global_pos: QtCore.QPoint) -> None:
         menu = QtWidgets.QMenu(self)

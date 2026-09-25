@@ -64,7 +64,7 @@ SLOT_TOOLS = ("slot", "slot_overall", "slot_centre", "slot_arc3",
               "slot_arc_centre")
 
 TOOLS = (("select", "line", "circle", "arc", "spline", "point", "fillet2d",
-          "trim", "offset", "dimension", "polygon")
+          "trim", "offset", "dimension", "polygon", "project")
          + RECT_TOOLS + SLOT_TOOLS)
 
 TOOL_HINTS = {
@@ -95,6 +95,8 @@ TOOL_HINTS = {
     "fillet2d": "Fillet: click two lines that meet.",
     "trim": "Trim: click the piece of geometry to remove.",
     "offset": "Offset: click a line, then click the side to offset towards.",
+    "project": "Project Geometry: click the model edges you want on this "
+               "sketch. Esc when you are done.",
     "dimension": "Dimension: click one thing for its own size, or two for "
                  "the distance or angle between them. Click clear of them "
                  "to place the label.",
@@ -275,6 +277,11 @@ class SketchEditor(QtCore.QObject):
         # selection box.  With a drawing tool up, a press that travels is
         # still a click, so the viewport is told not to look for drags.
         self.viewport.plane_drag_allowed = (tool == "select")
+        # Project Geometry is the one tool that picks the model rather than
+        # the sketch, so the viewport hands model edges back for as long as
+        # it runs.  Hanging it off set_tool means every existing way out -
+        # Escape, another tool, finishing the sketch - already ends it.
+        self.viewport.set_edge_picking(tool == "project")
         self._pending = []
         self._chain_from = None
         self._dim_target = None
@@ -2376,6 +2383,24 @@ class SketchEditor(QtCore.QObject):
                 self.sketch.remove_entity(e.id)
         self.clear_selection()
         self._touch()
+
+    def project_one(self, sub_shape, construction: bool = False) -> int:
+        """Project a single picked edge or face onto the sketch.
+
+        The same flattening the whole-body version does, handed one piece
+        of geometry instead of all of it, which is what makes Project
+        Geometry a thing you point at rather than a thing that happens to
+        everything at once.
+        """
+        if not self.active or sub_shape is None:
+            return 0
+        self.begin_change()
+        made = self._project_geometry(sub_shape, construction)
+        if made:
+            self._touch()
+        else:
+            self.discard_change()
+        return made
 
     def project_geometry(self, shape, construction: bool = False) -> int:  # noqa: D401
         self.begin_change()

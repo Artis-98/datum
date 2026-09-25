@@ -245,6 +245,63 @@ check("nothing was silently created",
 
 
 # ==========================================================================
+print("Project Geometry takes the edges you point at, not the whole body")
+
+from datum.core import kernel                                  # noqa: E402
+from datum.core.features import PrimitiveFeature               # noqa: E402
+from OCP.TopAbs import TopAbs_EDGE                             # noqa: E402
+
+win.new_document()
+pump(4)
+f = PrimitiveFeature()
+f.kind, f.a, f.b, f.c, f.operation = "box", "60", "40", "20", "new"
+win.document.add_feature(f)
+win.document.rebuild()
+pump(4)
+win.start_sketch_on_plane("XY")
+pump(8)
+s = ed.sketch
+check("the sketch starts empty", len(s.entities) == 0, len(s.entities))
+
+win.project_geometry()
+pump(4)
+check("it arms as a tool rather than projecting everything",
+      ed.tool == "project", ed.tool)
+check("and model edges become pickable while the sketch is open",
+      win.viewport.edge_picking and win.viewport.selection_mode == "edge",
+      (win.viewport.edge_picking, win.viewport.selection_mode))
+check("nothing has been projected just by arming it",
+      len(s.entities) == 0, len(s.entities))
+
+edges = kernel.explore(win.document.shape, TopAbs_EDGE)
+# a box standing on the sketch plane has vertical edges too, and those
+# project to nothing at all, so find one that has a shadow to cast
+made, square = 0, 0
+for e in edges:
+    got = ed.project_one(e)
+    if got and not made:
+        made = got
+        break
+    if not got:
+        square += 1
+pump(3)
+check("one pick brings its edge over", made >= 1 and len(s.entities) == made,
+      (len(s.entities), made))
+check("and not the other eleven", len(s.entities) < len(edges),
+      (len(s.entities), len(edges)))
+
+print("an edge square to the sketch has no shadow, and is refused quietly")
+check("those exist on a box and made nothing", square >= 1, square)
+
+print("leaving the tool gives the sketch its clicks back")
+ed.set_tool("select")
+pump(3)
+check("edge picking is off", not win.viewport.edge_picking)
+check("and the selection mode with it",
+      win.viewport.selection_mode == "none", win.viewport.selection_mode)
+
+
+# ==========================================================================
 print()
 if FAILS:
     print("%d FAILED" % len(FAILS))

@@ -765,6 +765,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewport.escape_pressed.connect(self._on_escape)
         self.viewport.context_menu_requested.connect(self._viewport_menu)
         self.viewport.plane_tool_pressed.connect(self._plane_tool_pressed)
+        self.viewport.model_edge_picked.connect(self._project_picked_edge)
         self.viewport.plane_picker_dismissed.connect(self._draw_visible_planes)
         self.viewport.axis_drag_moved.connect(self._plane_drag_moved)
         self.viewport.axis_drag_finished.connect(self._plane_drag_finished)
@@ -2531,24 +2532,46 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_message.setText("Exported %s" % os.path.basename(written))
 
     def project_geometry(self) -> None:
-        """Project the model's edges onto the sketch being edited."""
+        """Arm Project Geometry, then take the edges that get clicked.
+
+        It used to flatten the entire body onto the sketch in one go, which
+        is almost never what is wanted: you are after the one edge you are
+        lining up against, and everything else is clutter that then has to
+        be deleted.  So it is a tool now, and it takes what you point at.
+        """
         if not self.editor.active:
             return
-        shape = self.document.shape
-        if shape is None:
+        if self.document.shape is None:
             QtWidgets.QMessageBox.information(
                 self, "Project Geometry",
                 "There is no body to project from yet.")
             return
-        self.document.push_undo()
-        count = self.editor.project_geometry(shape)
+        self.editor.set_tool("project")
         self.status_message.setStyleSheet("")
-        if count:
+        self.status_message.setText(
+            "Project Geometry: click the model edges you want on this "
+            "sketch. Esc when you are done.")
+
+    def _project_picked_edge(self) -> None:
+        """One model edge was clicked while Project Geometry is running."""
+        if not self.editor.active or self.editor.tool != "project":
+            return
+        picked = self.viewport.selected_shapes()
+        if not picked:
+            return
+        made = 0
+        for shape in picked:
+            made += self.editor.project_one(shape)
+        self.viewport.clear_selection()
+        self.status_message.setStyleSheet("")
+        if made:
             self.status_message.setText(
-                "Projected %d edge(s) onto %s."
-                % (count, self.editor.sketch.name))
+                "Projected %d edge(s). Keep clicking, or Esc to finish."
+                % made)
         else:
-            self.status_message.setText("Nothing projected onto this plane.")
+            self.status_message.setText(
+                "That edge is square to the sketch, so it projects to "
+                "nothing. Pick another.")
 
     def _plane_from_selected_face(self) -> None:
         """Build a work plane straight off the face that was right-clicked."""

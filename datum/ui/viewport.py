@@ -123,6 +123,8 @@ class Viewport(QtWidgets.QWidget):
     delete_pressed = QtCore.Signal()
     ready = QtCore.Signal()
     plane_tool_pressed = QtCore.Signal()
+    # a model edge picked while a sketch is open, for Project Geometry
+    model_edge_picked = QtCore.Signal()
     plane_picker_dismissed = QtCore.Signal()
     axis_drag_moved = QtCore.Signal(float)
     axis_drag_finished = QtCore.Signal(float)
@@ -174,6 +176,10 @@ class Viewport(QtWidgets.QWidget):
         # sketch interaction
         self.sketch_plane: Optional[SketchPlane] = None
         self.plane_mode = False
+        # While a sketch is open the left button belongs to the sketch, so
+        # model geometry is not selectable.  Project Geometry needs it back
+        # for as long as it is running, and only for as long as that.
+        self.edge_picking = False
 
         self._last_pos = QtCore.QPoint()
         self._press_pos = QtCore.QPoint()
@@ -1413,6 +1419,14 @@ class Viewport(QtWidgets.QWidget):
             return False
         return True
 
+    def set_edge_picking(self, on: bool) -> None:
+        """Let model edges be picked even though a sketch is open."""
+        self.edge_picking = bool(on)
+        self.set_selection_mode("edge" if on else "none")
+        if not on:
+            self.clear_selection()
+        self.setCursor(QtCore.Qt.CrossCursor if on else QtCore.Qt.ArrowCursor)
+
     def enter_plane_mode(self, plane: SketchPlane, grid_step: float = 5.0,
                          show_grid: bool = False) -> None:
         self.sketch_plane = plane
@@ -1425,6 +1439,7 @@ class Viewport(QtWidgets.QWidget):
 
     def leave_plane_mode(self) -> None:
         self.plane_mode = False
+        self.edge_picking = False
         self.sketch_plane = None
         self.plane_drag_allowed = True
         self.set_grid(False)
@@ -1722,6 +1737,14 @@ class Viewport(QtWidgets.QWidget):
         elif event.button() == QtCore.Qt.LeftButton:
             if self.plane_mode:
                 if self.cube_click(pos.x(), pos.y()):
+                    return
+                if self.edge_picking:
+                    # Project Geometry is running: this click is choosing a
+                    # model edge, not drawing on the plane
+                    self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                    self.context.SelectDetected()
+                    self.view.Redraw()
+                    self.model_edge_picked.emit()
                     return
                 self._drag_armed = True
             elif self.component_tool:

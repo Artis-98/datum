@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
-from . import fileformat, kernel
+from . import fileformat, kernel, materials
 from .features import (
     FEATURE_TYPES, BuildContext, Feature, FeatureError, SketchFeature,
 )
@@ -71,7 +71,11 @@ class Document:
         self.doc_type = fileformat.PART
         self.created = fileformat.now()
         self.material = "Generic"
-        self.density = 1.0          # g/cm^3
+        # "" means "whatever the material comes in", which is what somebody
+        # means when they pick a material and nothing else.  Setting it is
+        # an override, and it changes not one gram.
+        self.appearance = ""
+        self._density_override = None
         self.modified = False
         self.rollback_index: Optional[int] = None
         self._next_id = 1
@@ -241,6 +245,31 @@ class Document:
 
     # -- measurements -------------------------------------------------------
 
+    @property
+    def density(self) -> float:
+        """g/cm3, from the named material.
+
+        Kept as a property rather than a stored number so a part cannot
+        drift into saying it is steel while weighing like plastic.  Files
+        written before materials existed carry their own density, and that
+        is honoured until the material is set to something real.
+        """
+        if self._density_override is not None:
+            return self._density_override
+        return materials.library().material(self.material).density
+
+    @density.setter
+    def density(self, value: float) -> None:
+        self._density_override = max(0.0, float(value))
+
+    @property
+    def material_appearance(self):
+        """The appearance this document should be drawn with."""
+        lib = materials.library()
+        if self.appearance:
+            return lib.appearance(self.appearance)
+        return lib.appearance_for(self.material)
+
     def mass_properties(self) -> Dict[str, Any]:
         if self.shape is None:
             return {}
@@ -301,6 +330,9 @@ class Document:
         return {
             "units": self.units,
             "material": self.material,
+            "appearance": self.appearance,
+            # written so a file still weighs the right thing on a machine
+            # whose library does not have this material
             "density": self.density,
             "next_id": self._next_id,
             "rollback": self.rollback_index,
@@ -313,7 +345,16 @@ class Document:
     def load_dict(self, data: Dict[str, Any]) -> None:
         self.units = data.get("units", "mm")
         self.material = data.get("material", "Generic")
-        self.density = float(data.get("density", 1.0))
+        self.appearance = str(data.get("appearance", ""))
+        self._density_override = None
+        stored = data.get("density")
+        known = materials.library().materials.get(self.material)
+        if stored is not None and (known is None
+                                   or abs(float(stored) - known.density)
+                                   > 1e-9):
+            # either a material this machine has never heard of, or one
+            # whose density somebody has since changed: believe the file
+            self._density_override = float(stored)
         self._next_id = int(data.get("next_id", 1))
         self.rollback_index = data.get("rollback")
         self.hidden_planes = set(data.get("hidden_planes", []))

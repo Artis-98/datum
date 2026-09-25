@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
-from . import constraints3d, fileformat, kernel
+from . import constraints3d, fileformat, kernel, materials
 from .constraints3d import (
     Frame, KIND_LABELS, Placement, ResolvedConstraint, frame_from_shape,
 )
@@ -288,7 +288,11 @@ class AssemblyDocument:
         self.thumbnail: Optional[bytes] = None
         self.migrated_from: Optional[int] = None
         self.material = "Generic"
-        self.density = 1.0
+        # "" means "whatever the material comes in", which is what somebody
+        # means when they pick a material and nothing else.  Setting it is
+        # an override, and it changes not one gram.
+        self.appearance = ""
+        self._density_override = None
 
         self.library = PartLibrary()
         self.shape: Optional[TopoDS_Shape] = None
@@ -624,6 +628,24 @@ class AssemblyDocument:
         return Attachment(occurrence=occurrence.id, kind=kind, ref=ref,
                           frame=frame)
 
+    @property
+    def density(self) -> float:
+        """g/cm3, from the named material, unless the file overrode it."""
+        if self._density_override is not None:
+            return self._density_override
+        return materials.library().material(self.material).density
+
+    @density.setter
+    def density(self, value: float) -> None:
+        self._density_override = max(0.0, float(value))
+
+    @property
+    def material_appearance(self):
+        lib = materials.library()
+        if self.appearance:
+            return lib.appearance(self.appearance)
+        return lib.appearance_for(self.material)
+
     def mass_properties(self) -> Dict[str, Any]:
         """Same shape of answer as a part, so the panel needs no special case."""
         if self.shape is None:
@@ -688,6 +710,7 @@ class AssemblyDocument:
             "occurrences": [o.to_dict() for o in self.occurrences],
             "constraints": [c.to_dict() for c in self.constraints],
             "material": self.material,
+            "appearance": self.appearance,
             "density": self.density,
             # a mirror of the occurrence list in the plain reference form, so
             # anything that only wants to know what this file depends on can
@@ -698,7 +721,14 @@ class AssemblyDocument:
     def load_dict(self, data: Dict[str, Any]) -> None:
         self.units = data.get("units", "mm")
         self.material = data.get("material", "Generic")
-        self.density = float(data.get("density", 1.0))
+        self.appearance = str(data.get("appearance", ""))
+        self._density_override = None
+        stored = data.get("density")
+        known = materials.library().materials.get(self.material)
+        if stored is not None and (known is None
+                                   or abs(float(stored) - known.density)
+                                   > 1e-9):
+            self._density_override = float(stored)
         self.params = ParameterTable()
         self.params.load(data.get("parameters", []))
 

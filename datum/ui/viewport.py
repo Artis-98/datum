@@ -202,6 +202,9 @@ class Viewport(QtWidgets.QWidget):
         # plane of the screen, "rotate" spins it about the screen axes
         self.component_tool: Optional[str] = None
         self._component_drag: Optional[int] = None
+        # where the last right-click landed, so the menu can ask what is
+        # there after the selection has been rebuilt out from under it
+        self._menu_pos: Optional[QtCore.QPoint] = None
         # Set by the assembly controller: given an occurrence id, says
         # whether that component is free to be pushed around with no tool
         # armed.  The viewport has no idea what is constrained, and the
@@ -622,6 +625,19 @@ class Viewport(QtWidgets.QWidget):
                 out.append((occurrence_id, shape))
             ctx.NextSelected()
         return out
+
+    def menu_component(self) -> Optional[int]:
+        """The component the last right-click was over.
+
+        Asked for by position rather than read from the selection, because
+        right-clicking a component selects it, and selecting one makes the
+        assembly redraw, and redrawing rebuilds every AIS object and so
+        throws the selection away.  By the time the menu is built there is
+        nothing selected to ask about.  The cursor has not moved, though.
+        """
+        if self._menu_pos is None:
+            return None
+        return self.component_under(self._menu_pos.x(), self._menu_pos.y())
 
     def component_under(self, x: int, y: int) -> Optional[int]:
         """Which occurrence is under a screen point, without selecting it."""
@@ -1900,6 +1916,7 @@ class Viewport(QtWidgets.QWidget):
             if event.button() == QtCore.Qt.RightButton and not moved:
                 # select whatever is under the cursor first, so the menu can
                 # offer actions for that face rather than generic ones
+                self._menu_pos = QtCore.QPoint(pos)
                 if not self.plane_mode:
                     self.context.MoveTo(pos.x(), pos.y(), self.view, False)
                     self.context.SelectDetected()

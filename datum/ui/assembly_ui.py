@@ -1291,6 +1291,13 @@ class AssemblyController(QtCore.QObject):
     def context_menu(self, menu: QtWidgets.QMenu) -> None:
         """Right-click in the viewport while an assembly is open."""
         picked = self.viewport.selected_components()
+        if not picked:
+            # selecting the component redrew the assembly, which rebuilt
+            # every AIS object and threw the selection away; the cursor is
+            # still over the same part, so ask there instead
+            under = self.viewport.menu_component()
+            if under is not None:
+                picked = [under]
         doc = self.document
         if picked and doc is not None:
             occurrence = doc.occurrence(picked[0])

@@ -66,11 +66,27 @@ print("the Properties panel is no longer eating the tree")
 check("there is no Properties dock", win.properties_dock is None)
 check("but the panel still exists, so everything feeding it still works",
       win.properties is not None)
+# It is a child of the window with no layout holding it, and Qt draws
+# such a child at 0,0 - which put a strip of half-clipped text over the
+# quick access icons.  It has to stay hidden until it has a home.
+check("and it is not drawing over the window", not win.properties.isVisible())
+
 win.show_properties()
-pump(3)
-check("and Properties opens as a window when asked for",
+pump(4)
+check("Properties opens as a window when asked for",
       win.properties_window.isVisible())
+check("with the panel actually visible inside it",
+      win.properties.isVisible())
 win.properties_window.hide()
+pump(2)
+
+print("the top strip is tall enough for what sits on it")
+qat = win.ribbon.qat_bar
+check("the pickers fit inside it",
+      win.material_bar.height() <= qat.height(),
+      (win.material_bar.height(), qat.height()))
+check("and they sit clear of the quick access icons",
+      win.material_bar.x() > 200, win.material_bar.x())
 
 
 # ==========================================================================

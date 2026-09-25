@@ -664,6 +664,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # at rather than something you watch.  It is still built, just not
         # docked, so everything that feeds it keeps working.
         self.properties = PropertiesPanel(self)
+        # It is a child of the window but no longer in any layout, and Qt
+        # draws a visible child with no layout at 0,0 - which put it over
+        # the quick access icons as a strip of half-clipped text.  It
+        # stays hidden until show_properties puts it in its own window.
+        self.properties.hide()
         self.properties_dock = None
 
     def _build_material_bar(self) -> None:
@@ -2475,6 +2480,10 @@ class MainWindow(QtWidgets.QMainWindow):
             layout = QtWidgets.QVBoxLayout(window)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.addWidget(self.properties)
+            # it was explicitly hidden so it would not draw over the
+            # window with no layout to hold it, and an explicit hide
+            # survives being re-parented
+            self.properties.show()
             self.properties_window = window
         self.properties.update_from(self.active_document)
         self.properties_window.show()

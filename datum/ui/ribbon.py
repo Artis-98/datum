@@ -242,7 +242,9 @@ class Ribbon(QtWidgets.QWidget):
         # which is where Inventor puts it.
         self.qat_bar = QtWidgets.QWidget(self)
         self.qat_bar.setObjectName("RibbonQat")
-        self.qat_bar.setFixedHeight(26)
+        # tall enough for the material pickers that sit on it; at 26 the
+        # combo boxes were cut off half way up
+        self.qat_bar.setFixedHeight(32)
         qat_layout = QtWidgets.QHBoxLayout(self.qat_bar)
         qat_layout.setContentsMargins(7, 2, 8, 2)
         qat_layout.setSpacing(2)

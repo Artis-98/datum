@@ -254,6 +254,34 @@ check("nor does closing a dialog", win.viewport.selection_mode == "assembly",
 
 
 # ==========================================================================
+print("the menu survives the selection being rebuilt out from under it")
+# Right-clicking a component selects it, selecting one makes the assembly
+# redraw, and redrawing rebuilds every AIS object and throws the selection
+# away.  By the time the menu is built there is nothing selected, which is
+# why it used to come up with none of the component entries on it.
+
+from PySide6 import QtCore                                      # noqa: E402
+
+win.viewport.selected_components = lambda: []      # as it is after a redraw
+win.viewport.menu_component = lambda: first.id     # but the cursor is there
+menu = QtWidgets.QMenu()
+ui.context_menu(menu)
+labels = [a.text() for a in menu.actions() if a.text()]
+for wanted in ("Grounded", "Visible", "Suppressed", "Open Part", "Delete"):
+    check("with nothing selected it still offers %s" % wanted,
+          wanted in labels, labels)
+
+print("and with nothing under the cursor it offers only the general ones")
+win.viewport.menu_component = lambda: None
+menu = QtWidgets.QMenu()
+ui.context_menu(menu)
+labels = [a.text() for a in menu.actions() if a.text()]
+check("no component entries", "Open Part" not in labels, labels)
+check("but Place Component is still there",
+      "Place Component..." in labels, labels)
+
+
+# ==========================================================================
 print("a component wears its own appearance, not a palette colour")
 
 from datum.core import materials                                # noqa: E402

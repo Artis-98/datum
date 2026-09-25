@@ -70,6 +70,9 @@ class PickerCombo(QtWidgets.QComboBox):
     def __init__(self, parent=None, width: int = 168) -> None:
         super().__init__(parent)
         self.setFixedWidth(width)
+        # pinned, so the strip it lives on can be a known height and the
+        # text cannot end up half outside it
+        self.setFixedHeight(24)
         self.setIconSize(QtCore.QSize(15, 15))
         self.setMaxVisibleItems(24)
 

@@ -196,6 +196,13 @@ class Viewport(QtWidgets.QWidget):
         # plane of the screen, "rotate" spins it about the screen axes
         self.component_tool: Optional[str] = None
         self._component_drag: Optional[int] = None
+        # Set by the assembly controller: given an occurrence id, says
+        # whether that component is free to be pushed around with no tool
+        # armed.  The viewport has no idea what is constrained, and the
+        # controller has no idea what is under the cursor, so one asks the
+        # other.
+        self.component_freely_movable = None
+        self._free_drag = False
         self._component_basis: Tuple[Tuple[float, float, float], ...] = ()
 
         self._animation: Optional[QtCore.QTimer] = None
@@ -1722,6 +1729,7 @@ class Viewport(QtWidgets.QWidget):
                 # drag knows which component it is pushing around
                 occurrence = self.component_under(pos.x(), pos.y())
                 if occurrence is not None:
+                    self._free_drag = False
                     self._component_drag = occurrence
                     self._component_basis = self.screen_basis()
                     self.component_drag_started.emit(occurrence)
@@ -1733,7 +1741,25 @@ class Viewport(QtWidgets.QWidget):
                 self.view.Redraw()
                 self.plane_tool_pressed.emit()
             else:
-                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                # No tool armed.  A component that nothing is holding can
+                # still be dragged straight off the screen, because having
+                # to arm a tool to shove a loose part out of the way is a
+                # step that earns nothing.  Anything constrained or grounded
+                # is left alone here and needs Free Move, which says out
+                # loud that the constraints are being ignored.
+                grabbed = None
+                if self.component_freely_movable is not None:
+                    candidate = self.component_under(pos.x(), pos.y())
+                    if (candidate is not None
+                            and self.component_freely_movable(candidate)):
+                        grabbed = candidate
+                if grabbed is not None:
+                    self._free_drag = True
+                    self._component_drag = grabbed
+                    self._component_basis = self.screen_basis()
+                    self.component_drag_started.emit(grabbed)
+                else:
+                    self.context.MoveTo(pos.x(), pos.y(), self.view, False)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if not self._ready:
@@ -1754,6 +1780,10 @@ class Viewport(QtWidgets.QWidget):
             return
 
         if self._component_drag is not None:
+            if not self._moved_enough(pos):
+                # a click that has not really moved is still a click, so
+                # selecting a loose part does not nudge it
+                return
             self._drag_component(dx, dy)
             self._last_pos = pos
             return
@@ -1826,6 +1856,17 @@ class Viewport(QtWidgets.QWidget):
         if (event.button() == QtCore.Qt.LeftButton
                 and self._component_drag is not None):
             self._component_drag = None
+            if self._free_drag and not moved:
+                # it never actually moved, so treat it as the selection
+                # click it was
+                self._free_drag = False
+                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                self.context.SelectDetected()
+                self.view.Redraw()
+                self.selection_changed.emit()
+                self._button = QtCore.Qt.NoButton
+                return
+            self._free_drag = False
             self.component_drag_finished.emit()
             self._button = QtCore.Qt.NoButton
             return

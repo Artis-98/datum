@@ -592,6 +592,8 @@ class AssemblyController(QtCore.QObject):
         v.component_drag_started.connect(self._drag_started)
         v.component_drag_moved.connect(self._drag_moved)
         v.component_drag_finished.connect(self._drag_finished)
+        # the viewport asks this before letting a drag start with no tool
+        v.component_freely_movable = self._free_drag_allowed
 
     # ------------------------------------------------------------ rebuild
 
@@ -698,7 +700,7 @@ class AssemblyController(QtCore.QObject):
         doc = self.document
         if doc is None:
             return
-        self.close_dialogs()
+        self.take_over()
         start = doc.base_dir or self.host.project_folder()
         paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self.host, "Place Component", start,
@@ -817,7 +819,7 @@ class AssemblyController(QtCore.QObject):
                 "A constraint holds two components together. Place at least "
                 "two first.")
             return
-        self.close_dialogs()
+        self.take_over()
         doc.push_undo()
         self._open(ConstraintDialog(self, kind=kind))
 
@@ -998,6 +1000,10 @@ class AssemblyController(QtCore.QObject):
         self._drag_snapshot = doc.snapshot()
         self._dragging = occurrence_id
 
+    def _free_drag_allowed(self, occurrence_id: int) -> bool:
+        """What the viewport asks before dragging with no tool armed."""
+        return self.tool is None and self.freely_movable(occurrence_id)
+
     def _drag_moved(self, delta) -> None:
         doc = self.document
         occurrence = doc.occurrence(self._dragging) if doc else None
@@ -1026,6 +1032,39 @@ class AssemblyController(QtCore.QObject):
         self.host.status_message.setText(report.solver or report.message)
 
     # --------------------------------------------------------- plumbing
+
+    def freely_movable(self, occurrence_id: int) -> bool:
+        """Whether nothing is holding this component in place.
+
+        Grounded, suppressed, or named by any live constraint means no: the
+        solver would only drag it back, and a part that springs home the
+        instant you let go feels broken rather than constrained.  Free Move
+        still overrides all of this, which is the point of it.
+        """
+        doc = self.document
+        occurrence = doc.occurrence(occurrence_id) if doc else None
+        if occurrence is None or occurrence.grounded or occurrence.suppressed:
+            return False
+        for constraint in doc.constraints:
+            if getattr(constraint, "suppressed", False):
+                continue
+            for attachment in (constraint.a, constraint.b):
+                if getattr(attachment, "occurrence", None) == occurrence_id:
+                    return False
+        return True
+
+    def take_over(self) -> None:
+        """Start something new, and stop whatever was already running.
+
+        Free Move and the constraint dialog both want the viewport's
+        picking, and each command only ever cancelled the other half.
+        Opening Constrain with Free Move still armed left the dialog unable
+        to select anything, which reads as the constraint being broken
+        rather than as two tools fighting.
+        """
+        self.close_dialogs()
+        if self.tool is not None:
+            self.begin_tool(None)
 
     def set_picking(self, on: bool) -> None:
         self.viewport.set_selection_mode("assembly" if on else "solid")
@@ -1089,6 +1128,16 @@ class AssemblyController(QtCore.QObject):
                 move = menu.addAction(icons.icon("move", 16), "Move...")
                 move.triggered.connect(
                     lambda: self.place_dialog(occurrence.id))
+                visible = menu.addAction("Visible")
+                visible.setCheckable(True)
+                visible.setChecked(occurrence.visible)
+                visible.triggered.connect(
+                    lambda: self.toggle_visibility(occurrence.id))
+                suppress = menu.addAction("Suppressed")
+                suppress.setCheckable(True)
+                suppress.setChecked(occurrence.suppressed)
+                suppress.triggered.connect(
+                    lambda: self.toggle_suppress(occurrence.id))
                 isolate = menu.addAction("Isolate")
                 isolate.triggered.connect(lambda: self.isolate(occurrence.id))
                 open_part = menu.addAction(icons.icon("open", 16), "Open Part")
@@ -1116,7 +1165,7 @@ class AssemblyController(QtCore.QObject):
         occurrence = doc.occurrence(occurrence_id) if doc else None
         if occurrence is None:
             return
-        self.close_dialogs()
+        self.take_over()
         doc.push_undo()
         self._open(PlacementDialog(self, occurrence))
 

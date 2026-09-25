@@ -794,8 +794,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 "3Dconnexion device")
 
     def _spacemouse_moved(self, tx, ty, tz, rx, ry, rz) -> None:
-        if self.editor.active:
-            return          # sketching stays on the plane, not orbiting
+        # Sketching used to lock the view to the plane.  That is the right
+        # default for the mouse, which is drawing, but the SpaceMouse is the
+        # other hand: tipping the model a few degrees to see what you are
+        # drawing against is exactly what it is for.
         s = self.spacemouse.settings
         self.viewport.apply_spacemouse(tx, ty, tz, rx, ry, rz,
                                        s.pan_speed, s.zoom_speed,

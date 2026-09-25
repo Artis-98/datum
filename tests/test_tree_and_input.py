@@ -450,7 +450,11 @@ win.viewport.apply_spacemouse(0, 0, 0, 0, 0, 0)
 check("zero motion leaves the camera alone",
       camera_state() == before_state)
 
-print("sketch mode ignores the puck")
+print("the puck still works while sketching")
+# It used to be locked out, on the reasoning that a sketch lives on its
+# plane.  That is right for the mouse, which is drawing; the puck is the
+# other hand, and tipping the model a few degrees to see what you are
+# drawing against is what it is for.
 win.start_sketch_on_plane("XY")
 pump()
 win.viewport.finish_animation()   # the swing to the plane is animated now
@@ -458,7 +462,7 @@ pump()
 before_state = camera_state()
 win._spacemouse_moved(0, 0, 0, 0.8, 0, 0)
 pump()
-check("no orbit while sketching", camera_state() == before_state,
+check("it orbits while sketching", camera_state() != before_state,
       camera_state())
 win.finish_sketch()
 pump()

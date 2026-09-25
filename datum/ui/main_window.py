@@ -667,6 +667,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.properties_dock = None
 
     def _build_material_bar(self) -> None:
+        self._component_docs = {}
         self.material_bar = MaterialBar(self)
         self.ribbon.material_slot.addWidget(self.material_bar)
         self.material_bar.material_changed.connect(self.set_material)
@@ -674,9 +675,68 @@ class MainWindow(QtWidgets.QMainWindow):
         self.material_bar.browse_requested.connect(self.browse_materials)
 
     def _material_target(self):
-        """Whichever open document has a material: the part or the assembly."""
-        document = self.assembly if self.in_assembly else self.document
-        return document if hasattr(document, "material") else None
+        """What the material pickers are pointing at right now.
+
+        In a part, the part.  In an assembly, whichever component is
+        selected, because an assembly is not made of anything - its parts
+        are, and each of them has its own material.  With nothing selected
+        there is no sensible answer, so the pickers go grey rather than
+        pretending to set something.
+        """
+        if not self.in_assembly:
+            document = self.document
+            return document if hasattr(document, "material") else None
+
+        picked = self.assembly_ui.selected_occurrences()
+        if not picked:
+            return None
+        return self._component_document(picked[0])
+
+    def _component_document(self, occurrence_id: int):
+        """The part document behind a component, opened for editing.
+
+        Loaded from disk rather than from the shape cache, because setting
+        a material has to be saved back into the part's own file: that is
+        where it belongs, and it is what makes every other assembly using
+        the part agree about what it is made of.
+        """
+        doc = self.assembly
+        occurrence = doc.occurrence(occurrence_id) if doc else None
+        if occurrence is None:
+            return None
+        path = occurrence.ref.resolve(doc.base_dir) if doc.base_dir else None
+        if path is None or not os.path.exists(path):
+            return None
+        # an open tab wins, so editing it in two places cannot disagree
+        entry = self.session.entry_for_path(path) \
+            if hasattr(self.session, "entry_for_path") else None
+        if entry is not None and getattr(entry, "document", None) is not None:
+            return entry.document
+        try:
+            from ..core.assembly import open_any
+
+            loaded = open_any(path)
+        except Exception:
+            return None
+        self._component_docs[occurrence_id] = (path, loaded)
+        return loaded
+
+    def _save_component_material(self, occurrence_id: int) -> None:
+        """Write a component's material back into its own file."""
+        held = self._component_docs.get(occurrence_id)
+        if held is None:
+            return
+        path, document = held
+        try:
+            document.save(path)
+        except Exception as exc:
+            self.status_message.setStyleSheet("color: %s;" % C.error)
+            self.status_message.setText("Could not save %s: %s"
+                                        % (os.path.basename(path), exc))
+            return
+        if self.assembly is not None:
+            self.assembly.library.forget(path)
+            self.assembly_ui.rebuild()
 
     def set_material(self, name: str) -> None:
         document = self._material_target()
@@ -688,6 +748,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # an older file has to let go or the mass will not follow
         document._density_override = None
         document.modified = True
+        self._after_material_set()
         self._material_changed()
         self.status_message.setStyleSheet("")
         mass = None
@@ -706,10 +767,19 @@ class MainWindow(QtWidgets.QMainWindow):
         document.push_undo()
         document.appearance = name
         document.modified = True
+        self._after_material_set()
         self._material_changed()
         self.status_message.setStyleSheet("")
         self.status_message.setText(
             "Appearance: %s" % (name or "from the material"))
+
+    def _after_material_set(self) -> None:
+        """If the pickers were aimed at a component, save it back."""
+        if not self.in_assembly:
+            return
+        picked = self.assembly_ui.selected_occurrences()
+        if picked:
+            self._save_component_material(picked[0])
 
     def _material_changed(self) -> None:
         """Redraw with the new look, and refresh everything that shows it."""

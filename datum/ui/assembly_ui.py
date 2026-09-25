@@ -637,10 +637,19 @@ class AssemblyController(QtCore.QObject):
             placed = occurrence.placed()
             if placed is None:
                 continue
+            # Components used to be tinted from a rotating palette so they
+            # read apart.  That meant an assembly showed every part in a
+            # colour it is not, and setting a material on a part changed
+            # nothing where it actually matters.  Each one wears its own
+            # appearance now; telling them apart is what selection
+            # highlighting and the tree are for.
+            path = occurrence.ref.resolve(doc.base_dir) if doc.base_dir                 else None
+            look = (doc.library.appearance(path)
+                    if path and os.path.exists(path) else None)
             items.append({
                 "id": occurrence.id,
                 "shape": placed,
-                "colour": self.viewport.component_colour(index),
+                "appearance": look,
                 "highlight": occurrence.id in selected,
             })
         self.viewport.set_shape(None, keep_camera=True)
@@ -972,6 +981,14 @@ class AssemblyController(QtCore.QObject):
             "color: %s;" % C.error if occurrence.error else "")
         self.host.status_message.setText(occurrence.summary())
         self.show_components(keep_camera=True)
+        # the material pickers aim at whatever component is selected, so
+        # they have to be told when that changes
+        self._sync_material_bar()
+
+    def _sync_material_bar(self) -> None:
+        bar = getattr(self.host, "material_bar", None)
+        if bar is not None:
+            bar.set_document(self.host._material_target())
 
     def _constraint_selected(self, constraint_id: int) -> None:
         doc = self.document
@@ -1206,7 +1223,12 @@ class AssemblyController(QtCore.QObject):
             self.begin_tool(None)
 
     def set_picking(self, on: bool) -> None:
-        self.viewport.set_selection_mode("assembly" if on else "solid")
+        # "assembly" is the resting mode with an assembly open, not a mode
+        # that only some commands turn on.  Dropping to "solid" made
+        # components unpickable, so a right-click could not tell which one
+        # it was over and the menu fell back to its generic entries with no
+        # Open Part, Suppress or Delete on it.
+        self.viewport.set_selection_mode("assembly")
         if not on:
             self.viewport.clear_selection()
 
@@ -1219,7 +1241,9 @@ class AssemblyController(QtCore.QObject):
     def dialog_finished(self, dialog: QtWidgets.QDialog) -> None:
         if self.dialog is dialog:
             self.dialog = None
-        self.viewport.set_selection_mode("solid")
+        # back to picking whole components, which is what an assembly is
+        # for, rather than leaving it on faces because a dialog wanted them
+        self.viewport.set_selection_mode("assembly")
         self.viewport.clear_selection()
 
     def close_dialogs(self) -> None:
@@ -1242,6 +1266,8 @@ class AssemblyController(QtCore.QObject):
         if picked:
             self.browser.select_occurrences(picked[:1])
             self._occurrence_selected(picked[0])
+        else:
+            self._sync_material_bar()
         return False
 
     def cancel_pending(self) -> bool:

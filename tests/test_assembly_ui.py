@@ -295,8 +295,13 @@ check("the dialog closed", win.assembly_ui.dialog is None)
 check("the constraint stayed", len(doc.constraints) == 1)
 check("it is named Mate:1", doc.constraints[0].name == "Mate:1",
       doc.constraints[0].name)
-check("picking is switched off",
-      win.viewport.selection_mode == "solid", win.viewport.selection_mode)
+# Closing a dialog used to drop the viewport to picking faces.  That left
+# components unpickable, so a right-click could not tell which one it was
+# over and the menu lost Open Part, Suppress and Delete.  Picking whole
+# components is the resting state with an assembly open.
+check("it goes back to picking components, not faces",
+      win.viewport.selection_mode == "assembly",
+      win.viewport.selection_mode)
 check("the tree nests it under both parts",
       win.assembly_ui.browser.topLevelItem(0).child(1).childCount() == 1
       and win.assembly_ui.browser.topLevelItem(0).child(2).childCount() == 1)

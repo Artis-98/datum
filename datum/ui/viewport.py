@@ -526,14 +526,11 @@ class Viewport(QtWidgets.QWidget):
                 self._component_wires.add(int(item["id"]))
                 continue
 
-            material = Graphic3d_MaterialAspect(
-                Graphic3d_NameOfMaterial.Graphic3d_NOM_PLASTER)
-            material.SetAmbientColor(_col((0.26, 0.28, 0.31)))
-            material.SetDiffuseColor(_col(colour))
-            material.SetSpecularColor(_col((0.09, 0.10, 0.12)))
-            material.SetShininess(0.22)
-            ais.SetMaterial(material)
-            ais.SetColor(_col(colour))
+            # the same dressing a single part gets, so a component looks
+            # the same in the assembly as it does on its own
+            self.apply_appearance(ais, item.get("appearance"))
+            if item.get("appearance") is None and item.get("colour"):
+                ais.SetColor(_col(colour))
             transparency = float(item.get("transparency", 0.0))
             if transparency:
                 ais.SetTransparency(transparency)

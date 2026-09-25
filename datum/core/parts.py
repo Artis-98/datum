@@ -9,7 +9,7 @@ neither has to depend on the other.
 from __future__ import annotations
 
 import os
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
@@ -29,6 +29,9 @@ class PartLibrary:
 
     def __init__(self) -> None:
         self._cache: Dict[str, Tuple[float, Optional[TopoDS_Shape]]] = {}
+        # appearances, keyed the same way: an assembly wants the
+        # colour without rebuilding the whole feature tree for it
+        self._looks: Dict[str, Tuple[float, Any]] = {}
         # Set by the window when documents are open in tabs: a part being
         # edited in its own tab is what an assembly should use, not the older
         # copy sitting on disk.  The provider decides *when* that edit becomes
@@ -43,8 +46,46 @@ class PartLibrary:
     def forget(self, path: Optional[str] = None) -> None:
         if path is None:
             self._cache.clear()
+            self._looks.clear()
         else:
-            self._cache.pop(self._key(path), None)
+            key = self._key(path)
+            self._cache.pop(key, None)
+            self._looks.pop(key, None)
+
+    def appearance(self, path: str):
+        """What the part in this file is meant to look like.
+
+        Read from the file rather than by rebuilding it, because an
+        assembly only needs the colour and rebuilding every component's
+        feature tree to find one out would be absurd.  Cached on the
+        timestamp the same way bodies are, so recolouring a part shows up
+        in the assembly on the next rebuild.
+        """
+        from . import fileformat, materials
+
+        key = self._key(path)
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            return materials.library().appearance("Default")
+
+        hit = self._looks.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+
+        look = materials.library().appearance("Default")
+        try:
+            geometry = fileformat.read(path).geometry
+            named = str(geometry.get("appearance") or "")
+            if named:
+                look = materials.library().appearance(named)
+            else:
+                look = materials.library().appearance_for(
+                    str(geometry.get("material") or "Generic"))
+        except Exception:
+            pass
+        self._looks[key] = (stamp, look)
+        return look
 
     def shape(self, path: str, depth: int = 0) -> Optional[TopoDS_Shape]:
         """The body a referenced file builds to, or None when it has none."""

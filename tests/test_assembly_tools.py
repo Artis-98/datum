@@ -231,6 +231,50 @@ check("with nothing left pending", not ui._pending_replace)
 
 
 # ==========================================================================
+print("the view rests on picking components, so the menu knows what it is over")
+
+ui.begin_tool("move")
+pump(3)
+ui.begin_tool(None)
+pump(3)
+check("with no tool, components are what gets picked",
+      win.viewport.selection_mode == "assembly",
+      win.viewport.selection_mode)
+
+ui.set_picking(False)
+pump(3)
+check("and turning picking off does not drop it to faces",
+      win.viewport.selection_mode == "assembly",
+      win.viewport.selection_mode)
+
+ui.dialog_finished(None)
+pump(3)
+check("nor does closing a dialog", win.viewport.selection_mode == "assembly",
+      win.viewport.selection_mode)
+
+
+# ==========================================================================
+print("a component wears its own appearance, not a palette colour")
+
+from datum.core import materials                                # noqa: E402
+
+items = []
+real_set = win.viewport.set_components
+win.viewport.set_components = lambda i, keep_camera=True: items.extend(i)
+try:
+    ui.show_components()
+    pump(3)
+finally:
+    win.viewport.set_components = real_set
+
+check("every component was handed an appearance rather than a tint",
+      items and all("appearance" in i for i in items),
+      [sorted(i) for i in items[:1]])
+check("and none of them a rotating palette colour",
+      not any(i.get("colour") for i in items))
+
+
+# ==========================================================================
 print()
 if FAILS:
     print("%d FAILED" % len(FAILS))

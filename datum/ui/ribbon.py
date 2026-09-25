@@ -144,6 +144,10 @@ class RibbonPanel(QtWidgets.QWidget):
     def __init__(self, title: str, parent=None) -> None:
         super().__init__(parent)
         self.setObjectName("RibbonPanel")
+        # Qt does not paint a stylesheet background or border on a plain
+        # QWidget subclass unless it is told to, so the separator the
+        # theme has always asked for was quietly doing nothing.
+        self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
         self.title = title
 
         outer = QtWidgets.QVBoxLayout(self)

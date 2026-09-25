@@ -62,11 +62,15 @@ TRACK_GAUGE = 1200.0  # centre to centre of the two tracks
 BELT_T = 52.0         # thickness of the rubber
 
 SLEW_Z = 560.0        # top of the undercarriage: where the house turns
-BOOM_PIVOT = (470.0, 0.0, 790.0)
+# High, because a boom ram has to reach the boom's underside from below
+# without crossing its root, and off to one side, because the cab is in the
+# way of everything else - which is exactly why real machines offset it.
+BOOM_PIVOT = (600.0, -140.0, 1150.0)
 BOOM_ANGLE = 38.0     # degrees above horizontal
 ARM_ANGLE = -60.0     # degrees, hanging forward and down from the boom tip
-BUCKET_ANGLE = 25.0   # where the bucket's mouth points, so 25 is curled up
+BUCKET_ANGLE = -25.0  # where the mouth points: below horizontal, ready to dig
 SLEW = 18.0           # the house turned off centre, because square is dull
+BOOM_RAM_BASE = (560.0, 740.0)   # in the bracket clevis, below the pivot
 LINK = 380.0          # centres of the bucket link
 
 YELLOW = "Paint, Machine Yellow"
@@ -376,6 +380,13 @@ face.sketch.add_arc_slot((300, 190), 305, math.radians(150),
                          math.radians(212), 30)
 face.sketch.add_rectangle((26, 0), (74, 44))              # cutting edge
 extrude(blade, face, 1520, NEW_BODY, "Blade")
+# Pads on the back for the push arms.  A rolled plate is 30 mm thick and
+# an arm's pin boss is 124 across, so without somewhere to land the arm
+# simply comes out the front of the blade.
+for side in (1, -1):
+    pad = sketch_on(blade, "Arm Pad", xz_at(side * 360))
+    pad.sketch.add_circle((-62, 210), 60)
+    extrude(blade, pad, 120, JOIN, extent="distance", reverse=side < 0)
 BLADE = save(blade, "Dozer Blade")
 
 # ---- blade arm: tapered box section, a pin at each end ------------------
@@ -424,23 +435,15 @@ box(house, (520, 1400, 460), (-560, -700, 700), JOIN, label="Engine Hood")
 # both the deck and the hood are plate, not billet, so the inside comes out
 box(house, (1100, 1440, 100), (-520, -720, 580), CUT, label="Deck Pocket")
 box(house, (440, 1320, 380), (-520, -660, 700), CUT, label="Hood Pocket")
-box(house, (220, 480, 460), (480, -240, 560), JOIN, label="Boom Bracket")
-nose = sketch_on(house, "Bracket Nose")
+box(house, (220, 480, 700), (480, -380, 560), JOIN, label="Boom Bracket")
+nose = sketch_on(house, "Bracket Nose", xz_at(100))
 nose.sketch.add_circle((BOOM_PIVOT[0], BOOM_PIVOT[2]), 175)
-extrude(house, nose, 480, JOIN)
-# and the slot that makes it one: the boom's root sits in the gap
-box(house, (300, 320, 500), (400, -160, 560), CUT, label="Bracket Slot")
-# lugs for the two boom rams, one outboard of each side of the bracket
-for side in (1, -1):
-    box(house, (170, 60, 250), (170, side * 290 - (60 if side < 0 else 0), 560),
-        JOIN, label="Ram Lug")
-bore(house, "Boom Pivot Bore", xz_at(245), [(BOOM_PIVOT[0], BOOM_PIVOT[2])],
-     96, 490)
-for side in (1, -1):
-    # the plane's normal faces -Y, so the lug on the other side is cut the
-    # other way rather than to a negative depth
-    bore(house, "Ram Lug Bore", xz_at(side * 352), [(255, 700)], 96, 64,
-         reverse=side < 0)
+extrude(house, nose, 480, JOIN, extent="distance")
+# and the slot that makes it a clevis: the boom's root sits in the gap,
+# and so does the eye of the ram that lifts it
+box(house, (300, 320, 820), (400, -300, 560), CUT, label="Bracket Slot")
+bore(house, "Bracket Bores", xz_at(105),
+     [(BOOM_PIVOT[0], BOOM_PIVOT[2]), BOOM_RAM_BASE], 96, 490)
 # engine vents, both sides of the hood
 for side in (1, -1):
     vents = sketch_on(house, "Hood Vents", xz_at(side * 700))
@@ -458,36 +461,36 @@ extrude(weight, weight.features[-1], 600, NEW_BODY, "Counterweight",
 WEIGHT = save(weight, "Counterweight")
 
 # ---- cab: four posts, a roof, and panels up to the glass line -----------
-CAB = dict(x0=-200.0, x1=660.0, y0=40.0, y1=700.0, z0=700.0, z1=2050.0)
+CAB = dict(x0=-200.0, x1=660.0, y0=120.0, y1=740.0, z0=700.0, z1=2050.0)
 cab = new_part(STEEL, YELLOW)
 posts = sketch_on(cab, "Cab Posts", xy_at(CAB["z0"]))
 for px in (CAB["x0"], CAB["x1"] - 80.0):
     for py in (CAB["y0"], CAB["y1"] - 80.0):
         posts.sketch.add_rectangle((px, py), (px + 80.0, py + 80.0))
 extrude(cab, posts, CAB["z1"] - CAB["z0"], NEW_BODY, "Cab", extent="distance")
-box(cab, (900, 700, 40), (-220, 20, CAB["z1"]), JOIN, label="Roof")
-box(cab, (860, 660, 30), (-200, 40, 700), JOIN, label="Floor")
-box(cab, (24, 660, 1290), (-200, 40, 760), JOIN, label="Rear Panel")
-box(cab, (24, 660, 300), (636, 40, 760), JOIN, label="Front Panel")
-box(cab, (860, 24, 300), (-200, 40, 760), JOIN, label="Right Panel")
-box(cab, (860, 24, 300), (-200, 676, 760), JOIN, label="Left Panel")
-box(cab, (70, 60, 1290), (110, 640, 760), JOIN, label="Door Post")
+box(cab, (900, 660, 40), (-220, 100, CAB["z1"]), JOIN, label="Roof")
+box(cab, (860, 620, 30), (-200, 120, 700), JOIN, label="Floor")
+box(cab, (24, 620, 1290), (-200, 120, 760), JOIN, label="Rear Panel")
+box(cab, (24, 620, 300), (636, 120, 760), JOIN, label="Front Panel")
+box(cab, (860, 24, 300), (-200, 120, 760), JOIN, label="Right Panel")
+box(cab, (860, 24, 300), (-200, 716, 760), JOIN, label="Left Panel")
+box(cab, (70, 24, 1290), (110, 716, 760), JOIN, label="Door Post")
 CAB_PART = save(cab, "Cab Frame")
 
 # ---- glazing: four panes, and the only transparent part in the machine --
 glass = new_part("Glass", "Glass, Clear")
-box(glass, (16, 600, 960), (620, 70, 1060), NEW_BODY, "Cab Glazing",
+box(glass, (16, 540, 960), (620, 160, 1060), NEW_BODY, "Cab Glazing",
     label="Windscreen")
-box(glass, (760, 16, 960), (-170, 672, 1060), JOIN, label="Door Glass")
-box(glass, (760, 16, 960), (-170, 62, 1060), JOIN, label="Right Glass")
-box(glass, (16, 600, 960), (-150, 70, 1060), JOIN, label="Rear Glass")
+box(glass, (760, 16, 960), (-170, 700, 1060), JOIN, label="Door Glass")
+box(glass, (760, 16, 960), (-170, 144, 1060), JOIN, label="Right Glass")
+box(glass, (16, 540, 960), (-176, 160, 1060), JOIN, label="Rear Glass")
 GLASS = save(glass, "Cab Glazing")
 
 # ---- seat ---------------------------------------------------------------
 seat = new_part("ABS", "Plastic, Matte Black")
-box(seat, (280, 320, 300), (60, 220, 760), NEW_BODY, "Seat", label="Pedestal")
-box(seat, (460, 480, 110), (0, 140, 1060), JOIN, label="Cushion")
-box(seat, (130, 480, 520), (-60, 140, 1170), JOIN, label="Backrest")
+box(seat, (280, 320, 300), (60, 300, 760), NEW_BODY, "Seat", label="Pedestal")
+box(seat, (460, 480, 110), (0, 220, 1060), JOIN, label="Cushion")
+box(seat, (130, 480, 520), (-60, 220, 1170), JOIN, label="Backrest")
 SEAT = save(seat, "Seat")
 
 # ---- work light ---------------------------------------------------------
@@ -523,22 +526,29 @@ loop(sketch_on(boom, "Boom Profile"),
      [(0, -115), (1150, 430), (2260, 165), (2260, 300), (1150, 700), (0, 115)])
 extrude(boom, boom.features[-1], 300, NEW_BODY, "Boom")
 
-ends = sketch_on(boom, "Pivot Bosses")
-ends.sketch.add_circle((0, 0), 115)
-ends.sketch.add_circle((2260, 232), 100)
-extrude(boom, ends, 300, JOIN)
+sketch_on(boom, "Root Boss").sketch.add_circle((0, 0), 115)
+extrude(boom, boom.features[-1], 300, JOIN)
 
-# the two boom rams pull on one wide boss underneath, outboard of the web
-sketch_on(boom, "Ram Boss").sketch.add_circle((700, 150), 110)
-extrude(boom, boom.features[-1], 360, JOIN)
+# The tip is wider than the web and then slotted, so the arm's root sits
+# inside it rather than through it.  Every joint on this machine is a
+# clevis and a tongue; two bosses of the same width at one pin would be
+# two parts trying to be in the same place.
+sketch_on(boom, "Tip Boss").sketch.add_circle((2260, 232), 100)
+extrude(boom, boom.features[-1], 380, JOIN)
+box(boom, (300, 250, 300), (2110, -125, 82), CUT, label="Tip Clevis")
 
-# and the arm ram sits in a clevis on top, so that boss is slotted
+# the boom ram pushes on a boss slung under the web, in its own clevis
+sketch_on(boom, "Ram Boss").sketch.add_circle((700, 100), 150)
+extrude(boom, boom.features[-1], 300, JOIN)
+box(boom, (300, 100, 200), (550, -50, -10), CUT, label="Ram Clevis")
+
+# and the arm ram sits in a clevis on top
 sketch_on(boom, "Arm Ram Boss").sketch.add_circle((1350, 700), 100)
 extrude(boom, boom.features[-1], 300, JOIN)
-box(boom, (200, 120, 260), (1250, -60, 560), CUT, label="Clevis Slot")
+box(boom, (200, 120, 260), (1250, -60, 560), CUT, label="Arm Ram Clevis")
 
 drill(boom, "Pin Bores",
-      [(0, 0), (2260, 232), (700, 150), (1350, 700)], diameter=96)
+      [(0, 0), (2260, 232), (700, 100), (1350, 700)], diameter=96)
 BOOM = save(boom, "Boom")
 
 # ---- arm: the same again, shorter, with the linkage lugs ----------------
@@ -556,19 +566,21 @@ sketch_on(arm, "Bucket Ram Boss").sketch.add_circle((230, 210), 105)
 extrude(arm, arm.features[-1], 240, JOIN)
 box(arm, (200, 100, 180), (130, -50, 150), CUT, label="Clevis Slot")
 
-root_lugs = sketch_on(arm, "Root Lugs")
-root_lugs.sketch.add_circle((150, 200), 95)
-root_lugs.sketch.add_circle((330, 190), 95)
-extrude(arm, root_lugs, 240, JOIN)
-box(arm, (370, 96, 250), (60, -48, 100), CUT, label="Root Clevis Slot")
+# The heel: the arm reaches back past its own pivot, and the arm ram
+# pulls on the end of it.  Without that the ram would have to reach a lug
+# on the near side of the pivot, which means crossing the boom to get to
+# it - and a ram drawn through the boom is the first thing anyone sees.
+heel = sketch_on(arm, "Heel")
+heel.sketch.add_slot((0, 0), (-220, 330), 200)
+extrude(arm, heel, 240, JOIN)
+box(arm, (220, 90, 220), (-330, -45, 220), CUT, label="Heel Clevis")
 
 # the two links straddle this one, so it is narrower than the arm
 sketch_on(arm, "Link Boss").sketch.add_circle((1080, 160), 85)
 extrude(arm, arm.features[-1], 220, JOIN)
 
 drill(arm, "Pin Bores",
-      [(0, 0), (1250, 0), (230, 210), (150, 200), (330, 190), (1080, 160)],
-      diameter=96)
+      [(0, 0), (1250, 0), (230, 210), (-220, 330), (1080, 160)], diameter=96)
 ARM = save(arm, "Arm")
 
 # ---- bucket: a shell cut out of a solid, with an ear plate on the back --
@@ -652,15 +664,29 @@ BIG_RAM = (0.0 + 120, 120.0 + 560)      # the tube the big piston must stay in
 SMALL_RAM = (90.0, 90.0 + 340)
 BIG_ROD, SMALL_ROD = 780.0, 460.0       # rod eye to the back of the piston
 
-# ---- one pin, thirteen joints -------------------------------------------
-pin = new_part(STEEL, "Steel, Polished")
-sketch_on(pin, "Pin").sketch.add_circle((0, 0), 48)
-extrude(pin, pin.features[-1], 380, NEW_BODY, "Pivot Pin")
-for side in (1, -1):
-    sketch_on(pin, "Head", xz_at(side * 202)).sketch.add_circle((0, 0), 62)
-    extrude(pin, pin.features[-1], 22, JOIN, extent="distance",
-            reverse=side < 0)
-PIN = save(pin, "Pivot Pin")
+# ---- two pins, ten joints -----------------------------------------------
+#
+# One pin for every joint sounds tidy until you look at it: the main
+# pivots are held in brackets 380 to 480 wide and the ram eyes in clevises
+# half that, so a pin long enough for the boom stands out of a ram eye by
+# the length of your hand.  Two sizes, and each still does five joints.
+
+
+def pivot_pin(name, radius, length, head_r):
+    doc = new_part(STEEL, "Steel, Polished")
+    sketch_on(doc, "Pin").sketch.add_circle((0, 0), radius)
+    extrude(doc, doc.features[-1], length, NEW_BODY, name)
+    for side in (1, -1):
+        at = length / 2.0 + 22.0
+        sketch_on(doc, "Head", xz_at(side * at)).sketch.add_circle(
+            (0, 0), head_r)
+        extrude(doc, doc.features[-1], 22, JOIN, extent="distance",
+                reverse=side < 0)
+    return save(doc, name)
+
+
+PIN = pivot_pin("Pivot Pin", 48, 360, 62)
+RAM_PIN = pivot_pin("Ram Pin", 40, 240, 52)
 
 # ---- bucket link -------------------------------------------------------
 link = new_part(STEEL, CHARCOAL)
@@ -743,7 +769,7 @@ for side in (1, -1):
     put(TRACK, (0, y, TRACK_R), label="Rubber Track")
     put(SPROCKET, (-TRACK_CENTRES, y, TRACK_R), label="Drive Sprocket")
     put(IDLER, (TRACK_CENTRES, y, TRACK_R), label="Idler Wheel")
-    put(BLADE_ARM, (760, side * 300, 250), label="Blade Arm")
+    put(BLADE_ARM, (680, side * 300, 250), label="Blade Arm")
 put(BLADE, (1370, 0, 40), label="Dozer Blade")
 put(RING, (0, 0, 0), label="Slew Ring")
 
@@ -754,7 +780,7 @@ for path, label in ((HOUSE, "House"), (WEIGHT, "Counterweight"),
                     (SEAT, "Seat"), (STACK, "Exhaust Stack")):
     put(path, (0, 0, 0), label=label, outer=slew)
 
-for y in (120, 600):
+for y in (200, 640):
     put(LIGHT, (596, y, 2138), label="Work Light", outer=slew)
 
 # ---- the boom group, by angle -------------------------------------------
@@ -778,50 +804,39 @@ back = np.asarray(arm_pivot) - np.asarray(ear)
 back = back / math.hypot(back[0], back[2])
 joint = tuple(np.asarray(ear) + back * LINK)
 for side in (1, -1):
-    put(LINK_PLATE, (joint[0], side * 160, joint[2]), aim(joint, ear),
-        "Bucket Link", outer=slew)
+    # 160 either side of the joint, which is not on the centreline: the
+    # whole boom group is offset, so the links follow it
+    put(LINK_PLATE, (joint[0], joint[1] + side * 160, joint[2]),
+        aim(joint, ear), "Bucket Link", outer=slew)
 
 # the rams, each one placed from its two mounts and no other number
 RAMS = [
-    ("Boom Ram", (255, 235, 700), boom_at.apply_point((700, 0, 150)), 235,
-     BARREL, ROD, BIG_RAM, BIG_ROD, 2),
+    ("Boom Ram", (BOOM_RAM_BASE[0], BOOM_PIVOT[1], BOOM_RAM_BASE[1]),
+     boom_at.apply_point((700, 0, 100)), BARREL, ROD, BIG_RAM, BIG_ROD),
     ("Arm Ram", boom_at.apply_point((1350, 0, 700)),
-     arm_at.apply_point((330, 0, 190)), 0, BARREL, ROD, BIG_RAM, BIG_ROD, 1),
-    ("Bucket Ram", arm_at.apply_point((150, 0, 200)), joint, 0,
-     BARREL_S, ROD_S, SMALL_RAM, SMALL_ROD, 1),
+     arm_at.apply_point((-220, 0, 330)), BARREL, ROD, BIG_RAM, BIG_ROD),
+    ("Bucket Ram", arm_at.apply_point((230, 0, 210)), joint,
+     BARREL_S, ROD_S, SMALL_RAM, SMALL_ROD),
 ]
-for label, base, head, offset, barrel_path, rod_path, tube, rodlen, pairs \
-        in RAMS:
+for label, base, head, barrel_path, rod_path, tube, rodlen in RAMS:
     reach = span(base, head)
     piston = reach - rodlen
     fit = "ok" if tube[0] < piston < tube[1] else "OUT OF STROKE"
     print("  %-11s %6.0f mm between eyes, piston %4.0f mm into the tube  %s"
           % (label, reach, piston, fit))
-    for side in ((1, -1) if pairs == 2 else (0,)):
-        y = side * offset
-        at_base = (base[0], y, base[2])
-        at_head = (head[0], y, head[2])
-        put(barrel_path, at_base, aim(at_base, at_head),
-            label + " Barrel", outer=slew)
-        put(rod_path, at_head, aim(at_head, at_base), label + " Rod",
-            outer=slew)
+    put(barrel_path, base, aim(base, head), label + " Barrel", outer=slew)
+    put(rod_path, head, aim(head, base), label + " Rod", outer=slew)
 
-# ---- and the pins, one part, eleven joints ------------------------------
-PINS = [
-    (BOOM_PIVOT, "Boom Pivot"),
-    (arm_pivot, "Arm Pivot"),
-    (bucket_pivot, "Bucket Pivot"),
-    ((255, 280, 700), "Boom Ram Base"),
-    ((255, -280, 700), "Boom Ram Base"),
-    (boom_at.apply_point((700, 0, 150)), "Boom Ram Head"),
-    (boom_at.apply_point((1350, 0, 700)), "Arm Ram Base"),
-    (arm_at.apply_point((330, 0, 190)), "Arm Ram Head"),
-    (arm_at.apply_point((150, 0, 200)), "Bucket Ram Base"),
-    (joint, "Link Joint"),
-    (ear, "Bucket Ear"),
-]
-for where, label in PINS:
+# ---- and the pins: the long one through the brackets, the short one
+# through the ram eyes ----------------------------------------------------
+for where in (BOOM_PIVOT, arm_pivot, bucket_pivot, joint, ear):
     put(PIN, where, label="Pivot Pin", outer=slew)
+for where in ((BOOM_RAM_BASE[0], BOOM_PIVOT[1], BOOM_RAM_BASE[1]),
+              boom_at.apply_point((700, 0, 100)),
+              boom_at.apply_point((1350, 0, 700)),
+              arm_at.apply_point((-220, 0, 330)),
+              arm_at.apply_point((230, 0, 210))):
+    put(RAM_PIN, where, label="Ram Pin", outer=slew)
 
 report = asm.rebuild()
 print("  %s" % report.message)

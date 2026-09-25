@@ -36,7 +36,7 @@ asm = open_any(os.path.join(SRC, "Excavator.adat"))
 report = asm.rebuild()
 check("it rebuilds without error", report.ok and not report.errors,
       report.message)
-check("all 48 components are there", len(asm.occurrences) == 48,
+check("all 45 components are there", len(asm.occurrences) == 45,
       len(asm.occurrences))
 check("every one of them built a shape",
       all(o.shape is not None for o in asm.occurrences),
@@ -44,16 +44,18 @@ check("every one of them built a shape",
 
 counts = collections.Counter(os.path.basename(o.ref.path)
                              for o in asm.occurrences)
-check("24 unique parts", len(counts) == 24, len(counts))
-check("one pin does eleven joints", counts.get("Pivot Pin.pdat") == 11,
-      counts.get("Pivot Pin.pdat"))
+check("25 unique parts", len(counts) == 25, len(counts))
+check("the long pin does the five main pivots",
+      counts.get("Pivot Pin.pdat") == 5, counts.get("Pivot Pin.pdat"))
+check("and the short one the five ram eyes",
+      counts.get("Ram Pin.pdat") == 5, counts.get("Ram Pin.pdat"))
 check("the bucket has its five teeth", counts.get("Bucket Tooth.pdat") == 5,
       counts.get("Bucket Tooth.pdat"))
 
 box = kernel.bounding_box(asm.shape)
 length, height = box[3] - box[0], box[5] - box[2]
-check("it is about 4.7 m over the bucket", 4500 < length < 5000, length)
-check("and about 2.5 m tall", 2300 < height < 2700, height)
+check("it is about 4.4 m over the bucket", 4200 < length < 4700, length)
+check("and about 3.2 m tall", 3000 < height < 3400, height)
 
 
 print()

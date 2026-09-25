@@ -2112,7 +2112,7 @@ class SketchEditor(QtCore.QObject):
         "equal": ("two edges", 2, 0),
         "tangent": ("a line and a circle, or two circles", 2, 0),
         "concentric": ("two circles or arcs", 2, 0),
-        "coincident": ("two points", 0, 2),
+        "coincident": ("two points, or a point and a line", 0, 2),
         "midpoint": ("a point and a line", 1, 1),
         "point_on": ("a point and an edge", 1, 1),
         "symmetric": ("two points and a mirror line", 1, 2),
@@ -2149,6 +2149,12 @@ class SketchEditor(QtCore.QObject):
             return bool(entities or points)
         if kind in ("horizontal", "vertical"):
             return entities >= 1
+        if kind == "coincident":
+            # Inventor's Coincident does two jobs, and people reach for it
+            # expecting both: two points merge, and a point against a curve
+            # lands on it.  Taking only the first left the tool armed and
+            # silent for half of what it was asked to do.
+            return points >= 2 or (points >= 1 and entities >= 1)
         if need_points and need_entities:
             return entities >= need_entities and points >= need_points
         if need_points:
@@ -2193,11 +2199,19 @@ class SketchEditor(QtCore.QObject):
                 for e in ents[1:]:
                     s.add_constraint(kind, entities=[ents[0], e])
             elif kind == "coincident":
-                if len(pts) < 2:
-                    self._complain("Select two points first.")
+                if len(pts) >= 2:
+                    for p in pts[1:]:
+                        s.add_constraint("coincident", points=[pts[0], p])
+                elif len(pts) == 1 and ents:
+                    # a point against a curve is point_on, which is the same
+                    # thing Inventor calls Coincident when one side is an edge
+                    for e in ents:
+                        s.add_constraint("point_on", points=[pts[0]],
+                                         entities=[e])
+                else:
+                    self._complain(
+                        "Select two points, or a point and a line.")
                     return
-                for p in pts[1:]:
-                    s.add_constraint("coincident", points=[pts[0], p])
             elif kind == "midpoint":
                 if len(pts) != 1 or len(ents) != 1:
                     self._complain("Select one point and one line.")

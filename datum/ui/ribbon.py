@@ -253,16 +253,19 @@ class Ribbon(QtWidgets.QWidget):
         self.quick_access.setContentsMargins(0, 0, 0, 0)
         self.quick_access.setSpacing(1)
         qat_layout.addLayout(self.quick_access)
-        qat_layout.addStretch(1)
+        qat_layout.addSpacing(14)
 
         # Material and appearance sit up here rather than in a panel,
         # because what a part is made of is a property of the part and not
-        # a command you run.  Inventor puts them in the same place.
+        # a command you run.  Next to the quick access icons rather than
+        # out on the right, so they are near the rest of the controls
+        # instead of marooned beside the file name.
         self.material_slot = QtWidgets.QHBoxLayout()
         self.material_slot.setContentsMargins(0, 0, 0, 0)
         self.material_slot.setSpacing(0)
         qat_layout.addLayout(self.material_slot)
-        qat_layout.addSpacing(12)
+
+        qat_layout.addStretch(1)
 
         self.document_label = QtWidgets.QLabel("")
         self.document_label.setStyleSheet(

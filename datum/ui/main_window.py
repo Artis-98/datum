@@ -2663,7 +2663,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         made = 0
         for shape in picked:
-            made += self.editor.project_one(shape)
+            made += self.editor.project_one(
+                shape, body=self.document.shape)
         self.viewport.clear_selection()
         self.status_message.setStyleSheet("")
         if made:

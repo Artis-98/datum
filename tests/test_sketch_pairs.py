@@ -302,6 +302,94 @@ check("and the selection mode with it",
 
 
 # ==========================================================================
+print("projected geometry follows the model when the model changes")
+# A projection is a shadow, and a shadow has to move when the thing
+# casting it does.  Otherwise a sketch halfway down a tree goes on
+# describing an outline that is no longer there.
+
+win.new_document()
+pump(4)
+doc = win.document
+doc.params.add("width", "60")
+box = PrimitiveFeature()
+box.kind, box.a, box.b, box.c, box.operation = "box", "width", "40", "20", "new"
+doc.add_feature(box)
+doc.rebuild()
+pump(4)
+
+win.start_sketch_on_plane("XY")
+pump(8)
+edges = kernel.explore(doc.shape, TopAbs_EDGE)
+longest, span = None, 0.0
+for e in edges:
+    bb = kernel.bounding_box(e)
+    if bb[3] - bb[0] > span:
+        longest, span = e, bb[3] - bb[0]
+# OCCT's bounding box is deliberately a shade generous, so this is the
+# loose check that the right edge was found; the exact numbers below come
+# from the sketch itself
+check("the block has a 60 mm edge to project", abs(span - 60.0) < 0.2, span)
+
+ed.project_one(longest, body=doc.shape)
+pump(4)
+sketch = ed.sketch
+check("it was recorded as a projection, not just copied",
+      len(sketch.projections) == 1, len(sketch.projections))
+check("and the record knows which entities it made",
+      sketch.projections[0].entities and
+      set(sketch.projections[0].entities) <= set(sketch.entities),
+      sketch.projections[0].entities)
+
+
+def shadow_span(s):
+    xs = [s.points[p].x for eid in s.entities for p in s.entities[eid].points]
+    return max(xs) - min(xs) if xs else 0.0
+
+
+check("the shadow is 60 wide", abs(shadow_span(sketch) - 60.0) < 1e-6,
+      shadow_span(sketch))
+win.finish_sketch()
+pump(6)
+
+print("widen the block and rebuild")
+doc.params.set_expression("width", "100")
+doc.rebuild()
+pump(6)
+sketch = [f.sketch for f in doc.features if hasattr(f, "sketch")][0]
+check("the block really did widen",
+      abs(kernel.bounding_box(doc.shape)[3] - 100.0) < 1e-6)
+check("and the shadow widened with it",
+      abs(shadow_span(sketch) - 100.0) < 1e-3, shadow_span(sketch))
+check("without being marked out of date",
+      not any(r.stale for r in sketch.projections))
+
+print("narrowing it again brings the shadow back")
+doc.params.set_expression("width", "45")
+doc.rebuild()
+pump(5)
+sketch = [f.sketch for f in doc.features if hasattr(f, "sketch")][0]
+check("it follows downwards too", abs(shadow_span(sketch) - 45.0) < 1e-3,
+      shadow_span(sketch))
+
+print("the entity keeps its identity, so anything drawn to it survives")
+ids_now = set(sketch.projections[0].entities)
+check("the same entity ids are still the projection",
+      ids_now <= set(sketch.entities), (ids_now, set(sketch.entities)))
+
+print("and it all survives the file")
+import tempfile                                                # noqa: E402
+saved = doc.save(os.path.join(tempfile.mkdtemp(), "proj.pdat"))
+from datum.core.document import Document                       # noqa: E402
+again = Document.load(saved)
+again.rebuild()
+back = [f.sketch for f in again.features if hasattr(f, "sketch")][0]
+check("the projection record came back", len(back.projections) == 1,
+      len(back.projections))
+check("and still tracks the model",
+      abs(shadow_span(back) - 45.0) < 1e-3, shadow_span(back))
+
+
+# ==========================================================================
 print()
 if FAILS:
     print("%d FAILED" % len(FAILS))

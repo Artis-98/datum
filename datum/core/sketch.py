@@ -168,6 +168,45 @@ class Entity:
         )
 
 
+@dataclass
+class Projection:
+    """Sketch geometry that is a shadow of the model rather than drawn.
+
+    It has to be re-cast every time the model under it changes, or a
+    sketch halfway down a feature tree goes on describing a shape that is
+    no longer there.  The source is held as a naming.ShapeRef in
+    dictionary form rather than as the object: kernel imports this module
+    for SketchPlane, and naming imports kernel, so importing naming here
+    would close the circle.  features.py has all three and does the
+    rebinding.
+
+    ``entities`` are kept and moved rather than deleted and remade, so a
+    dimension drawn to a projected edge survives the model changing under
+    it.
+    """
+
+    id: int = 0
+    source: Dict[str, Any] = field(default_factory=dict)   # ShapeRef.to_dict
+    entities: List[int] = field(default_factory=list)
+    construction: bool = False
+    # set when the source can no longer be found, so it can be shown as
+    # out of date rather than silently freezing at its last position
+    stale: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"id": self.id, "source": dict(self.source),
+                "entities": list(self.entities),
+                "construction": self.construction, "stale": self.stale}
+
+    @classmethod
+    def from_dict(cls, d: Dict[str, Any]) -> "Projection":
+        return cls(id=int(d.get("id", 0)),
+                   source=dict(d.get("source") or {}),
+                   entities=[int(e) for e in d.get("entities", [])],
+                   construction=bool(d.get("construction", False)),
+                   stale=bool(d.get("stale", False)))
+
+
 # Constraint kinds and how many entities/points/values they take.
 CONSTRAINT_KINDS = (
     "coincident", "horizontal", "vertical", "parallel", "perpendicular",
@@ -242,6 +281,8 @@ class Sketch:
         self.points: Dict[int, SketchPoint] = {}
         self.entities: Dict[int, Entity] = {}
         self.constraints: Dict[int, Constraint] = {}
+        # geometry cast from the model, re-cast whenever it changes
+        self.projections: List[Projection] = []
         self._next_id = 1
         self.dof = 0
         self.solve_message = ""
@@ -1058,6 +1099,7 @@ class Sketch:
                        for p in self.points.values()],
             "entities": [e.to_dict() for e in self.entities.values()],
             "constraints": [c.to_dict() for c in self.constraints.values()],
+            "projections": [p.to_dict() for p in self.projections],
         }
 
     @classmethod
@@ -1074,9 +1116,35 @@ class Sketch:
         for c in data.get("constraints", []):
             con = Constraint.from_dict(c)
             s.constraints[con.id] = con
+        for record in data.get("projections", []):
+            s.projections.append(Projection.from_dict(record))
         s._next_id = int(data.get("next_id", max(
             [1] + list(s.points) + list(s.entities) + list(s.constraints)) + 1))
         return s
+
+    def add_projection(self, source: Dict[str, Any], entities: List[int],
+                       construction: bool = False) -> "Projection":
+        """Record that these entities are a shadow of that bit of model."""
+        record = Projection(id=self._new_id(), source=dict(source or {}),
+                            entities=list(entities),
+                            construction=construction)
+        self.projections.append(record)
+        return record
+
+    def projected_entities(self) -> set:
+        """Every entity that came from the model rather than from a hand."""
+        out = set()
+        for record in self.projections:
+            out.update(record.entities)
+        return out
+
+    def drop_projection(self, entity_id: int) -> None:
+        """Forget a projection once its geometry has been deleted."""
+        for record in list(self.projections):
+            if entity_id in record.entities:
+                record.entities.remove(entity_id)
+                if not record.entities:
+                    self.projections.remove(record)
 
     def copy(self) -> "Sketch":
         return Sketch.from_dict(self.to_dict())

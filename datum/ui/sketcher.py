@@ -103,6 +103,17 @@ TOOL_HINTS = {
 }
 
 
+def _same_shape_index(pool, wanted):
+    """Which entry of ``pool`` is the same piece of geometry as ``wanted``."""
+    for index, candidate in enumerate(pool):
+        try:
+            if candidate.IsSame(wanted):
+                return index
+        except Exception:
+            continue
+    return None
+
+
 def _circle_through(a, b, c):
     """Centre and radius of the circle through three points, or None.
 
@@ -2384,7 +2395,8 @@ class SketchEditor(QtCore.QObject):
         self.clear_selection()
         self._touch()
 
-    def project_one(self, sub_shape, construction: bool = False) -> int:
+    def project_one(self, sub_shape, construction: bool = False,
+                    body=None) -> int:
         """Project a single picked edge or face onto the sketch.
 
         The same flattening the whole-body version does, handed one piece
@@ -2395,18 +2407,47 @@ class SketchEditor(QtCore.QObject):
         if not self.active or sub_shape is None:
             return 0
         self.begin_change()
-        made = self._project_geometry(sub_shape, construction)
+        source = self._reference_for(sub_shape, body)
+        made = self._project_geometry(sub_shape, construction, source)
         if made:
             self._touch()
         else:
             self.discard_change()
         return made
 
+    def _reference_for(self, sub_shape, body):
+        """A ShapeRef dict naming this edge on the body it belongs to.
+
+        Without it the projection is a one-off copy; with it the sketch can
+        find the same edge again after the model has moved and re-cast the
+        shadow onto its new position.
+        """
+        if body is None or sub_shape is None:
+            return None
+        try:
+            from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE
+            from ..core.naming import ShapeRef
+
+            kind = "edge"
+            pool = kernel.explore(body, TopAbs_EDGE)
+            index = _same_shape_index(pool, sub_shape)
+            if index is None:
+                kind = "face"
+                pool = kernel.explore(body, TopAbs_FACE)
+                index = _same_shape_index(pool, sub_shape)
+            if index is None:
+                return None
+            return ShapeRef.capture(pool[index], kind, index,
+                                    within=body).to_dict()
+        except Exception:
+            return None
+
     def project_geometry(self, shape, construction: bool = False) -> int:  # noqa: D401
         self.begin_change()
         return self._project_geometry(shape, construction)
 
-    def _project_geometry(self, shape, construction: bool = False) -> int:
+    def _project_geometry(self, shape, construction: bool = False,
+                          source=None) -> int:
         """Bring model edges onto the sketch plane as real sketch geometry.
 
         Everything is flattened along the plane normal, so an edge sitting at
@@ -2444,6 +2485,11 @@ class SketchEditor(QtCore.QObject):
             for eid in created:
                 for pid in s.entities[eid].points:
                     s.points[pid].fixed = True
+            if source is not None:
+                # remember where it was cast from, so every later rebuild
+                # can cast it again instead of leaving a shadow of a shape
+                # that has since changed
+                s.add_projection(source, created, construction)
             self._touch()
         return len(created)
 

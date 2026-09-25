@@ -283,6 +283,117 @@ class Feature:
 # ==========================================================================
 
 
+def refresh_projections(sketch, shape) -> int:
+    """Re-cast every projected entity on a sketch from the body it came from.
+
+    Projected geometry is a shadow, and a shadow has to move when the thing
+    casting it does.  Without this, widening a block leaves every sketch
+    below it in the tree still drawn around the old outline, and the part
+    quietly stops meaning what it looks like it means.
+
+    The entities are moved rather than deleted and remade, so a dimension
+    drawn to a projected edge survives.  When the source has changed enough
+    that it no longer casts the same number of pieces, the record is marked
+    stale and the old geometry is left alone: showing something out of date
+    and saying so beats silently throwing away work built on top of it.
+    """
+    records = getattr(sketch, "projections", None)
+    if not records:
+        return 0
+
+    refreshed = 0
+    for record in records:
+        if not record.source or not record.entities:
+            continue
+        if shape is None or shape.IsNull():
+            record.stale = True
+            continue
+        try:
+            reference = ShapeRef.from_dict(record.source)
+            found = reference.rebind(shape)
+        except Exception:
+            found = None
+        if found is None:
+            record.stale = True
+            continue
+        # keep the rebound fingerprint, so the next rebuild starts from
+        # where the edge actually is now rather than where it first was
+        record.source = reference.to_dict()
+
+        try:
+            cast = kernel.project_to_plane(found, sketch.plane)
+        except Exception:
+            record.stale = True
+            continue
+
+        if not _reshape(sketch, record, cast):
+            record.stale = True
+            continue
+        record.stale = False
+        refreshed += 1
+    return refreshed
+
+
+def _reshape(sketch, record, cast) -> bool:
+    """Move a projection's entities onto their new positions.
+
+    True when every entity was accounted for.  False means the source now
+    casts a different set of pieces, which the caller reports rather than
+    papering over.
+    """
+    wanted = []
+    for kind, data in cast:
+        if kind == "line":
+            wanted.append(("line", data))
+        elif kind == "circle":
+            wanted.append(("circle", data))
+        elif kind == "arc":
+            wanted.append(("arc", data))
+        elif kind == "polyline":
+            points = data
+            for i in range(len(points) - 1):
+                if math.dist(points[i], points[i + 1]) > 1e-7:
+                    wanted.append(("line", (points[i], points[i + 1])))
+
+    living = [eid for eid in record.entities if eid in sketch.entities]
+    if len(living) != len(wanted) or not wanted:
+        return False
+
+    for eid, (kind, data) in zip(living, wanted):
+        entity = sketch.entities[eid]
+        if kind == "line" and entity.kind == "line":
+            (ax, ay), (bx, by) = data
+            _place(sketch, entity.points[0], ax, ay)
+            _place(sketch, entity.points[1], bx, by)
+        elif kind == "circle" and entity.kind == "circle":
+            (cx, cy), radius = data
+            _place(sketch, entity.points[0], cx, cy)
+            entity.radius = radius
+        elif kind == "arc" and entity.kind == "arc":
+            (cx, cy), radius, a0, a1 = data
+            _place(sketch, entity.points[0], cx, cy)
+            entity.radius = radius
+            entity.start_angle, entity.end_angle = a0, a1
+            for index, angle in ((1, a0), (2, a1)):
+                if index < len(entity.points):
+                    _place(sketch, entity.points[index],
+                           cx + radius * math.cos(angle),
+                           cy + radius * math.sin(angle))
+        else:
+            return False
+    return True
+
+
+def _place(sketch, point_id: int, x: float, y: float) -> None:
+    point = sketch.points.get(point_id)
+    if point is None:
+        return
+    point.x, point.y = float(x), float(y)
+    # projected geometry is reference geometry: the solver is told where it
+    # is rather than asked to work it out
+    point.fixed = True
+
+
 @dataclass
 class SketchFeature(Feature):
     type_name: str = "sketch"
@@ -303,6 +414,11 @@ class SketchFeature(Feature):
                 if derived is not None:
                     derived.name = self.sketch.plane.name
                     self.sketch.plane = derived
+        # Anything projected onto this sketch is a shadow of the body as it
+        # stands at this point in the tree, so it is re-cast here.  Without
+        # this, widening a block leaves every sketch below it still drawn
+        # around the old outline.
+        refresh_projections(self.sketch, ctx.shape)
         self.sketch.solve(ctx.scope)
         ctx.sketches[self.id] = self.sketch
 

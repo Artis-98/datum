@@ -9,9 +9,11 @@ dialog opened.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
+import shutil
 from typing import Any, Dict, List, Optional, Sequence
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -558,6 +560,7 @@ class AssemblyController(QtCore.QObject):
         # (attachment, colour) pairs drawn as normal arrows while a
         # constraint is being placed
         self._arrows: List[Any] = []
+        self._init_extras()
         self._wire()
 
     @property
@@ -569,6 +572,11 @@ class AssemblyController(QtCore.QObject):
         return self.host.viewport
 
     # ------------------------------------------------------------ wiring
+
+    def _init_extras(self) -> None:
+        """State for copy, paste and Save and Replace."""
+        self._clipboard: List[Any] = []
+        self._pending_replace = False
 
     def _wire(self) -> None:
         b = self.browser
@@ -1053,6 +1061,137 @@ class AssemblyController(QtCore.QObject):
                     return False
         return True
 
+    # ------------------------------------------------- copy, paste, replace
+
+    def selected_occurrences(self) -> List[int]:
+        """What is picked, from the tree or from the view, either will do."""
+        return list(self.browser.selected_occurrence_ids()
+                    or self.viewport.selected_components())
+
+    def copy_selected(self) -> None:
+        """Remember what is selected, for pasting."""
+        picked = self.selected_occurrences()
+        doc = self.document
+        if doc is None or not picked:
+            return
+        self._clipboard = []
+        for oid in picked:
+            occurrence = doc.occurrence(oid)
+            if occurrence is not None:
+                self._clipboard.append(
+                    (copy.deepcopy(occurrence.ref),
+                     copy.deepcopy(occurrence.placement)))
+        self.host.status_message.setStyleSheet("")
+        self.host.status_message.setText(
+            "Copied %d component(s)." % len(self._clipboard))
+
+    def paste(self) -> None:
+        """Place another of whatever was copied.
+
+        The copy arrives beside the original rather than exactly on top of
+        it, because two bodies in the same place look like one body and
+        the first thing anybody would do is drag them apart.
+        """
+        doc = self.document
+        if doc is None or not self._clipboard:
+            return
+        doc.push_undo()
+        arrivals = []
+        for ref, placement in self._clipboard:
+            occurrence = Occurrence(
+                id=doc.new_id(), ref=copy.deepcopy(ref),
+                placement=copy.deepcopy(placement),
+                name=doc.unique_name(
+                    os.path.splitext(ref.name or ref.label or "Part")[0]))
+            doc.occurrences.append(occurrence)
+            arrivals.append(occurrence)
+        # the bodies have to be loaded before anything can be set down
+        # beside anything else, so this first rebuild is what measures them
+        doc.rebuild()
+        self._spread(arrivals)
+        doc.modified = True
+        self.rebuild()
+        self.browser.select_occurrences([o.id for o in arrivals])
+        self.host.status_message.setStyleSheet("")
+        self.host.status_message.setText(
+            "Pasted %d component(s)." % len(arrivals))
+
+    def save_and_replace(self, occurrence_id: Optional[int] = None) -> None:
+        """Save a component's file under a new name and point it at that.
+
+        Inventor's own command, and the reason it exists: you paste a
+        second copy of a part, then want that copy to become its own part
+        rather than another instance of the first.  Editing it otherwise
+        changes both.
+
+        Works in either order, like the constraint buttons: with something
+        selected it acts on it, and with nothing selected it waits for the
+        next pick.
+        """
+        doc = self.document
+        if doc is None:
+            return
+        if occurrence_id is None:
+            picked = self.selected_occurrences()
+            if not picked:
+                self.take_over()
+                self._pending_replace = True
+                self.viewport.set_selection_mode("assembly")
+                self.host.status_message.setStyleSheet("")
+                self.host.status_message.setText(
+                    "Save and Replace: click the component to save under a "
+                    "new name. Esc to cancel.")
+                return
+            occurrence_id = picked[0]
+
+        self._pending_replace = False
+        occurrence = doc.occurrence(occurrence_id)
+        if occurrence is None:
+            return
+        source = occurrence.ref.resolve(doc.base_dir) if doc.base_dir else None
+        if source is None or not os.path.exists(source):
+            self.host.status_message.setStyleSheet("color: %s;" % C.error)
+            self.host.status_message.setText(
+                "Cannot find %s to copy." % (occurrence.ref.name
+                                             or occurrence.ref.path))
+            return
+
+        stem, extension = os.path.splitext(os.path.basename(source))
+        suggested = os.path.join(os.path.dirname(source),
+                                 "%s Copy%s" % (stem, extension))
+        target, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self.host, "Save and Replace", suggested,
+            "Parts and assemblies (*.pdat *.adat);;All files (*)")
+        if not target:
+            return
+        if os.path.normcase(os.path.abspath(target)) == \
+                os.path.normcase(os.path.abspath(source)):
+            QtWidgets.QMessageBox.information(
+                self.host, "Save and Replace",
+                "That is the file it already uses. Pick a different name.")
+            return
+
+        try:
+            shutil.copy2(source, target)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self.host, "Save and Replace",
+                                          str(exc))
+            return
+
+        doc.push_undo()
+        base = doc.base_dir
+        occurrence.ref.path = (fileformat.relative_path(target, base)
+                               if base else target)
+        occurrence.ref.name = os.path.basename(target)
+        occurrence.ref.label = os.path.splitext(os.path.basename(target))[0]
+        occurrence.name = doc.unique_name(occurrence.ref.label)
+        doc.modified = True
+        doc.library.forget(source)
+        self.rebuild()
+        self.host.status_message.setStyleSheet("")
+        self.host.status_message.setText(
+            "%s now uses %s." % (occurrence.name, os.path.basename(target)))
+
     def take_over(self) -> None:
         """Start something new, and stop whatever was already running.
 
@@ -1090,6 +1229,12 @@ class AssemblyController(QtCore.QObject):
             dialog.close()
 
     def on_selection(self) -> bool:
+        if self._pending_replace:
+            picked = self.viewport.selected_components()
+            if picked:
+                self._pending_replace = False
+                self.save_and_replace(picked[0])
+                return True
         if isinstance(self.dialog, ConstraintDialog):
             if self.dialog.on_selection():
                 return True
@@ -1097,6 +1242,14 @@ class AssemblyController(QtCore.QObject):
         if picked:
             self.browser.select_occurrences(picked[:1])
             self._occurrence_selected(picked[0])
+        return False
+
+    def cancel_pending(self) -> bool:
+        """Drop a command that was waiting for a pick.  True if there was one."""
+        if self._pending_replace:
+            self._pending_replace = False
+            self.host.status_message.setText("")
+            return True
         return False
 
     def on_escape(self) -> bool:

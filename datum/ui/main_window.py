@@ -391,6 +391,13 @@ class MainWindow(QtWidgets.QMainWindow):
                             ).clicked.connect(
                 lambda _=False, k=kind: self.assembly_ui.constrain(k))
 
+        panel = assemble.add_panel("Productivity")
+        panel.add_big("save", "Save and\nReplace",
+                      "Save this component's file under a new name and "
+                      "point the assembly at the copy"
+                      ).clicked.connect(
+            lambda: self.assembly_ui.save_and_replace())
+
         panel = assemble.add_panel("Manage")
         panel.add_small("rollback", "Update All",
                         "Reload every component from disk"
@@ -723,6 +730,8 @@ class MainWindow(QtWidgets.QMainWindow):
                                else None))
         add("Ctrl+U", self.local_update)
         add("Ctrl+W", lambda: self.close_entry(self.session.active))
+        add("Ctrl+C", self._copy_shortcut)
+        add("Ctrl+V", self._paste_shortcut)
         add("Ctrl+Tab", lambda: self.cycle_documents(1))
         add("Ctrl+Shift+Tab", lambda: self.cycle_documents(-1))
         add("D", lambda: self.set_sketch_tool("dimension"))
@@ -730,6 +739,14 @@ class MainWindow(QtWidgets.QMainWindow):
         # Return is deliberately NOT an application shortcut: it belongs to
         # whatever is being typed into, and an app-wide one swallowed it
         # before the sketcher's heads-up fields ever saw it.
+
+    def _copy_shortcut(self) -> None:
+        if self.in_assembly:
+            self.assembly_ui.copy_selected()
+
+    def _paste_shortcut(self) -> None:
+        if self.in_assembly:
+            self.assembly_ui.paste()
 
     def _place_shortcut(self) -> None:
         if self.in_cam:

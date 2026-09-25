@@ -164,6 +164,73 @@ for wanted in ("Grounded", "Visible", "Suppressed", "Open Part", "Delete"):
 
 
 # ==========================================================================
+print("copy and paste a component")
+
+import harness as _h                                           # noqa: E402
+
+before = len(doc.occurrences)
+ui.browser.selected_occurrence_ids = lambda: [first.id]
+ui.copy_selected()
+check("something went on the clipboard", len(ui._clipboard) == 1,
+      len(ui._clipboard))
+
+ui.paste()
+pump(5)
+check("pasting added one", len(doc.occurrences) == before + 1,
+      (before, len(doc.occurrences)))
+pasted = doc.occurrences[-1]
+check("the copy points at the same file",
+      pasted.ref.name == first.ref.name, (pasted.ref.name, first.ref.name))
+check("but has a name of its own", pasted.name != first.name,
+      (pasted.name, first.name))
+check("and it is not sitting exactly on the original",
+      list(pasted.placement.position) != list(first.placement.position),
+      (pasted.placement.position, first.placement.position))
+
+print("pasting again gives a third, not a duplicate name")
+ui.paste()
+pump(5)
+names = [o.name for o in doc.occurrences]
+check("every name is still unique", len(names) == len(set(names)), names)
+
+
+# ==========================================================================
+print("Save and Replace points a component at its own copy")
+
+target = os.path.join(WORK, "block copy.pdat")
+if os.path.exists(target):
+    os.remove(target)
+
+# answer the file dialog with our path, the way the person would
+real = QtWidgets.QFileDialog.getSaveFileName
+QtWidgets.QFileDialog.getSaveFileName = staticmethod(
+    lambda *a, **k: (target, ""))
+try:
+    was = pasted.ref.name
+    ui.save_and_replace(pasted.id)
+    pump(5)
+finally:
+    QtWidgets.QFileDialog.getSaveFileName = real
+
+check("the new file was written", os.path.exists(target))
+check("and the component now uses it",
+      pasted.ref.name == os.path.basename(target), pasted.ref.name)
+check("while the original is untouched",
+      first.ref.name == was, (first.ref.name, was))
+check("the copy is a real part file",
+      os.path.getsize(target) == os.path.getsize(BLOCK),
+      (os.path.getsize(target), os.path.getsize(BLOCK)))
+
+print("asked for with nothing selected, it waits for a pick")
+ui.browser.selected_occurrence_ids = lambda: []
+win.viewport.selected_components = lambda: []
+ui.save_and_replace()
+check("it is waiting", ui._pending_replace)
+check("and Escape lets go of it", ui.cancel_pending())
+check("with nothing left pending", not ui._pending_replace)
+
+
+# ==========================================================================
 print()
 if FAILS:
     print("%d FAILED" % len(FAILS))

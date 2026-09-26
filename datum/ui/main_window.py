@@ -687,6 +687,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, rules_dock)
         self.splitDockWidget(rules_dock, dock, QtCore.Qt.Vertical)
         rules_dock.hide()
+        rules_dock.visibilityChanged.connect(self._rules_dock_shown)
         self.rules_dock = rules_dock
 
         # The Properties panel used to sit under the tree taking a third
@@ -1147,6 +1148,7 @@ class MainWindow(QtWidgets.QMainWindow):
                     if entry.doc_type == fileformat.CAM else None)
         self.drawing = (entry.document
                         if entry.doc_type == fileformat.DRAWING else None)
+        self.rules_panel.set_document(entry.document)
 
         self._set_workspace(entry.doc_type)
         self.show_model()
@@ -2867,11 +2869,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.assembly_panel.sync()
                 self.browser_dock.setWindowTitle("Assembly")
         self._material_changed()
+        self.rules_panel.set_document(document)
         if not is_assembly and self._ghosts:
             # last, after the part is drawn and the strip has caught up:
             # anything that redraws the body afterwards takes the ghosts'
             # transparency with it
             self.viewport.set_components(self._ghosts, keep_camera=True)
+
+    def _rules_dock_shown(self, visible: bool) -> None:
+        if visible:
+            self.rules_panel.set_document(self.active_document)
 
     def show_rules(self) -> None:
         """Open the dLogic panel on whatever document is in front."""

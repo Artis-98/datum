@@ -196,7 +196,7 @@ check("back to the assembly", win.in_assembly)
 check("the Assemble tab is showing",
       win.ribbon.current_tab() == TAB_ASSEMBLE, win.ribbon.current_tab())
 check("the component tree is in the dock",
-      win.browser_stack.currentWidget() is win.assembly_ui.browser)
+      win.browser_stack.currentWidget() is win.assembly_panel)
 
 print("each document remembers its own view")
 win.activate(block_entry)

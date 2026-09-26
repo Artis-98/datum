@@ -405,6 +405,61 @@ check("and the assembly is built from the edited part",
 
 
 # ==========================================================================
+print("the tree keeps the assembly while a part inside it is edited")
+
+from datum.ui.assembly_browser import ROLE_KIND, ROLE_ID, ROLE_OWNER  # noqa
+
+# step back in: the section above ended by returning to the assembly
+first = win.assembly.occurrences[0]
+held = len(win.assembly.occurrences)
+win.edit_in_place(first.id)
+pump(8)
+
+tree = win.assembly_ui.browser
+rows = [tree.topLevelItem(0).child(i)
+        for i in range(tree.topLevelItem(0).childCount())]
+kinds = [r.data(0, ROLE_KIND) for r in rows]
+check("every component is still in the tree",
+      kinds.count("occurrence") == held, kinds)
+check("it switched to the Modeling view", tree.mode == "modeling", tree.mode)
+check("and knows which component is live",
+      tree.active == first.id, tree.active)
+
+live = next(r for r in rows if r.data(0, ROLE_ID) == first.id)
+feature_rows = [live.child(i) for i in range(live.childCount())]
+check("the live part shows its features in place",
+      [r.data(0, ROLE_KIND) for r in feature_rows] == ["feature"],
+      [r.data(0, ROLE_KIND) for r in feature_rows])
+check("and they know which component they belong to",
+      feature_rows[0].data(0, ROLE_OWNER) == first.id if feature_rows else False)
+check("only the live one is unfolded",
+      all(not r.isExpanded() for r in rows
+          if r.data(0, ROLE_KIND) == "occurrence"
+          and r.data(0, ROLE_ID) != first.id))
+
+opened = []
+tree.feature_activated.connect(opened.append)
+tree._double_clicked(feature_rows[0], 0)
+check("double-clicking a feature of the live part opens it",
+      opened == [feature_rows[0].data(0, ROLE_ID)], opened)
+
+other = next((r for r in rows if r.data(0, ROLE_KIND) == "occurrence"
+              and r.data(0, ROLE_ID) != first.id), None)
+if other is not None and other.childCount():
+    stepped = []
+    tree.occurrence_activated.connect(stepped.append)
+    tree._double_clicked(other.child(0), 0)
+    check("and one belonging to another part activates that part instead",
+          stepped == [other.data(0, ROLE_ID)], stepped)
+
+win.finish_in_place()
+pump(8)
+check("Return puts the tree back to the Assembly view",
+      tree.mode == "assembly" and tree.active is None,
+      (tree.mode, tree.active))
+
+
+# ==========================================================================
 print("and down through a sub-assembly, one level at a time")
 
 from datum.core.assembly import AssemblyDocument                # noqa: E402

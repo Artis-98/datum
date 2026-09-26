@@ -430,7 +430,7 @@ QProgressBar::chunk {{ background: {accent}; }}
 
 
 def stylesheet() -> str:
-    return STYLESHEET.format(
+    return BROWSER_MODE_CSS + STYLESHEET.format(
         font=FONT_STACK,
         window=C.window,
         ribbon=C.ribbon,
@@ -448,6 +448,19 @@ def stylesheet() -> str:
         on_accent=C.on_accent,
         error=C.error,
     )
+
+
+BROWSER_MODE_CSS = """
+#BrowserModeBar { background: %(panel)s;
+                  border-bottom: 1px solid %(border)s; }
+#BrowserModeTab { color: %(dim)s; background: transparent; border: none;
+                  border-bottom: 2px solid transparent;
+                  padding: 3px 10px 4px 10px; font-size: 11px; }
+#BrowserModeTab:hover { color: %(text)s; }
+#BrowserModeTab:checked { color: %(text)s;
+                          border-bottom: 2px solid %(accent)s; }
+""" % {"panel": C.panel, "border": C.border, "dim": C.text_dim,
+       "text": C.text, "accent": C.accent}
 
 
 # --------------------------------------------------------------- overrides

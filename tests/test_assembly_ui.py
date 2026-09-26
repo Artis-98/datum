@@ -131,8 +131,11 @@ check("the 3D Model tab is put away",
       not win.ribbon._buttons[TAB_MODEL].isVisible())
 check("every assembly tab is offered",
       all(win.ribbon._buttons[t].isVisible() for t in ASSEMBLY_TABS))
+# the tree now sits inside a panel carrying the Assembly and Modeling
+# tabs above it, the way Inventor's browser does
 check("the browser shows the component tree",
-      win.browser_stack.currentWidget() is win.assembly_ui.browser)
+      win.browser_stack.currentWidget() is win.assembly_panel
+      and win.assembly_panel.tree is win.assembly_ui.browser)
 check("the dock is retitled", win.browser_dock.windowTitle() == "Assembly",
       win.browser_dock.windowTitle())
 check("the part body is off screen", win.viewport.model_ais is None)

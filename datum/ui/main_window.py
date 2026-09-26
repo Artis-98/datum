@@ -29,6 +29,7 @@ from ..core.naming import RefSet, ShapeRef
 from ..core.sketch import STANDARD_PLANES, Sketch, SketchPlane
 from . import dialogs, icons
 from . import doctabs, session, updater
+from .assembly_browser import AssemblyBrowserPanel
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
 from .cam_ui import CamController
@@ -651,7 +652,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.browser = ModelBrowser(self)
         self.browser_stack = QtWidgets.QStackedWidget(self)
         self.browser_stack.addWidget(self.browser)
-        self.browser_stack.addWidget(self.assembly_ui.browser)
+        self.assembly_panel = AssemblyBrowserPanel(
+            self.assembly_ui.browser, self)
+        self.assembly_ui.browser.document_for = self.component_document
+        self.assembly_ui.browser.feature_activated.connect(self.edit_feature)
+        self.browser_stack.addWidget(self.assembly_panel)
         self.browser_stack.addWidget(self.cam_ui.browser)
         self.browser_stack.addWidget(self.drawing_ui.browser)
 
@@ -1061,7 +1066,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ribbon.set_tab_visible(TAB_SKETCH, False)
         self.ribbon.show_tab(wanted[0])
 
-        browser = {fileformat.ASSEMBLY: self.assembly_ui.browser,
+        browser = {fileformat.ASSEMBLY: self.assembly_panel,
                    fileformat.CAM: self.cam_ui.browser,
                    fileformat.DRAWING: self.drawing_ui.browser}.get(
                        doc_type, self.browser)
@@ -2623,6 +2628,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.in_place = []          # the levels descended, deepest last
         self._in_place_docs = {}    # path -> the document opened in place
+        self._browse_docs = {}      # path -> a document we only read
         self._ghosts = []           # what to draw around whatever is open
         self._in_place_panels = []
         for title in (TAB_MODEL, TAB_ASSEMBLE):
@@ -2711,6 +2717,11 @@ class MainWindow(QtWidgets.QMainWindow):
         level = self.in_place.pop()
         self._ghosts = level["ghosts"]
         parent = level["document"]
+        # back out of the part: the component stops being the live one and
+        # the tree goes back to showing what holds things together
+        self.assembly_ui.browser.set_active(None)
+        self.assembly_ui.browser.set_mode("assembly")
+        self.assembly_panel.sync()
 
         self._show_in_place(parent)
         if self.in_assembly:
@@ -2749,6 +2760,26 @@ class MainWindow(QtWidgets.QMainWindow):
                 document.library.provider = self._shape_provider
         document.rebuild()
         self._in_place_docs[key] = document
+        return document
+
+    def component_document(self, path: str):
+        """The document behind a component, for listing what it is made of.
+
+        Cached, because the Modeling view asks for every component and an
+        assembly of any size would otherwise re-read the same files on
+        every refresh. A file that will not open gives nothing back rather
+        than taking the tree down.
+        """
+        key = os.path.normcase(os.path.abspath(path))
+        held = self._in_place_docs.get(key) or self._browse_docs.get(key)
+        if held is not None:
+            return held
+        try:
+            document = assembly_core.open_any(path)
+            document.rebuild()
+        except Exception:
+            return None
+        self._browse_docs[key] = document
         return document
 
     def _shape_provider(self, path: str):
@@ -2792,13 +2823,25 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_in_place()
 
         if is_assembly:
+            self.assembly_ui.browser.set_active(None)
             self.assembly_ui.browser.set_document(self.assembly)
             self.assembly_ui.ghosts = self._ghosts
             self.assembly_ui.rebuild()
         else:
             self.assembly_ui.ghosts = []
-            self.browser.set_document(self.document)
             self.rebuild(keep_camera=True)
+            # The tree does not change when you step into a part: the
+            # assembly stays, the part is bolted inside it, and its
+            # features are the ones that open. Swapping the whole browser
+            # for the part's own tree is what made everything else
+            # disappear.
+            if self.in_place:
+                level = self.in_place[-1]
+                self.assembly_ui.browser.set_document(level["document"])
+                self.assembly_ui.browser.set_active(level["occurrence"])
+                self.browser_stack.setCurrentWidget(self.assembly_panel)
+                self.assembly_panel.sync()
+                self.browser_dock.setWindowTitle("Assembly")
         self._material_changed()
         if not is_assembly and self._ghosts:
             # last, after the part is drawn and the strip has caught up:

@@ -18,6 +18,9 @@ from .theme import C
 
 ROLE_ID = QtCore.Qt.UserRole + 1
 ROLE_KIND = QtCore.Qt.UserRole + 2
+# which component a feature row belongs to, so a click on one knows
+# whether it is looking at the part that is currently being edited
+ROLE_OWNER = QtCore.Qt.UserRole + 3
 
 ORIGIN_PLANES = (("XY Plane", "XY"), ("XZ Plane", "XZ"), ("YZ Plane", "YZ"))
 
@@ -27,6 +30,7 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
 
     occurrence_selected = QtCore.Signal(int)
     occurrence_activated = QtCore.Signal(int)        # double-click -> open part
+    feature_activated = QtCore.Signal(int)           # a feature of the live part
     occurrence_delete_requested = QtCore.Signal(int)
     occurrence_rename_requested = QtCore.Signal(int, str)
     ground_toggled = QtCore.Signal(int)
@@ -56,6 +60,15 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
 
         self.customContextMenuRequested.connect(self._menu)
         self.itemDoubleClicked.connect(self._double_clicked)
+        # Assembly or Modeling: what a component expands into
+        self.mode = "assembly"
+        # the component being edited in place, bolded and the only one
+        # whose features can be opened
+        self.active = None
+        self.active_path = ""
+        # hands back the document behind a component path, so Modeling has
+        # something to list.  The assembly only ever loaded the shapes.
+        self.document_for = None
         self.itemSelectionChanged.connect(self._selection_changed)
 
         self._doc: Optional[AssemblyDocument] = None
@@ -63,6 +76,29 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
         self.hidden_planes: set = {"XY", "XZ", "YZ"}
 
     # ------------------------------------------------------------- building
+
+    def set_mode(self, mode: str) -> None:
+        """Assembly or Modeling, which is what a component expands into.
+
+        Inventor's two views of the same tree: in Assembly you see what
+        holds a component in place, in Modeling you see what it is made
+        of. Same components either way, which is the point - the tree
+        does not change shape when you step into a part.
+        """
+        if mode == self.mode:
+            return
+        self.mode = mode
+        self.refresh()
+
+    def set_active(self, occurrence_id, path: str = "") -> None:
+        """Mark the component being edited, the way Inventor bolds it."""
+        if (occurrence_id, path) == (self.active, self.active_path):
+            return
+        self.active = occurrence_id
+        self.active_path = path
+        if occurrence_id is not None:
+            self.mode = "modeling"
+        self.refresh()
 
     def set_document(self, doc: AssemblyDocument) -> None:
         self._doc = doc
@@ -138,6 +174,16 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
             elif occurrence.grounded:
                 item.setForeground(0, QtGui.QBrush(QtGui.QColor(C.ok)))
 
+            if occurrence.id == self.active:
+                f = item.font(0)
+                f.setBold(True)
+                item.setFont(0, f)
+                item.setForeground(0, QtGui.QBrush(QtGui.QColor(C.accent)))
+
+            if self.mode == "modeling":
+                self._add_features(item, occurrence)
+                continue
+
             for constraint in doc.constraints_on(occurrence.id):
                 child = QtWidgets.QTreeWidgetItem(item, [constraint.name])
                 child.setIcon(0, icons.icon(constraint.icon, 16))
@@ -160,12 +206,73 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
 
         self.expandItem(root)
         self._restore_expansion()
+        self._focus_active()
         self.blockSignals(False)
 
         self.select_occurrences(selected)
         self.verticalScrollBar().setValue(scroll)
 
+    def _add_features(self, item, occurrence) -> None:
+        """The component's own feature tree, hung under it.
+
+        Read from the part's document, which somebody has to hand us: the
+        assembly itself only ever loaded the shapes. A component whose
+        document will not open simply has nothing under it rather than
+        taking the tree down with it.
+        """
+        doc = self._doc
+        if doc is None or self.document_for is None:
+            return
+        path = doc.component_path(occurrence)
+        if not path:
+            return
+        part = self.document_for(path)
+        features = list(getattr(part, "features", ()) or ())
+        if not features:
+            return
+
+        live = occurrence.id == self.active
+        for feature in features:
+            child = QtWidgets.QTreeWidgetItem(item, [feature.name])
+            child.setIcon(0, icons.icon(getattr(feature, "icon", "feature"),
+                                        16))
+            child.setData(0, ROLE_ID, feature.id)
+            child.setData(0, ROLE_KIND, "feature")
+            child.setData(0, ROLE_OWNER, occurrence.id)
+            child.setToolTip(0, feature.summary())
+            if getattr(feature, "suppressed", False):
+                f = child.font(0)
+                f.setItalic(True)
+                child.setFont(0, f)
+            if not live:
+                # visible, but not yours to change until the part is
+                # activated, which is the rule Inventor enforces too
+                child.setForeground(0, QtGui.QBrush(QtGui.QColor(C.text_dim)))
+
     # -- expansion is remembered so a rebuild does not fold the tree up -----
+
+    def _focus_active(self) -> None:
+        """Open the component being edited, and fold the others away.
+
+        A tree with every component's features open at once is a tree
+        nobody can read. Only the part you stepped into is unfolded, which
+        is where you are working and the only place you can change
+        anything anyway.
+        """
+        if self.active is None:
+            return
+        target = None
+        for item in self._iter_items():
+            if item.data(0, ROLE_KIND) != "occurrence":
+                continue
+            if item.data(0, ROLE_ID) == self.active:
+                target = item
+                self.expandItem(item)
+            else:
+                self.collapseItem(item)
+        if target is not None:
+            self.scrollToItem(target,
+                              QtWidgets.QAbstractItemView.PositionAtCenter)
 
     def _key(self, item: QtWidgets.QTreeWidgetItem) -> str:
         return "%s:%s" % (item.data(0, ROLE_KIND), item.data(0, ROLE_ID))
@@ -219,6 +326,15 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
     def _double_clicked(self, item: QtWidgets.QTreeWidgetItem,
                         _col: int) -> None:
         kind = item.data(0, ROLE_KIND)
+        if kind == "feature":
+            if item.data(0, ROLE_OWNER) == self.active:
+                self.feature_activated.emit(int(item.data(0, ROLE_ID)))
+            else:
+                # the part has to be activated first, which is what
+                # double-clicking the component itself does
+                self.occurrence_activated.emit(
+                    int(item.data(0, ROLE_OWNER)))
+            return
         if kind == "occurrence":
             self.occurrence_activated.emit(int(item.data(0, ROLE_ID)))
         elif kind == "constraint":
@@ -338,3 +454,59 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
                     self._rename(ids[0], occurrence.label)
             return
         super().keyPressEvent(event)
+
+
+class AssemblyBrowserPanel(QtWidgets.QWidget):
+    """The assembly tree, with Inventor's two ways of looking at it.
+
+    Assembly and Modeling are not two trees. They are the same components
+    in the same order, and only what a component expands into changes: the
+    relationships that hold it, or the features it is made of. That is why
+    stepping into a part does not make the rest of the assembly vanish -
+    the tree never went anywhere.
+    """
+
+    MODES = (("assembly", "Assembly"), ("modeling", "Modeling"))
+
+    def __init__(self, tree, parent=None) -> None:
+        super().__init__(parent)
+        self.tree = tree
+        tree.setParent(self)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        bar = QtWidgets.QWidget(self)
+        bar.setObjectName("BrowserModeBar")
+        bar.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        row = QtWidgets.QHBoxLayout(bar)
+        row.setContentsMargins(6, 2, 6, 0)
+        row.setSpacing(2)
+
+        self.buttons = {}
+        for key, label in self.MODES:
+            button = QtWidgets.QToolButton(bar)
+            button.setObjectName("BrowserModeTab")
+            button.setText(label)
+            button.setCheckable(True)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.clicked.connect(
+                lambda _=False, k=key: self.set_mode(k))
+            row.addWidget(button)
+            self.buttons[key] = button
+        row.addStretch(1)
+
+        layout.addWidget(bar)
+        layout.addWidget(tree, 1)
+        self.set_mode(tree.mode)
+
+    def set_mode(self, key: str) -> None:
+        for name, button in self.buttons.items():
+            button.setChecked(name == key)
+        self.tree.set_mode(key)
+
+    def sync(self) -> None:
+        """Follow the tree, which the application may have switched."""
+        for name, button in self.buttons.items():
+            button.setChecked(name == self.tree.mode)

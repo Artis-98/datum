@@ -568,9 +568,9 @@ the target machine wants 2D paths and does its own depth passes.
 ## Releasing
 
 DATUM itself is about four megabytes of Python. The runtime under it is
-571 MB, which is what a 0.2.0 build measures: 264 MB of VTK, 155 MB of
+569 MB, which is what a 0.2.1 build measures: 264 MB of VTK, 155 MB of
 OpenCASCADE, 91 MB of Qt after the exclude list has taken it down from
-641, and 21 MB of numpy. The installer compresses that to 106 MB.
+641, and 26 MB of numpy. The installer compresses that to 106 MB.
 
 That decides how releases work. Shipping the whole application again for
 every fix would be a 571 MB download to change a line, and nobody would

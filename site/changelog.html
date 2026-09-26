@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.0</span></div>
+        <span id="live-version">Latest: 0.2.1</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.0/DATUM-0.2.0-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.1/DATUM-0.2.1-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -61,9 +61,67 @@
 
     <div class="release current">
       <div class="head">
+        <span class="ver">0.2.1</span>
+        <span class="when">26 September 2026</span>
+        <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        Materials and appearances, a long list of things that were wrong
+        with sketching and assemblies, and somewhere to put your name.
+      </p>
+      <ul>
+        <li><strong>Materials and appearances, kept apart.</strong> A
+          material is what a part is made of and decides what it weighs;
+          an appearance is what it looks like and changes not one gram.
+          Both are libraries you can edit, with 18 materials and 30
+          appearances to start from, and anything you make is saved
+          beside your settings where an update cannot take it away.
+          Pick them from the top-left of the window. In an assembly the
+          picker follows the selected component and writes the material
+          into that part's own file, so every assembly using it agrees
+          about what it is.</li>
+        <li><strong>Sketching that behaves.</strong> Coincident now takes
+          a point and a line, or a point and the middle of a line, not
+          only two points. A dimension between a line and a point
+          measures across to it, and between two lines gives a distance
+          when they are parallel and an angle when they are not.</li>
+        <li><strong>Project Geometry takes the edges you point at</strong>
+          rather than the whole body, and projected edges now follow the
+          model: change a dimension near the top of the tree and the
+          sketches below it move with it instead of staying where the old
+          shape used to be.</li>
+        <li><strong>The SpaceMouse works inside a sketch</strong>, which
+          it did not before.</li>
+        <li><strong>Assemblies.</strong> Drag an unconstrained component
+          with the mouse and no tool at all. Copy and paste. Open Part,
+          suppress, ground and delete from the right-click menu.
+          Save and Replace a component in one step. Box selection in both
+          directions, blue for what is fully inside and green for
+          anything the box touches, and Delete acts on whatever is picked
+          without asking first.</li>
+        <li><strong>Preferences.</strong> Your name, initials and company,
+          stamped onto every new part, assembly and drawing, where the
+          title block and the parts list already knew to ask. Document
+          properties - title, part number, designer, revision - are
+          editable in the Properties window. The viewport background and
+          the sketch line colours are yours to change, and stay out of
+          the files you send anybody.</li>
+        <li><strong>An excavator to look at.</strong> A second worked
+          example ships with the source: 26 parts and 48 components, with
+          a linkage whose links are cut to fit the pose. The plywood tote
+          stays, because it is the one that goes all the way to a DXF.</li>
+        <li><strong>Smaller things.</strong> Ribbon panels are separated
+          the way Inventor separates them. The Properties dock no longer
+          takes a third of the tree. A part's sketches no longer follow it
+          into an assembly view. Materials you made yourself are loaded at
+          startup, which they were not.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
         <span class="ver">0.2.0</span>
         <span class="when">23 September 2026</span>
-        <span class="badge">current</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         The first public release. Everything below is what DATUM can do
@@ -119,12 +177,12 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.0/DATUM-0.2.0-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.1/DATUM-0.2.1-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>
         </svg>
-        DATUM <span id="latest-ver">0.2.0</span> for Windows
+        DATUM <span id="latest-ver">0.2.1</span> for Windows
       </a>
     </div>
   </div>

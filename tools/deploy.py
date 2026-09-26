@@ -365,7 +365,21 @@ def do_prune(keep: int, confirmed: bool) -> int:
     return 0
 
 
-def do_push(target: str, local: str, remote: str, force: bool) -> int:
+def staged_only(relative: str) -> bool:
+    """Whether a staged file is payload, or a note meant for a person.
+
+    The staging folders already draw this line: a leading underscore on a
+    top-level entry means read me, not upload me - _READ-ME-FIRST.txt,
+    _RUN-THIS-FIRST.sql, _UPLOAD-AUTH.md, which is a page about generating
+    a secret. Those belong nowhere near a public web root, and neither do
+    the zips kept beside them.
+    """
+    first = relative.split("/")[0]
+    return not (first.startswith("_") or relative.lower().endswith(".zip"))
+
+
+def do_push(target: str, local: str, remote: str, force: bool,
+            everything: bool = False) -> int:
     """Upload any folder to any target.
 
     The release and the website have commands of their own because they
@@ -378,12 +392,19 @@ def do_push(target: str, local: str, remote: str, force: bool) -> int:
         fail("%s is not a folder" % local)
     under = remote.strip("/")
     pairs = []
+    held_back = 0
     for base, _dirs, files in os.walk(local):
         for name in sorted(files):
             full = os.path.join(base, name)
             rel = os.path.relpath(full, local).replace(os.sep, "/")
+            if not everything and not staged_only(rel):
+                held_back += 1
+                continue
             pairs.append((full, "%s/%s" % (under, rel) if under else rel))
     say("%d file(s) from %s" % (len(pairs), local))
+    if held_back:
+        say("%d left behind as notes rather than payload (--all sends them)"
+            % held_back)
 
     where = settings(target)
     link = Link(where)
@@ -555,6 +576,8 @@ def main() -> int:
     four.add_argument("local")
     four.add_argument("remote", nargs="?", default="")
     four.add_argument("--force", action="store_true")
+    four.add_argument("--all", action="store_true",
+                      help="send the _ notes and .zip files too")
 
     five = sub.add_parser("ls", help="list a folder on the server")
     five.add_argument("target")
@@ -569,7 +592,8 @@ def main() -> int:
     elif args.what == "prune":
         code = do_prune(args.keep, args.yes)
     elif args.what == "push":
-        code = do_push(args.target, args.local, args.remote, args.force)
+        code = do_push(args.target, args.local, args.remote, args.force,
+                       args.all)
     elif args.what == "ls":
         code = do_ls(args.target, args.remote)
     else:

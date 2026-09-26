@@ -37,7 +37,15 @@ from datum.core import update                                  # noqa: E402
 RELEASE = os.path.join(ROOT, "release")
 DIST = os.path.join(ROOT, "dist", "DATUM")
 INIT = os.path.join(ROOT, "datum", "__init__.py")
-KEY = os.path.join(RELEASE, "signing-key.pem")
+# Deliberately NOT inside release/.  That folder is what gets copied to
+# the server, and a private signing key that goes up with it lets anybody
+# sign an update that every installed copy will accept and install without
+# asking.  It lives with the user's own files instead, and the old place
+# is still read so an existing key keeps working - loudly.
+from datum.core import prefs                                   # noqa: E402
+
+KEY = prefs.config_path("signing-key.pem")
+LEGACY_KEY = os.path.join(RELEASE, "signing-key.pem")
 INNO = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs",
                     "Inno Setup 6", "ISCC.exe")
 
@@ -109,7 +117,7 @@ def make_key() -> None:
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
         Ed25519PrivateKey)
 
-    os.makedirs(RELEASE, exist_ok=True)
+    os.makedirs(os.path.dirname(KEY), exist_ok=True)
     if os.path.exists(KEY):
         fail("%s already exists.  Rotating the key means every installed "
              "copy stops accepting updates until it is reinstalled, so "
@@ -136,6 +144,12 @@ def load_key():
     from cryptography.hazmat.primitives import serialization
 
     path = os.environ.get("DATUM_SIGNING_KEY") or KEY
+    if not os.path.exists(path) and os.path.exists(LEGACY_KEY):
+        path = LEGACY_KEY
+        say("WARNING: the signing key is inside release/, which is the "
+            "folder you upload.")
+        say("         Move it to %s" % KEY)
+        say("         and make sure no copy of it ever reaches the server.")
     if not os.path.exists(path):
         return None
     with open(path, "rb") as handle:
@@ -338,12 +352,18 @@ def main() -> int:
     print("""
 Done.  %s
 
-Upload the whole of release/ to https://api.iiteg.com/datum/ keeping the
-layout, so it ends up as:
+Upload to https://api.iiteg.com/datum/, keeping the layout:
 
-    /datum/latest.json          (and latest.json.sig)
-    /datum/%s/manifest.json     (and manifest.json.sig)
-    /datum/%s/...               the files themselves
+    release/%s/       ->  /datum/%s/        (all of it, 545 files)
+    release/latest.json      ->  /datum/latest.json
+    release/latest.json.sig  ->  /datum/latest.json.sig
+
+Send the version folder FIRST and the feed last.  A copy that reads the
+feed before the files are there will try to update and fail.
+
+Upload nothing else out of release/.  Not signing-key.pem, which is the
+one thing that decides whether an update is really yours, and not the
+.zip archives, which are only there to keep a copy of an old build.
 
 Installed copies pick it up within six hours, or at once from
 File then Check for Updates.

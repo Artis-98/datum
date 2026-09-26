@@ -767,6 +767,115 @@ def _i_auto(p):
                         (16, 14.3), (12, 17), (13, 12), (9, 8.5), (14, 8)))
 
 
+
+# --------------------------------------------------------------------------
+# assembly relationships
+#
+# These are not the sketch constraints with a different label on them, and
+# they must not look like them: the sketch pair say something about two
+# lines on a plane, these say something about two solids in space. The
+# complaint that prompted them was exact - Insert was drawn with the
+# concentric glyph and Flush with the parallel one, so of course they read
+# as concentric and parallel.
+#
+# So each of these is a little isometric picture of what the constraint
+# does to two blocks, the way Inventor's Place Constraint dialog draws
+# them, and Mate and Flush share a motif on purpose: same two blocks, the
+# arrows opposed for Mate and aligned for Flush, because that is the only
+# difference between them.
+# --------------------------------------------------------------------------
+
+
+def _block(p, x, y, w, h, depth=3.0, tone=_SOLID, top=_ACCENT):
+    """A little isometric box: front face, top face, side face."""
+    _fill(p, tone)
+    p.drawPolygon(_poly((x, y), (x + w, y), (x + w, y + h), (x, y + h)))
+    _fill(p, top)
+    p.drawPolygon(_poly((x, y), (x + depth, y - depth),
+                        (x + w + depth, y - depth), (x + w, y)))
+    _fill(p, tone, 170)
+    p.drawPolygon(_poly((x + w, y), (x + w + depth, y - depth),
+                        (x + w + depth, y + h - depth), (x + w, y + h)))
+
+
+def _face_arrow(p, x, y, dx, colour=_WARM, length=3.4):
+    """A short arrow at (x, y) pointing along dx, which is 1 or -1.
+
+    Named apart from the general _arrow above, which takes two points.
+    """
+    _pen(p, colour, 1.7)
+    p.drawLine(QtCore.QPointF(x, y), QtCore.QPointF(x + dx * length, y))
+    _fill(p, colour)
+    tip = x + dx * length
+    p.drawPolygon(_poly((tip + dx * 1.8, y), (tip, y - 1.7), (tip, y + 1.7)))
+
+
+def _i_c3d_mate(p):
+    # two faces brought together, so the arrows point at each other
+    _block(p, 2.5, 8, 6.5, 10)
+    _block(p, 15, 8, 6.5, 10)
+    _face_arrow(p, 9.8, 13.5, 1)
+    _face_arrow(p, 14.2, 13.5, -1)
+
+
+def _i_c3d_flush(p):
+    # the same two faces, but facing the same way: lined up, not meeting
+    _block(p, 2.5, 8, 6.5, 10)
+    _block(p, 12, 8, 6.5, 10)
+    _face_arrow(p, 9.4, 13.5, 1, length=2.6)
+    _face_arrow(p, 19, 13.5, 1, length=2.6)
+    _pen(p, _LINE, 1.0, dashed=True)
+    p.drawLine(QtCore.QPointF(2.5, 20.4), QtCore.QPointF(21.5, 20.4))
+
+
+def _i_c3d_angle(p):
+    # one face held at an angle to another, with the angle called out
+    _fill(p, _SOLID)
+    p.drawPolygon(_poly((3, 19), (17, 19), (17, 21.5), (3, 21.5)))
+    _fill(p, _SOLID, 200)
+    p.drawPolygon(_poly((4.5, 18.4), (13.5, 5.5), (16, 7.2), (7, 20)))
+    _pen(p, _WARM, 1.5)
+    rect = QtCore.QRectF(1.0, 12.5, 13.0, 13.0)
+    p.drawArc(rect, 0 * 16, 58 * 16)
+
+
+def _i_c3d_tangent(p):
+    # a round face resting on a flat one, touching at a point
+    _fill(p, _SOLID)
+    p.drawPolygon(_poly((2.5, 18), (21.5, 18), (21.5, 21), (2.5, 21)))
+    _pen(p, _LINE, 1.7)
+    _fill(p, _ACCENT, 90)
+    p.drawEllipse(QtCore.QPointF(12, 11.4), 6.4, 6.4)
+    _fill(p, _WARM)
+    p.drawEllipse(QtCore.QPointF(12, 17.9), 1.5, 1.5)
+
+
+def _i_c3d_insert(p):
+    # a shaft dropped into a bore: two rings seen from the side, one going
+    # into the other, which is what Insert actually does
+    _pen(p, _ACCENT, 1.1, dashed=True)
+    p.drawLine(QtCore.QPointF(12, 2.5), QtCore.QPointF(12, 21.5))
+    # the bore, as a block with a mouth
+    _fill(p, _SOLID)
+    p.drawPolygon(_poly((4, 13), (20, 13), (20, 21), (4, 21)))
+    _fill(p, "#1e2124")
+    p.drawPolygon(_poly((9, 13), (15, 13), (15, 21), (9, 21)))
+    # the shaft above it, on its way in
+    _fill(p, _LINE)
+    p.drawPolygon(_poly((9.6, 4), (14.4, 4), (14.4, 15.5), (9.6, 15.5)))
+    _pen(p, _LINE, 1.4)
+    _fill(p, _ACCENT)
+    p.drawEllipse(QtCore.QPointF(12, 4), 2.4, 1.2)
+
+
+def _i_c3d_symmetry(p):
+    _pen(p, _WARM, 1.2, dashed=True)
+    p.drawLine(QtCore.QPointF(12, 2.5), QtCore.QPointF(12, 21.5))
+    _block(p, 2.5, 9, 6.0, 9)
+    _block(p, 15.5, 9, 6.0, 9)
+    _pen(p, _ACCENT, 1.3)
+    p.drawLine(QtCore.QPointF(9.4, 6.5), QtCore.QPointF(14.6, 6.5))
+
 PAINTERS: Dict[str, Callable[[QtGui.QPainter], None]] = {
     "new": _i_new, "open": _i_open, "save": _i_save, "undo": _i_undo,
     "redo": _i_redo, "sketch": _i_sketch, "sketch_shared": _i_sketch_shared,
@@ -803,6 +912,10 @@ PAINTERS: Dict[str, Callable[[QtGui.QPainter], None]] = {
     "c_equal": _i_c_equal, "c_concentric": _i_c_concentric,
     "c_midpoint": _i_c_midpoint, "c_symmetric": _i_c_symmetric,
     "c_fix": _i_c_fix, "c_pointon": _i_c_pointon, "auto": _i_auto,
+    # the assembly ones, which are a different thing from the sketch ones
+    "c3d_mate": _i_c3d_mate, "c3d_flush": _i_c3d_flush,
+    "c3d_angle": _i_c3d_angle, "c3d_tangent": _i_c3d_tangent,
+    "c3d_insert": _i_c3d_insert, "c3d_symmetry": _i_c3d_symmetry,
     "feature": _i_box,
 }
 

@@ -389,11 +389,12 @@ class MainWindow(QtWidgets.QMainWindow):
                         ).clicked.connect(self.ground_selected_component)
 
         panel = assemble.add_panel("Relationships")
-        panel.add_big("c_coincident", "Constrain",
+        panel.add_big("c3d_mate", "Constrain",
                       "Place a constraint between two components (C)"
                       ).clicked.connect(lambda: self.assembly_ui.constrain(MATE))
-        for kind, icon_name in ((FLUSH, "c_parallel"), (INSERT, "c_concentric"),
-                                (ANGLE, "dimension"), (TANGENT, "c_tangent")):
+        for kind, icon_name in ((FLUSH, "c3d_flush"), (INSERT, "c3d_insert"),
+                                (ANGLE, "c3d_angle"),
+                                (TANGENT, "c3d_tangent")):
             panel.add_small(icon_name, KIND_LABELS[kind], KIND_HINTS[kind]
                             ).clicked.connect(
                 lambda _=False, k=kind: self.assembly_ui.constrain(k))
@@ -2628,7 +2629,11 @@ class MainWindow(QtWidgets.QMainWindow):
             tab = self.ribbon.tab(title)
             if tab is None:
                 continue
-            panel = tab.add_panel_right("Return")
+            # at the end of the feature panels rather than out at the far
+            # right: the eye follows the ribbon left to right and stops
+            # where the commands stop, and a button parked past a gap of
+            # empty ribbon is a button nobody finds
+            panel = tab.add_panel("Return")
             button = panel.add_big("finish", "Return",
                                    "Go back up one level")
             button.clicked.connect(self.finish_in_place)

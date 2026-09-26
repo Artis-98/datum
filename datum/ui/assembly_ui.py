@@ -35,12 +35,17 @@ from .assembly_browser import AssemblyBrowser
 from .theme import C
 from .widgets import ExpressionEdit, FormRows, SegmentedControl, SelectionField
 
+# Assembly relationships get their own glyphs rather than borrowing the
+# sketch ones.  They used to borrow them, and somebody on r/AutodeskInventor
+# read the result exactly as it was drawn: "Insert looks like concentric
+# and Flush looks like parallel."  They were the concentric and parallel
+# icons.  These say what happens to two solids instead.
 KIND_ICONS = {
-    "mate": "c_coincident",
-    "flush": "c_parallel",
-    "angle": "dimension",
-    "tangent": "c_tangent",
-    "insert": "c_concentric",
+    "mate": "c3d_mate",
+    "flush": "c3d_flush",
+    "angle": "c3d_angle",
+    "tangent": "c3d_tangent",
+    "insert": "c3d_insert",
 }
 
 # how far apart newly placed components are set down, as a fraction of what

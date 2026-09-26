@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.2</span></div>
+        <span id="live-version">Latest: 0.2.3</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.2/DATUM-0.2.2-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.3/DATUM-0.2.3-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -61,9 +61,69 @@
 
     <div class="release current">
       <div class="head">
-        <span class="ver">0.2.2</span>
+        <span class="ver">0.2.3</span>
         <span class="when">26 September 2026</span>
         <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        dLogic grows up: code that builds geometry, rules that reach the
+        whole model, forms with sliders, and an update that tells you when
+        it could not finish.
+      </p>
+      <ul>
+        <li><strong>Code features.</strong> A feature in the tree whose
+          solid is built by a short Python script, rebuilt whenever a
+          parameter moves. Boxes, cylinders, bars between two points,
+          extrude, revolve, sweep along paths and helices, booleans,
+          copies along a line or round an axis. Anything a loop can
+          describe: stairs, railings, frames, bolt circles.</li>
+        <li><strong>A staircase sample.</strong>
+          <em>examples/railing</em> is a stair built entirely from two
+          code features and two rules. Change the number of steps and
+          every tread, stringer, baluster and the handrail are worked out
+          again.</li>
+        <li><strong>Forms with sliders.</strong> A rule can open a window
+          whose sliders, number boxes and lists drive parameters, and the
+          model moves while you drag. Cancel puts everything back. Pin a
+          rule as a button and its form is one click away.</li>
+        <li><strong>Rules reach the whole model.</strong> Sketch
+          dimensions, features, components in an assembly (move, place,
+          suppress, hide), properties such as the part number, material
+          and appearance.</li>
+        <li><strong>Rules choose when they run:</strong> after a rebuild,
+          when the document opens, before it is saved, or when a named
+          parameter changes.</li>
+        <li><strong>An editor that shows you what is there.</strong>
+          Everything a script can use is listed beside it, the model's own
+          parameters and dimensions first, and a double-click puts it in.
+          Names are offered as you type, the code is coloured, and the line
+          that failed is lit up in red.</li>
+        <li><strong>Trust you can manage.</strong> A file carrying code
+          opens with the dLogic panel explaining why its code has not run.
+          Allow it for this session, or always allow a folder you trust.
+          Allowing an assembly allows the parts it places.</li>
+        <li><strong>dLogic on every tab</strong>: assemblies, drawings and
+          CAM sheets have the button too.</li>
+        <li><strong>Updating from inside DATUM is fixed.</strong> The
+          update helper now runs from the installation folder, keeps a
+          log, and if an update cannot finish DATUM says so on the next
+          start instead of quietly doing nothing. It is the new version
+          that carries this, so if updating from 0.2.2 still does nothing,
+          download the installer once and every update after that goes
+          through the new helper.</li>
+        <li><strong>File works on the home page</strong>, so Open and
+          Check for Updates are there before any document is. New asks
+          whether you want a part, an assembly, a drawing or a CAM
+          sheet.</li>
+        <li><strong>Assemblies open faster again.</strong> Every part was
+          being built twice as it loaded. Now it is built once.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
+        <span class="ver">0.2.2</span>
+        <span class="when">26 September 2026</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         Rules, editing a part inside the assembly it belongs to, and
@@ -225,7 +285,7 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.2/DATUM-0.2.2-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.3/DATUM-0.2.3-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>

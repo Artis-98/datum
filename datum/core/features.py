@@ -78,6 +78,10 @@ class BuildContext:
         # feature id -> (tool solid, operation) for pattern/mirror replay
         self.tools: Dict[int, Tuple[TopoDS_Shape, str]] = {}
         self.log: List[str] = []
+        # Whether a code feature may run its script during this rebuild.
+        # Set by the document from its trust, never by the file, so a part
+        # somebody sent you cannot run anything by being opened.
+        self.code_allowed = False
 
     def evaluate(self, expression: Any, what: str) -> float:
         try:
@@ -1508,11 +1512,67 @@ class MoveFeature(Feature):
             setattr(self, k, str(data.get(k, "0")))
 
 
+@dataclass
+class CodeFeature(Feature):
+    """A feature whose solid is whatever a short script builds.
+
+    A parameter can make a box wider. It cannot decide that a staircase
+    has fourteen steps rather than twelve and put a baluster on each one,
+    because that is a structure rather than a size, and a structure is a
+    loop. This is the loop: a script with the geometry toolkit to hand,
+    whose answer is joined to, cut from or added beside the part like any
+    other feature's, and rebuilt with it whenever a parameter moves.
+
+    The script hands back its solid by calling ``result(solid)``, or by
+    leaving it in a variable called ``body``.
+
+    It does not run on a document nobody has trusted. A feature is part of
+    the file, so a part someone sent you would otherwise run their code
+    the moment it was opened.
+    """
+
+    type_name: str = "code"
+    icon: str = "auto"
+    name: str = "Code"
+    source: str = ""
+    operation: str = NEW_BODY
+    body_name: str = ""
+
+    def build(self, ctx: BuildContext) -> None:
+        if not ctx.code_allowed:
+            raise FeatureError(
+                "%s is code, and code does not run until this document is "
+                "trusted.  Allow it from the dLogic panel." % self.name)
+        from .rules import run_code
+
+        solid, _output = run_code(self.source, ctx.scope, self.name)
+        if solid is None:
+            raise FeatureError("%s built nothing: call result(solid), or "
+                               "leave the solid in a variable called body"
+                               % self.name)
+        ctx.apply(solid, self.operation, self.id, name=self.body_name)
+
+    def summary(self) -> str:
+        lines = [ln for ln in self.source.splitlines() if ln.strip()]
+        first = lines[0].strip() if lines else "(empty)"
+        return "%s: %d line(s), %s - %s" % (self.name, len(lines),
+                                            self.output_summary(), first[:60])
+
+    def field_dict(self) -> Dict[str, Any]:
+        return {"source": self.source, "operation": self.operation,
+                "body_name": self.body_name}
+
+    def load_fields(self, data: Dict[str, Any]) -> None:
+        self.source = str(data.get("source", ""))
+        self.operation = data.get("operation", NEW_BODY)
+        self.body_name = str(data.get("body_name", ""))
+
+
 FEATURE_TYPES: Dict[str, type] = {
     cls.type_name: cls for cls in (
         SketchFeature, WorkPlaneFeature, ExtrudeFeature, RevolveFeature,
         SweepFeature, LoftFeature, HoleFeature, PrimitiveFeature,
         ImportFeature, FilletFeature, ChamferFeature, ShellFeature,
-        MirrorFeature, PatternFeature, MoveFeature,
+        MirrorFeature, PatternFeature, MoveFeature, CodeFeature,
     )
 }

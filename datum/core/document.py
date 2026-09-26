@@ -182,6 +182,10 @@ class Document:
         self.params.evaluate_all()
 
         ctx = BuildContext(self.params.scope())
+        # code features run only on a document somebody has trusted, and
+        # the file itself has no say in that
+        from .rules import document_trusted
+        ctx.code_allowed = document_trusted(self)
         report = RebuildReport()
 
         limit = (len(self.features) if self.rollback_index is None

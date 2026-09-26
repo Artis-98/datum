@@ -143,8 +143,8 @@ class PartLibrary:
                 if held is not None:
                     return held
 
+            # load builds it; building it again was half of every cold open
             part = Document.load(path)
-            part.rebuild()
             if key and part.last_report.ok and bodycache.cacheable(part):
                 bodycache.store(key, part.shape)
                 bodycache.housekeep()

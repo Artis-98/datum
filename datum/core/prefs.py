@@ -21,7 +21,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 APP_FOLDER = "DATUM"
 ORG_FOLDER = "IITEG"
@@ -64,10 +64,14 @@ class Preferences:
     company: str = ""
     # what they want it to look like: theme colour name -> "#rrggbb"
     colours: Dict[str, str] = field(default_factory=dict)
+    # folders whose documents may run their dLogic without asking.  Kept
+    # here, on this machine, because a file must never vouch for itself.
+    trusted_folders: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "initials": self.initials,
-                "company": self.company, "colours": dict(self.colours)}
+                "company": self.company, "colours": dict(self.colours),
+                "trusted_folders": list(self.trusted_folders)}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Preferences":
@@ -77,7 +81,9 @@ class Preferences:
             initials=str(data.get("initials", "")),
             company=str(data.get("company", "")),
             colours={str(k): str(v) for k, v in colours.items()
-                     if k in COLOUR_KEYS and _is_colour(v)})
+                     if k in COLOUR_KEYS and _is_colour(v)},
+            trusted_folders=[str(f) for f in
+                             data.get("trusted_folders", []) or [] if f])
 
     def stamp(self, properties: Dict[str, str],
               key: str = "Designer") -> Dict[str, str]:

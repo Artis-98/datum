@@ -119,6 +119,7 @@ class Link:
     """One FTPS connection, with the few operations a deploy needs."""
 
     def __init__(self, where: Dict[str, str]) -> None:
+        self.where = dict(where)
         self.root = str(where.get("root", "/")).rstrip("/")
         self.ftp = ftplib.FTP_TLS(context=ssl.create_default_context())
         self.ftp.connect(where["host"], int(where.get("port", 21)), timeout=30)
@@ -126,6 +127,18 @@ class Link:
         # encrypt the data channel too, not only the login
         self.ftp.prot_p()
         self.ftp.set_pasv(True)
+
+    def reconnect(self) -> None:
+        """Open it again after the server has let go of us.
+
+        Six hundred megabytes is long enough for a shared host to drop a
+        session, and once the socket is dead every transfer after it fails
+        the same way - which is how one dropped connection turned into 440
+        failed files. Reconnecting is not an error path, it is the normal
+        course of a big upload.
+        """
+        self.close()
+        self.__init__(self.where)
 
     def close(self) -> None:
         try:
@@ -166,15 +179,37 @@ class Link:
                                 blocksize=1 << 16)
 
     def delete(self, relative: str) -> bool:
-        try:
-            self.ftp.delete(self.path(relative))
-            return True
-        except ftplib.error_perm:
-            return False
+        """Remove one file, surviving a session the server has dropped.
+
+        Deleting a version folder is five hundred round trips, which is
+        long enough to lose the connection for the same reason uploading
+        one is.
+        """
+        for attempt in range(3):
+            try:
+                self.ftp.delete(self.path(relative))
+                return True
+            except ftplib.error_perm:
+                return False            # it is not there, or not ours
+            except Exception:
+                if attempt == 2:
+                    return False
+                try:
+                    self.reconnect()
+                except Exception:
+                    return False
+        return False
 
     def listing(self, relative: str = "") -> List[Tuple[str, str]]:
         """(name, type) for one directory, using MLSD where it is offered."""
         out: List[Tuple[str, str]] = []
+        try:
+            self.ftp.voidcmd("NOOP")
+        except Exception:
+            try:
+                self.reconnect()
+            except Exception:
+                return out
         try:
             for name, facts in self.ftp.mlsd(self.path(relative)):
                 if name not in (".", ".."):
@@ -228,13 +263,25 @@ def upload_set(link: Link, pairs: List[Tuple[str, str]],
         if not force and link.size(relative) == want:
             skipped += 1
         else:
-            try:
-                link.put(local, relative)
-                sent += 1
-                moved += want
-            except Exception as exc:
-                failed += 1
-                say("FAILED %s: %s" % (relative, exc))
+            for attempt in range(3):
+                try:
+                    link.put(local, relative)
+                    sent += 1
+                    moved += want
+                    break
+                except Exception as exc:
+                    if attempt == 2:
+                        failed += 1
+                        say("FAILED %s: %s" % (relative, exc))
+                        break
+                    # almost always a dropped session rather than a file
+                    # the server refused, so get a new one and go again
+                    try:
+                        link.reconnect()
+                    except Exception as again:
+                        failed += 1
+                        say("LOST THE SERVER at %s: %s" % (relative, again))
+                        return sent, skipped, failed
         if index % 25 == 0 or index == total:
             say("%4d/%d  sent %d, already there %d, failed %d  (%s)"
                 % (index, total, sent, skipped, failed, update.human(moved)))

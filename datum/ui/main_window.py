@@ -30,6 +30,7 @@ from ..core.sketch import STANDARD_PLANES, Sketch, SketchPlane
 from . import dialogs, icons
 from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
+from .rules_ui import RulesPanel
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
 from .cam_ui import CamController
@@ -557,6 +558,9 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = manage.add_panel("Parameters")
         panel.add_big("params", "Parameters", "Named parameters (Ctrl+P)"
                       ).clicked.connect(self.edit_parameters)
+        panel.add_big("auto", "dLogic",
+                      "Rules that drive this document"
+                      ).clicked.connect(self.show_rules)
 
         panel = manage.add_panel("Update")
         panel.add_big("rollback", "Roll to\nEnd", "Rebuild the whole tree"
@@ -668,6 +672,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, dock)
         dock.setMinimumWidth(230)
         self.browser_dock = dock
+
+        # dLogic sits above the tree, where iLogic sits in Inventor, and
+        # starts hidden: most documents have no rules and a panel for
+        # nothing is a panel in the way.
+        self.rules_panel = RulesPanel(self)
+        self.rules_panel.changed.connect(self._rules_changed)
+        rules_dock = QtWidgets.QDockWidget("dLogic", self)
+        rules_dock.setObjectName("RulesDock")
+        rules_dock.setWidget(self.rules_panel)
+        rules_dock.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable
+                               | QtWidgets.QDockWidget.DockWidgetFloatable
+                               | QtWidgets.QDockWidget.DockWidgetClosable)
+        self.addDockWidget(QtCore.Qt.LeftDockWidgetArea, rules_dock)
+        self.splitDockWidget(rules_dock, dock, QtCore.Qt.Vertical)
+        rules_dock.hide()
+        self.rules_dock = rules_dock
 
         # The Properties panel used to sit under the tree taking a third
         # of it.  Material and appearance now live on the top strip where
@@ -1727,6 +1747,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._after_rebuild()
             return report
         report = self.document.rebuild()
+        self.run_rules()
         # the origin planes step aside as soon as the part has a body
         self.document.autohide_origin_planes()
         # A part whose contents actually changed leaves anything placing it
@@ -1763,6 +1784,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if entry is not None and not entry.is_part:
             self.session.record_sources(entry)
         self._sync_update_button()
+        self.run_rules()
 
     def pick_shape(self):
         """The shape currently on screen - what the user is clicking on."""
@@ -2629,6 +2651,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.in_place = []          # the levels descended, deepest last
         self._in_place_docs = {}    # path -> the document opened in place
         self._browse_docs = {}      # path -> a document we only read
+        # guards the one rebuild a rule is allowed to cause
+        self._rules_running = False
         self._ghosts = []           # what to draw around whatever is open
         self._in_place_panels = []
         for title in (TAB_MODEL, TAB_ASSEMBLE):
@@ -2848,6 +2872,45 @@ class MainWindow(QtWidgets.QMainWindow):
             # anything that redraws the body afterwards takes the ghosts'
             # transparency with it
             self.viewport.set_components(self._ghosts, keep_camera=True)
+
+    def show_rules(self) -> None:
+        """Open the dLogic panel on whatever document is in front."""
+        self.rules_panel.set_document(self.active_document)
+        self.rules_dock.show()
+        self.rules_dock.raise_()
+
+    def _rules_changed(self) -> None:
+        """A rule moved something, so the model has to catch up."""
+        if self.in_assembly:
+            self.assembly_ui.rebuild()
+        elif self.in_part:
+            self.rebuild(keep_camera=True)
+
+    def run_rules(self) -> None:
+        """Run the rules that asked to run after a rebuild.
+
+        Only on a trusted document, and only once: a rule that changes a
+        parameter gets one rebuild out of it, not a conversation. Running
+        again from inside that rebuild is how a rule that sets a parameter
+        every time turns into a model that never settles.
+        """
+        document = self.active_document
+        rules = getattr(document, "rules", None)
+        if rules is None or not rules.trusted or self._rules_running:
+            return
+        self._rules_running = True
+        try:
+            results = rules.run_all(document, only_on_rebuild=True)
+            if any(r.changed for r in results):
+                document.rebuild()
+            failed = [r for r in results if not r.ok]
+            if failed:
+                self.status_message.setStyleSheet("color: %s;" % C.error)
+                self.status_message.setText(failed[0].summary())
+        finally:
+            self._rules_running = False
+        if results:
+            self.rules_panel.refresh()
 
     def _component_activated(self, occurrence_id: int) -> None:
         """Double-click on a component: step into it and edit it there."""

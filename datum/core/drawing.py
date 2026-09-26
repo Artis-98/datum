@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import bom, fileformat, hlr, prefs
+from .rules import RuleSet
 from .fileformat import ComponentRef
 from .naming import ShapeRef
 from .params import ParameterTable
@@ -929,6 +930,7 @@ class DrawingDocument:
         }
         # a new drawing already knows who is drawing it
         prefs.prefs().stamp(self.properties, "Author")
+        self.rules = RuleSet()
         self.params = ParameterTable()
         self.styles: Dict[str, Style] = default_styles()
         self.borders: Dict[str, Border] = {"Standard": Border()}
@@ -1202,6 +1204,7 @@ class DrawingDocument:
         return {
             "format_version": self.format_version,
             "units": self.units,
+            "rules": self.rules.to_list(),
             "standard": self.standard,
             "properties": dict(self.properties),
             "parameters": self.params.to_list(),
@@ -1225,6 +1228,9 @@ class DrawingDocument:
         self.standard = str(data.get("standard", "ISO"))
         self.properties = {str(k): str(v) for k, v
                            in (data.get("properties") or {}).items()}
+        trusted = self.rules.trusted
+        self.rules.load(data.get("rules"))
+        self.rules.trusted = trusted
         self.params = ParameterTable()
         self.params.load(data.get("parameters", []))
 

@@ -36,6 +36,7 @@ from .fileformat import (
     ASSEMBLY, DRAWING, BrokenLink, ComponentRef, FileFormatError,
 )
 from .naming import ShapeRef
+from .rules import RuleSet
 from .params import ParameterTable, evaluate, ExpressionError
 from .parts import MAX_NESTING, PartLibrary          # noqa: F401  (re-export)
 
@@ -322,6 +323,7 @@ class AssemblyDocument:
         self.thumbnail: Optional[bytes] = None
         self.migrated_from: Optional[int] = None
         self.properties: Dict[str, str] = prefs.prefs().stamp({})
+        self.rules = RuleSet()
         self.material = "Generic"
         # "" means "whatever the material comes in", which is what somebody
         # means when they pick a material and nothing else.  Setting it is
@@ -740,6 +742,8 @@ class AssemblyDocument:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "units": self.units,
+            "properties": dict(self.properties),
+            "rules": self.rules.to_list(),
             "next_id": self._next_id,
             "parameters": self.params.to_list(),
             "occurrences": [o.to_dict() for o in self.occurrences],
@@ -755,6 +759,11 @@ class AssemblyDocument:
 
     def load_dict(self, data: Dict[str, Any]) -> None:
         self.units = data.get("units", "mm")
+        self.properties = {str(k): str(v)
+                           for k, v in (data.get("properties") or {}).items()}
+        trusted = self.rules.trusted
+        self.rules.load(data.get("rules"))
+        self.rules.trusted = trusted
         self.material = data.get("material", "Generic")
         self.appearance = str(data.get("appearance", ""))
         self._density_override = None

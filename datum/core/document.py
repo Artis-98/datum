@@ -18,6 +18,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from OCP.TopoDS import TopoDS_Shape
 
 from . import fileformat, kernel, materials, prefs
+from .rules import RuleSet
 from .features import (
     FEATURE_TYPES, BuildContext, Feature, FeatureError, SketchFeature,
 )
@@ -77,6 +78,10 @@ class Document:
         # whatever its file says, because who drew it is a fact about the
         # part and not about the machine it was opened on.
         self.properties: Dict[str, str] = prefs.prefs().stamp({})
+        # dLogic: rules belonging to this document.  They never run until
+        # the document is trusted, and trust is not something a file can
+        # carry in from somewhere else.
+        self.rules = RuleSet()
         # "" means "whatever the material comes in", which is what somebody
         # means when they pick a material and nothing else.  Setting it is
         # an override, and it changes not one gram.
@@ -336,6 +341,7 @@ class Document:
         return {
             "units": self.units,
             "properties": dict(self.properties),
+            "rules": self.rules.to_list(),
             "material": self.material,
             "appearance": self.appearance,
             # written so a file still weighs the right thing on a machine
@@ -353,6 +359,11 @@ class Document:
         self.units = data.get("units", "mm")
         self.properties = {str(k): str(v)
                            for k, v in (data.get("properties") or {}).items()}
+        trusted = self.rules.trusted
+        self.rules.load(data.get("rules"))
+        # an undo step is this document's own history, not a new file, so
+        # it does not take back the trust the user has already given
+        self.rules.trusted = trusted
         self.material = data.get("material", "Generic")
         self.appearance = str(data.get("appearance", ""))
         self._density_override = None

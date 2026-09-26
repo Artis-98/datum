@@ -32,6 +32,7 @@ from . import fileformat, kernel, sheet as sheetlib, toolpath
 from .fileformat import CAM, PART, BrokenLink, ComponentRef, FileFormatError
 from .naming import ShapeRef
 from .params import ExpressionError, ParameterTable, evaluate
+from .rules import RuleSet
 from .parts import PartLibrary
 from .sheet import OUTER_KEY, Detection, Profile
 from .toolpath import INSIDE, OUTSIDE, Job, Sheet, Tool, ToolpathReport
@@ -194,6 +195,7 @@ class CamDocument:
     def __init__(self) -> None:
         self.parts: List[PlacedPart] = []
         self.params = ParameterTable()
+        self.rules = RuleSet()
 
         # everything the operator sets, as expressions so the parameter
         # table drives a sheet the same way it drives a part
@@ -657,6 +659,7 @@ class CamDocument:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "units": self.units,
+            "rules": self.rules.to_list(),
             "next_id": self._next_id,
             "parameters": self.params.to_list(),
             "sheet": {"width": self.sheet_width, "height": self.sheet_height,
@@ -674,6 +677,9 @@ class CamDocument:
 
     def load_dict(self, data: Dict[str, Any]) -> None:
         self.units = data.get("units", "mm")
+        trusted = self.rules.trusted
+        self.rules.load(data.get("rules"))
+        self.rules.trusted = trusted
         self.material = data.get("material", "Generic")
         self.params = ParameterTable()
         self.params.load(data.get("parameters", []))

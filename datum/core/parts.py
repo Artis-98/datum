@@ -126,10 +126,28 @@ class PartLibrary:
             sub.rebuild(depth=depth + 1)
             return sub.shape
         if manifest.type == PART:
+            from . import bodycache
             from .document import Document
+
+            # The finished body, if this exact file has been built before.
+            # Rebuilding a part from its tree costs about twenty times
+            # what reading the answer back does, and an assembly pays that
+            # for every component it places.
+            key = ""
+            try:
+                key = bodycache.key_for(path)
+            except OSError:
+                key = ""
+            if key:
+                held = bodycache.load(key)
+                if held is not None:
+                    return held
 
             part = Document.load(path)
             part.rebuild()
+            if key and part.last_report.ok and bodycache.cacheable(part):
+                bodycache.store(key, part.shape)
+                bodycache.housekeep()
             return part.shape
         raise FileFormatError(
             "%s is a %s, which has no body to place"

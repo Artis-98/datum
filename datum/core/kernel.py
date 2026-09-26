@@ -9,6 +9,7 @@ algorithm return a null shape that explodes three calls later.
 from __future__ import annotations
 
 import math
+import os
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from OCP.BRep import BRep_Builder, BRep_Tool
@@ -54,6 +55,26 @@ from .sketch import Sketch, SketchPlane, point_in_polygon, polygon_area
 MakePolygon = BRepBuilderAPI_MakePolygon
 
 TOL = 1e-7
+
+
+# OpenCASCADE will run a boolean across cores if it is told to, and it is
+# not told to by default.  Measured on the excavator: the whole assembly
+# builds about 7 per cent faster and the result is identical to the last
+# decimal, which is the only reason to take it.  Off by setting
+# DATUM_SERIAL_BOOLEANS, because parallel evaluation is the sort of thing
+# that turns out to matter on one machine in a thousand.
+def _enable_parallel_booleans() -> None:
+    if os.environ.get("DATUM_SERIAL_BOOLEANS"):
+        return
+    try:
+        from OCP.BOPAlgo import BOPAlgo_Options
+
+        BOPAlgo_Options.SetParallelMode_s(True)
+    except Exception:
+        pass
+
+
+_enable_parallel_booleans()
 
 
 class KernelError(RuntimeError):

@@ -420,6 +420,33 @@ def do_push(target: str, local: str, remote: str, force: bool,
     return 1 if failed else 0
 
 
+def do_rm(target: str, remote: str, confirmed: bool) -> int:
+    """Delete one file, named in full, once you have said you mean it.
+
+    One file and never a folder: this account reaches every site on the
+    hosting, and a tool that can remove a directory tree by mistake is a
+    tool that will. Version folders have prune, which only ever touches
+    names that parse as a version.
+    """
+    if not confirmed:
+        fail("rm deletes.  Add --yes when you mean it.")
+    where = settings(target)
+    link = Link(where)
+    try:
+        path = remote.strip("/")
+        size = link.size(path)
+        if size is None:
+            say("nothing at %s" % link.path(path))
+            return 1
+        say("%s is %s" % (link.path(path), update.human(size)))
+        if not link.delete(path):
+            fail("the server would not delete it.  A folder needs prune.")
+        say("deleted, and %s is free again" % update.human(size))
+    finally:
+        link.close()
+    return 0
+
+
 def do_ls(target: str, remote: str) -> int:
     """Look at what is on the server, without changing any of it."""
     where = settings(target)
@@ -583,6 +610,12 @@ def main() -> int:
     five.add_argument("target")
     five.add_argument("remote", nargs="?", default="")
 
+    six = sub.add_parser("rm", help="delete one file")
+    six.add_argument("target")
+    six.add_argument("remote")
+    six.add_argument("--yes", action="store_true",
+                     help="required: rm deletes")
+
     args = parser.parse_args()
     started = time.time()
     if args.what == "release":
@@ -596,6 +629,8 @@ def main() -> int:
                        args.all)
     elif args.what == "ls":
         code = do_ls(args.target, args.remote)
+    elif args.what == "rm":
+        code = do_rm(args.target, args.remote, args.yes)
     else:
         code = do_check(args.version)
     print("\n(%.0f s)" % (time.time() - started))

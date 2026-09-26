@@ -25,15 +25,25 @@ repository and never in it. The path is printed by any command that needs
 it. It looks like this:
 
     {
-      "api":  {"host": "api.iiteg.com",   "user": "datum@iiteg.com",
-               "password": "...", "root": "/datum"},
-      "site": {"host": "datum.iiteg.com", "user": "...",
-               "password": "...", "root": "/"}
+      "host": "ftp.iiteg.com",
+      "user": "deploy@iiteg.com",
+      "password": "...",
+      "targets": {
+        "api":   "/api.iiteg.com/datum",
+        "site":  "/datum.iiteg.com",
+        "print": "/print.iiteg.com",
+        "admin": "/admin.iiteg.com"
+      }
     }
 
-Make that FTP account in cPanel restricted to the folder it needs, not the
-main login: if it ever leaks, the damage is one directory. The password
-can be left out of the file and given as DATUM_DEPLOY_PASSWORD instead.
+One FTP account whose home is the hosting home, and a folder per target
+under it, because that is how the account is laid out: the sites sit side
+by side. Make it in cPanel as its own FTP user rather than using the
+cPanel login. An FTP user can only move files, so it cannot touch DNS,
+mail, databases or backups, and revoking it costs one click.
+
+The password can be left out of the file and given as
+DATUM_DEPLOY_PASSWORD instead.
 """
 
 from __future__ import annotations
@@ -69,20 +79,39 @@ def fail(text: str) -> "NoReturn":                             # noqa: F821
 # ------------------------------------------------------------------ the link
 
 
-def settings(target: str) -> Dict[str, str]:
+def config() -> Dict:
     if not os.path.exists(CONFIG):
         fail("no %s\n         See the top of tools/deploy.py for what goes "
              "in it." % CONFIG)
     with open(CONFIG, encoding="utf-8") as handle:
-        data = json.load(handle)
-    if target not in data:
-        fail("%s has no %r section" % (CONFIG, target))
-    where = dict(data[target])
+        return json.load(handle)
+
+
+def settings(target: str) -> Dict[str, str]:
+    """Where a named target lives.
+
+    One account for the whole hosting home and a folder per target, which
+    is how the account is really laid out: the sites sit side by side
+    under it. An older file that gave each target its own host, user and
+    password still works.
+    """
+    data = config()
+    targets = data.get("targets") or {}
+    if target in targets:
+        where = {k: v for k, v in data.items() if k != "targets"}
+        where["root"] = str(targets[target])
+    elif isinstance(data.get(target), dict):
+        where = dict(data[target])          # the older per-target shape
+    else:
+        known = sorted(set(targets) | {k for k, v in data.items()
+                                       if isinstance(v, dict)})
+        fail("%s has no target called %r.  It knows: %s"
+             % (CONFIG, target, ", ".join(known) or "none"))
     if not where.get("password"):
         where["password"] = os.environ.get("DATUM_DEPLOY_PASSWORD", "")
     for key in ("host", "user", "password"):
         if not where.get(key):
-            fail("the %r section is missing %r" % (target, key))
+            fail("the settings for %r are missing %r" % (target, key))
     return where
 
 
@@ -302,8 +331,16 @@ def do_site() -> int:
     return 1 if failed else 0
 
 
-def do_prune(keep: int) -> int:
-    """Delete old version folders, keeping the newest few."""
+def do_prune(keep: int, confirmed: bool) -> int:
+    """Delete old version folders, keeping the newest few.
+
+    Only folders whose names parse as a version are ever touched, and it
+    will not act without --yes: this account can reach every site on the
+    hosting, so a delete pointed at the wrong target should cost a word,
+    not a website.
+    """
+    if not confirmed:
+        fail("prune deletes folders.  Add --yes when you mean it.")
     where = settings("api")
     link = Link(where)
     try:
@@ -323,6 +360,62 @@ def do_prune(keep: int) -> int:
         for _parsed, name in versions[keep:]:
             say("removing %s" % name)
             say("  %d file(s) deleted" % link.remove_tree(name))
+    finally:
+        link.close()
+    return 0
+
+
+def do_push(target: str, local: str, remote: str, force: bool) -> int:
+    """Upload any folder to any target.
+
+    The release and the website have commands of their own because they
+    have rules: an order that must hold, a zip that must not go up.
+    Everything else on this account is files that need to be somewhere,
+    and this is for those.
+    """
+    local = os.path.abspath(local)
+    if not os.path.isdir(local):
+        fail("%s is not a folder" % local)
+    under = remote.strip("/")
+    pairs = []
+    for base, _dirs, files in os.walk(local):
+        for name in sorted(files):
+            full = os.path.join(base, name)
+            rel = os.path.relpath(full, local).replace(os.sep, "/")
+            pairs.append((full, "%s/%s" % (under, rel) if under else rel))
+    say("%d file(s) from %s" % (len(pairs), local))
+
+    where = settings(target)
+    link = Link(where)
+    failed = 0
+    try:
+        say("connected to %s as %s, TLS on" % (where["host"], where["user"]))
+        say("into %s" % link.path(under))
+        sent, skipped, failed = upload_set(link, pairs, force)
+        say("done: %d sent, %d already there, %d failed"
+            % (sent, skipped, failed))
+    finally:
+        link.close()
+    return 1 if failed else 0
+
+
+def do_ls(target: str, remote: str) -> int:
+    """Look at what is on the server, without changing any of it."""
+    where = settings(target)
+    link = Link(where)
+    under = remote.strip("/")
+    try:
+        say("%s" % link.path(under))
+        rows = link.listing(under)
+        for name, kind in sorted(rows):
+            if kind == "dir":
+                print("    %-44s  <dir>" % name)
+            else:
+                path = "%s/%s" % (under, name) if under else name
+                print("    %-44s  %s" % (name,
+                                         update.human(link.size(path) or 0)))
+        if not rows:
+            print("    (empty, or not readable by this account)")
     finally:
         link.close()
     return 0
@@ -438,6 +531,18 @@ def main() -> int:
 
     three = sub.add_parser("prune", help="delete old version folders")
     three.add_argument("--keep", type=int, default=1)
+    three.add_argument("--yes", action="store_true",
+                       help="required: prune deletes things")
+
+    four = sub.add_parser("push", help="upload any folder to any target")
+    four.add_argument("target")
+    four.add_argument("local")
+    four.add_argument("remote", nargs="?", default="")
+    four.add_argument("--force", action="store_true")
+
+    five = sub.add_parser("ls", help="list a folder on the server")
+    five.add_argument("target")
+    five.add_argument("remote", nargs="?", default="")
 
     args = parser.parse_args()
     started = time.time()
@@ -446,7 +551,11 @@ def main() -> int:
     elif args.what == "site":
         code = do_site()
     elif args.what == "prune":
-        code = do_prune(args.keep)
+        code = do_prune(args.keep, args.yes)
+    elif args.what == "push":
+        code = do_push(args.target, args.local, args.remote, args.force)
+    elif args.what == "ls":
+        code = do_ls(args.target, args.remote)
     else:
         code = do_check(args.version)
     print("\n(%.0f s)" % (time.time() - started))

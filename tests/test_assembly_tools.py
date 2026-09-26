@@ -349,6 +349,60 @@ check("what was picked is put back after the redraw",
 
 
 # ==========================================================================
+print("editing a part in place")
+
+from datum.core import kernel                                  # noqa: E402
+from datum.core.assembly import in_frame_of                    # noqa: E402
+
+ui.rebuild()
+pump(6)
+first = win.assembly.occurrences[0]
+before = kernel.bounding_box(win.assembly.shape)
+count_before = len(win.assembly.occurrences)
+
+context = in_frame_of(win.assembly, first.id)
+check("the context is everything but the part itself",
+      len(context) == count_before - 1, len(context))
+check("and none of it is the part", all(oid != first.id for oid, _s in context))
+
+win.edit_in_place(first.id)
+pump(8)
+
+check("the window is editing a part now", win.in_part, win.in_part)
+check("and not the assembly", not win.in_assembly)
+check("it is the part that component places",
+      os.path.basename(win.document.path or "") == "block.pdat",
+      win.document.path)
+check("the rest of the assembly is drawn around it",
+      len(win.viewport._component_ais) == count_before - 1,
+      len(win.viewport._component_ais))
+# Every context piece is recorded as locked, which is what keeps the
+# selection mode from arming it.  Note that a selection made in the
+# assembly before stepping in here can still be reported by
+# selected_components until something clears it; the context cannot be
+# picked, but the stale reading is untidy and is not fixed yet.
+check("every piece of context is locked against picking",
+      set(win.viewport._component_locked)
+      == {oid for oid, _s in context}, win.viewport._component_locked)
+check("the strip says what is being edited", win.in_place is not None)
+
+# the whole point: a change made here has to reach the assembly
+win.document.features[0].c = "40"
+win.rebuild()
+pump(8)
+win.finish_in_place()
+pump(10)
+
+check("we are back in the assembly", win.in_assembly, win.in_assembly)
+check("the ghosted context went with it", win.in_place is None)
+after = kernel.bounding_box(win.assembly.shape)
+check("and the assembly is built from the edited part",
+      abs((after[5] - after[2]) - (before[5] - before[2])) > 25.0,
+      "%.1f tall before, %.1f after"
+      % (before[5] - before[2], after[5] - after[2]))
+
+
+# ==========================================================================
 print()
 if FAILS:
     print("%d FAILED" % len(FAILS))

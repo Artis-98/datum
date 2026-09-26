@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import APP_NAME, __version__
 from ..core import fileformat, fileio, kernel
+from ..core import assembly as assembly_core
 from ..core.assembly import AssemblyDocument
 from ..core.cam import CamDocument
 from ..core.constraints3d import (
@@ -172,6 +173,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ribbon()
         self._build_docks()
         self._build_material_bar()
+        self._build_in_place_banner()
         self._build_status_bar()
         self._build_shortcuts()
 
@@ -675,6 +677,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_material_bar(self) -> None:
         self._component_docs = {}
+        # set while a part is being edited inside the assembly it sits in:
+        # (the assembly's tab, the occurrence, what it is called there)
+        self.in_place = None
         self.material_bar = MaterialBar(self)
         self.ribbon.material_slot.addWidget(self.material_bar)
         self.material_bar.material_changed.connect(self.set_material)
@@ -929,6 +934,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewport.selection_changed.connect(self._on_viewport_selection)
         self.viewport.escape_pressed.connect(self._on_escape)
         self.viewport.context_menu_requested.connect(self._viewport_menu)
+        self.viewport.component_activated.connect(self._component_activated)
         self.viewport.delete_pressed.connect(self._viewport_delete)
         self.viewport.plane_tool_pressed.connect(self._plane_tool_pressed)
         self.viewport.model_edge_picked.connect(self._project_picked_edge)
@@ -1097,6 +1103,9 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self.session.active is entry and not self.on_start_page:
             return
+        if self.in_place is not None and entry is not self.session.active:
+            # the ghosted machine around the part was drawn for that part
+            self._leave_in_place_quietly()
 
         if self.editor.active:
             self.finish_sketch()
@@ -2601,6 +2610,122 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.editor.active:
             return   # the editor handles its own Esc
         self.viewport.clear_selection()
+
+    def _build_in_place_banner(self) -> None:
+        """The strip that appears only while editing a part in place."""
+        self.in_place_label = QtWidgets.QLabel("")
+        self.in_place_label.setStyleSheet(
+            "color: %s; font-size: 11px;" % C.accent)
+        self.ribbon.banner_slot.addWidget(self.in_place_label)
+
+        self.in_place_return = QtWidgets.QToolButton()
+        self.in_place_return.setText("Return")
+        self.in_place_return.setIcon(icons.icon("finish", 16))
+        self.in_place_return.setToolButtonStyle(
+            QtCore.Qt.ToolButtonTextBesideIcon)
+        self.in_place_return.setCursor(QtCore.Qt.PointingHandCursor)
+        self.in_place_return.clicked.connect(self.finish_in_place)
+        self.ribbon.banner_slot.addWidget(self.in_place_return)
+        self._sync_in_place()
+
+    def _sync_in_place(self) -> None:
+        editing = self.in_place is not None
+        if editing:
+            self.in_place_label.setText("Editing %s in %s"
+                                        % (self.in_place[2], self.in_place[3]))
+        self.in_place_label.setVisible(editing)
+        self.in_place_return.setVisible(editing)
+
+    # -- editing a part inside the assembly it sits in ---------------------
+
+    def edit_in_place(self, occurrence_id: int) -> None:
+        """Open a component's part with the rest of the assembly around it.
+
+        The part opens in its own tab exactly as it always has, so saving,
+        undo and the feature tree are the ones that already work.  What is
+        different is only what is drawn: every other component, moved into
+        this part's own frame, ghosted and not pickable, so a click meant
+        for the part cannot land on the machine around it.
+        """
+        doc = self.assembly
+        occurrence = doc.occurrence(occurrence_id) if doc else None
+        if occurrence is None:
+            return
+        path = doc.component_path(occurrence)
+        if path is None:
+            QtWidgets.QMessageBox.warning(
+                self, "Edit in Place",
+                "%s cannot be found at %s."
+                % (occurrence.label, occurrence.ref.path or "(no path)"))
+            return
+
+        context = self._context_items(doc, occurrence_id)
+        home = self.session.active
+        title = getattr(home.document, "title", "the assembly") if home \
+            else "the assembly"
+        if not self.open_path(path):
+            return
+        self.in_place = (home, occurrence_id, occurrence.label, title)
+        # whatever was picked belongs to the assembly we just stepped out of
+        self.viewport.clear_selection()
+        self.viewport.set_components(context, keep_camera=True)
+        self._sync_in_place()
+        self.status_message.setStyleSheet("")
+        self.status_message.setText(
+            "Editing %s in place.  Return when you are done."
+            % occurrence.label)
+
+    def _context_items(self, doc, occurrence_id: int):
+        """The rest of the assembly, ready to draw around one part."""
+        items = []
+        for oid, shape in assembly_core.in_frame_of(doc, occurrence_id):
+            occurrence = doc.occurrence(oid)
+            path = doc.component_path(occurrence) if occurrence else None
+            items.append({
+                "id": oid,
+                "shape": shape,
+                "appearance": (doc.library.appearance(path)
+                               if path and os.path.exists(path) else None),
+                "transparency": 0.78,
+                "pickable": False,
+            })
+        return items
+
+    def finish_in_place(self) -> None:
+        """Go back to the assembly, carrying the edit with us."""
+        if self.in_place is None:
+            return
+        home, _occurrence_id, label, _title = self.in_place
+        self.in_place = None
+        self.viewport.clear_components()
+
+        entry = self.session.active
+        if entry is not None and entry.is_part:
+            # publish rather than insist on a save: the assembly reads the
+            # live shape, so the edit shows up without a file being written
+            # before anybody decided it was finished
+            entry.publish()
+        self._sync_in_place()
+        if home is not None:
+            self.activate(home, keep_camera=True)
+            if self.in_assembly:
+                self.assembly_ui.rebuild()
+        self.status_message.setStyleSheet("")
+        self.status_message.setText("Back in the assembly.  %s is updated."
+                                    % label)
+
+    def _leave_in_place_quietly(self) -> None:
+        """Drop in-place state without navigating, for a tab change."""
+        if self.in_place is None:
+            return
+        self.in_place = None
+        self.viewport.clear_components()
+        self._sync_in_place()
+
+    def _component_activated(self, occurrence_id: int) -> None:
+        """Double-click on a component: edit that part where it sits."""
+        if self.in_assembly:
+            self.edit_in_place(occurrence_id)
 
     def _viewport_delete(self) -> None:
         """Delete in the 3D view, acting on whatever workspace is open."""

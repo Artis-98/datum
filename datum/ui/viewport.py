@@ -115,6 +115,8 @@ class Viewport(QtWidgets.QWidget):
     plane_point_clicked = QtCore.Signal(float, float, object)   # u, v, modifiers
     plane_point_moved = QtCore.Signal(float, float, object)
     plane_double_clicked = QtCore.Signal(float, float)
+    # double-click a component: edit that part here, in the assembly
+    component_activated = QtCore.Signal(int)
     plane_key_pressed = QtCore.Signal(int, str)
     plane_drag_started = QtCore.Signal(float, float)
     plane_drag_moved = QtCore.Signal(float, float)
@@ -156,6 +158,8 @@ class Viewport(QtWidgets.QWidget):
         # the ones that are outlines rather than solids, so the display mode
         # does not shade them into invisibility
         self._component_wires: set = set()
+        # components drawn as context only: seen, never picked
+        self._component_locked: set = set()
         self._origin_ais: List[AIS_InteractiveObject] = []
         self._overlay: List[AIS_InteractiveObject] = []
         self._preview: List[AIS_InteractiveObject] = []
@@ -560,6 +564,13 @@ class Viewport(QtWidgets.QWidget):
             ctx.Display(ais, False)
             ctx.SetDisplayMode(ais, 0 if self.display_mode == "wireframe"
                                else 1, False)
+            if not item.get("pickable", True):
+                # context around a part being edited in place: there to be
+                # seen, never to catch a click meant for the part itself.
+                # Recorded rather than deactivated on the spot, because the
+                # selection mode is applied after this loop and would arm
+                # it straight back up.
+                self._component_locked.add(int(item["id"]))
             self._component_ais[int(item["id"])] = ais
 
         self._apply_selection_mode()
@@ -574,6 +585,7 @@ class Viewport(QtWidgets.QWidget):
             self.context.Remove(ais, False)
         self._component_ais = {}
         self._component_wires = set()
+        self._component_locked = set()
 
     @property
     def has_components(self) -> bool:
@@ -804,8 +816,14 @@ class Viewport(QtWidgets.QWidget):
             return
         ctx = self.context
         modes = SELECTION_MODES.get(self.selection_mode, ())
+        # by identity: an AIS handle is not something to put in a set
+        locked = {id(self._component_ais[oid])
+                  for oid in self._component_locked
+                  if oid in self._component_ais}
         for ais in self._bodies():
             ctx.Deactivate(ais)
+            if id(ais) in locked:
+                continue
             for index in modes:
                 ctx.Activate(ais, index, True)
 
@@ -2125,12 +2143,18 @@ class Viewport(QtWidgets.QWidget):
         self.redraw()
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
-        if self.plane_mode and event.button() == QtCore.Qt.LeftButton:
+        if event.button() == QtCore.Qt.LeftButton:
             pos = event.position().toPoint()
-            uv = self.plane_point(pos.x(), pos.y())
-            if uv is not None:
-                self.plane_double_clicked.emit(uv[0], uv[1])
-                return
+            if self.plane_mode:
+                uv = self.plane_point(pos.x(), pos.y())
+                if uv is not None:
+                    self.plane_double_clicked.emit(uv[0], uv[1])
+                    return
+            elif self._component_ais:
+                under = self.component_under(pos.x(), pos.y())
+                if under is not None:
+                    self.component_activated.emit(under)
+                    return
         super().mouseDoubleClickEvent(event)
 
     def event(self, event: QtCore.QEvent) -> bool:

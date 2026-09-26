@@ -581,7 +581,7 @@ class AssemblyController(QtCore.QObject):
     def _wire(self) -> None:
         b = self.browser
         b.occurrence_selected.connect(self._occurrence_selected)
-        b.occurrence_activated.connect(self.open_component)
+        b.occurrence_activated.connect(self.host.edit_in_place)
         b.occurrence_delete_requested.connect(self.delete_occurrence)
         b.occurrence_rename_requested.connect(self.rename_occurrence)
         b.ground_toggled.connect(self.toggle_ground)
@@ -1378,6 +1378,10 @@ class AssemblyController(QtCore.QObject):
                     lambda: self.toggle_suppress(occurrence.id))
                 isolate = menu.addAction("Isolate")
                 isolate.triggered.connect(lambda: self.isolate(occurrence.id))
+                here = menu.addAction(icons.icon("edit", 16),
+                                      "Edit in Place")
+                here.triggered.connect(
+                    lambda: self.host.edit_in_place(occurrence.id))
                 open_part = menu.addAction(icons.icon("open", 16), "Open Part")
                 open_part.triggered.connect(
                     lambda: self.open_component(occurrence.id))

@@ -269,6 +269,13 @@ class Ribbon(QtWidgets.QWidget):
         self.material_slot.setSpacing(0)
         qat_layout.addLayout(self.material_slot)
 
+        # where "editing X in place" and its way back appear, which is
+        # only ever while that is true
+        self.banner_slot = QtWidgets.QHBoxLayout()
+        self.banner_slot.setContentsMargins(0, 0, 0, 0)
+        self.banner_slot.setSpacing(6)
+        qat_layout.addLayout(self.banner_slot)
+
         qat_layout.addStretch(1)
 
         self.document_label = QtWidgets.QLabel("")

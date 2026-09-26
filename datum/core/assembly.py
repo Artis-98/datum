@@ -272,6 +272,40 @@ class AssemblyReport:
 # --------------------------------------------------------------------------
 
 
+def in_frame_of(doc: "AssemblyDocument", occurrence_id: int
+                ) -> List[Tuple[int, TopoDS_Shape]]:
+    """Every other component, moved into one component's own frame.
+
+    This is what lets a part be edited inside the assembly it sits in.
+    The part itself must stay in its own coordinates, because that is
+    where its sketches, its planes and every feature it has were built,
+    and a part that moved when you opened it would put every one of them
+    somewhere else. So the context moves instead: each other component is
+    placed relative to the one being edited rather than to the assembly's
+    origin, which looks identical on screen and leaves the part alone.
+
+    Cheap, because nothing is copied: a location is a transform hung on a
+    shape, not new geometry.
+    """
+    target = doc.occurrence(occurrence_id)
+    if target is None:
+        return []
+    back = target.placement.location().Inverted()
+    out: List[Tuple[int, TopoDS_Shape]] = []
+    for occurrence in doc.occurrences:
+        if occurrence.id == occurrence_id or occurrence.suppressed:
+            continue
+        if not occurrence.visible:
+            continue
+        shape = occurrence.shape
+        if shape is None or shape.IsNull():
+            continue
+        out.append((occurrence.id,
+                    shape.Moved(back.Multiplied(
+                        occurrence.placement.location()))))
+    return out
+
+
 class AssemblyDocument:
     """A set of placed components, referenced by relative path."""
 

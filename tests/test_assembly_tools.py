@@ -382,8 +382,8 @@ check("the rest of the assembly is drawn around it",
 # selected_components until something clears it; the context cannot be
 # picked, but the stale reading is untidy and is not fixed yet.
 check("every piece of context is locked against picking",
-      set(win.viewport._component_locked)
-      == {oid for oid, _s in context}, win.viewport._component_locked)
+      len(win.viewport._component_locked) == count_before - 1,
+      win.viewport._component_locked)
 check("the strip says what is being edited", win.in_place is not None)
 
 # the whole point: a change made here has to reach the assembly
@@ -394,12 +394,88 @@ win.finish_in_place()
 pump(10)
 
 check("we are back in the assembly", win.in_assembly, win.in_assembly)
-check("the ghosted context went with it", win.in_place is None)
+check("the ghosted context went with it",
+      win.in_place == [] and win._ghosts == [],
+      (win.in_place, len(win._ghosts)))
 after = kernel.bounding_box(win.assembly.shape)
 check("and the assembly is built from the edited part",
       abs((after[5] - after[2]) - (before[5] - before[2])) > 25.0,
       "%.1f tall before, %.1f after"
       % (before[5] - before[2], after[5] - after[2]))
+
+
+# ==========================================================================
+print("and down through a sub-assembly, one level at a time")
+
+from datum.core.assembly import AssemblyDocument                # noqa: E402
+from datum.core.constraints3d import Placement                 # noqa: E402
+
+inner = AssemblyDocument()
+# base_dir follows the path, so the path comes first
+inner.path = os.path.join(WORK, "inner.adat")
+for source in (BLOCK, PLATE):
+    placed = inner.place(source, os.path.basename(source))
+    placed.grounded = True
+inner.occurrences[1].placement = Placement([0.0, 0.0, 20.0], [0.0, 0.0, 0.0])
+inner.rebuild()
+INNER = inner.save(os.path.join(WORK, "inner.adat"))
+
+win.new_assembly()
+pump(8)
+outer = win.assembly
+outer.path = os.path.join(WORK, "outer.adat")
+for source in (INNER, PLATE):
+    placed = outer.place(source, os.path.basename(source))
+    placed.grounded = True
+outer.occurrences[1].placement = Placement([200.0, 0.0, 0.0], [0.0, 0.0, 0.0])
+win.assembly_ui.rebuild()
+pump(8)
+
+top_high = kernel.bounding_box(outer.shape)[5]
+sub = outer.occurrences[0]
+check("the outer assembly places a sub-assembly and a part",
+      len(outer.occurrences) == 2, len(outer.occurrences))
+
+win.edit_in_place(sub.id)
+pump(8)
+check("stepping into a sub-assembly stays in assembly mode",
+      win.in_assembly, win.in_assembly)
+check("and shows what that sub-assembly holds",
+      len(win.assembly.occurrences) == 2, len(win.assembly.occurrences))
+check("with the level above ghosted around it",
+      len(win._ghosts) == 1, len(win._ghosts))
+check("one level down", len(win.in_place) == 1, len(win.in_place))
+
+deep = win.assembly.occurrences[0]
+win.edit_in_place(deep.id)
+pump(8)
+check("stepping again lands on the part", win.in_part, win.in_part)
+check("two levels down", len(win.in_place) == 2, len(win.in_place))
+check("and everything above it is ghosted, from both levels",
+      len(win._ghosts) == 2, len(win._ghosts))
+check("none of which can be picked",
+      len(win.viewport._component_locked) == 2,
+      len(win.viewport._component_locked))
+
+win.document.features[0].c = "60"
+win.rebuild()
+pump(8)
+
+win.finish_in_place()
+pump(8)
+check("Return comes up exactly one level", len(win.in_place) == 1,
+      len(win.in_place))
+check("which is the sub-assembly again", win.in_assembly, win.in_assembly)
+
+win.finish_in_place()
+pump(10)
+check("and again to the top", win.in_place == [], win.in_place)
+check("the Return panel is out of the way again",
+      not any(panel.isVisible() for panel in win._in_place_panels))
+check("and the edit came all the way up with it",
+      kernel.bounding_box(win.assembly.shape)[5] > top_high + 15.0,
+      "%.1f then %.1f"
+      % (top_high, kernel.bounding_box(win.assembly.shape)[5]))
 
 
 # ==========================================================================

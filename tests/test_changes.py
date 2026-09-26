@@ -71,9 +71,12 @@ check("a part hides the assembly and CAM tabs",
 
 model_tab = win.ribbon._tabs["3D Model"]
 panels = [p.title for p in model_tab.panels]
-check("3D Model holds only feature panels",
-      panels == ["Sketch", "Create", "Modify", "Work Features", "Pattern"],
-      panels)
+# Return is last and apart from the rest on purpose: it is not a
+# modelling command, it is the way back out of an in-place edit, and it
+# is hidden unless one is going on.
+check("3D Model holds the feature panels, then Return",
+      panels == ["Sketch", "Create", "Modify", "Work Features", "Pattern",
+                 "Return"], panels)
 check("no File panel on 3D Model", "File" not in panels)
 check("no Edit panel on 3D Model", "Edit" not in panels)
 

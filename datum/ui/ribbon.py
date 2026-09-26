@@ -228,6 +228,18 @@ class RibbonTab(QtWidgets.QWidget):
         self.panels.append(panel)
         return panel
 
+    def add_panel_right(self, title: str) -> RibbonPanel:
+        """A panel past the stretch, so it sits at the far right.
+
+        For the one button that is not a modelling command: the way back
+        out of an in-place edit belongs at the end of the ribbon, away
+        from the tools, which is where every CAD package puts it.
+        """
+        panel = RibbonPanel(title, self)
+        self._layout.addWidget(panel)
+        self.panels.append(panel)
+        return panel
+
 
 class Ribbon(QtWidgets.QWidget):
     """The whole ribbon: tab strip plus the stacked tab pages."""
@@ -369,6 +381,9 @@ class Ribbon(QtWidgets.QWidget):
         btn = self._buttons.get(title)
         if btn is not None:
             btn.setVisible(visible)
+
+    def tab(self, title: str) -> Optional[RibbonTab]:
+        return self._tabs.get(title)
 
     def current_tab(self) -> str:
         widget = self.stack.currentWidget()

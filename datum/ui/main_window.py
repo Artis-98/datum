@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 import os
 from typing import Any, Callable, Dict, List, Optional  # noqa: F401
 
@@ -11,6 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .. import APP_NAME, __version__
 from ..core import fileformat, fileio, kernel
 from ..core import assembly as assembly_core
+from ..core.materials import Appearance
 from ..core.assembly import AssemblyDocument
 from ..core.cam import CamDocument
 from ..core.constraints3d import (
@@ -173,7 +175,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ribbon()
         self._build_docks()
         self._build_material_bar()
-        self._build_in_place_banner()
+        self._build_in_place_return()
         self._build_status_bar()
         self._build_shortcuts()
 
@@ -677,9 +679,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _build_material_bar(self) -> None:
         self._component_docs = {}
-        # set while a part is being edited inside the assembly it sits in:
-        # (the assembly's tab, the occurrence, what it is called there)
-        self.in_place = None
+        # ghosts get their own ids, below anything a document can hand out
+        self._ghost_id = 0
         self.material_bar = MaterialBar(self)
         self.ribbon.material_slot.addWidget(self.material_bar)
         self.material_bar.material_changed.connect(self.set_material)
@@ -1083,7 +1084,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if hasattr(document, "library"):
             # a part being edited in another tab is what this should place,
             # once Local Update has let it through
-            document.library.provider = self.session.live_shape
+            document.library.provider = self._shape_provider
         self.refresh_tabs()
         self.activate(entry, keep_camera=False)
         # Opening a part is not editing it: publish straight away so nothing
@@ -1103,7 +1104,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if self.session.active is entry and not self.on_start_page:
             return
-        if self.in_place is not None and entry is not self.session.active:
+        if self.in_place and entry is not self.session.active:
             # the ghosted machine around the part was drawn for that part
             self._leave_in_place_quietly()
 
@@ -2611,121 +2612,213 @@ class MainWindow(QtWidgets.QMainWindow):
             return   # the editor handles its own Esc
         self.viewport.clear_selection()
 
-    def _build_in_place_banner(self) -> None:
-        """The strip that appears only while editing a part in place."""
-        self.in_place_label = QtWidgets.QLabel("")
-        self.in_place_label.setStyleSheet(
-            "color: %s; font-size: 11px;" % C.accent)
-        self.ribbon.banner_slot.addWidget(self.in_place_label)
+    def _build_in_place_return(self) -> None:
+        """The way back out, at the right-hand end of the ribbon.
 
-        self.in_place_return = QtWidgets.QToolButton()
-        self.in_place_return.setText("Return")
-        self.in_place_return.setIcon(icons.icon("finish", 16))
-        self.in_place_return.setToolButtonStyle(
-            QtCore.Qt.ToolButtonTextBesideIcon)
-        self.in_place_return.setCursor(QtCore.Qt.PointingHandCursor)
-        self.in_place_return.clicked.connect(self.finish_in_place)
-        self.ribbon.banner_slot.addWidget(self.in_place_return)
+        Past the stretch, on a panel of its own, because it is not a
+        modelling command: it is the door. Both the part ribbon and the
+        assembly ribbon carry one, since what you stepped into might be
+        either.
+        """
+        self.in_place = []          # the levels descended, deepest last
+        self._in_place_docs = {}    # path -> the document opened in place
+        self._ghosts = []           # what to draw around whatever is open
+        self._in_place_panels = []
+        for title in (TAB_MODEL, TAB_ASSEMBLE):
+            tab = self.ribbon.tab(title)
+            if tab is None:
+                continue
+            panel = tab.add_panel_right("Return")
+            button = panel.add_big("finish", "Return",
+                                   "Go back up one level")
+            button.clicked.connect(self.finish_in_place)
+            self._in_place_panels.append(panel)
         self._sync_in_place()
 
     def _sync_in_place(self) -> None:
-        editing = self.in_place is not None
-        if editing:
-            self.in_place_label.setText("Editing %s in %s"
-                                        % (self.in_place[2], self.in_place[3]))
-        self.in_place_label.setVisible(editing)
-        self.in_place_return.setVisible(editing)
+        for panel in self._in_place_panels:
+            panel.setVisible(bool(self.in_place))
 
-    # -- editing a part inside the assembly it sits in ---------------------
+    # -- editing inside an assembly, without leaving it --------------------
+    #
+    # The thing that makes it in place is that no tab opens. The window
+    # keeps the assembly it is on and repoints the tree, the ribbon and
+    # the view at whatever was double-clicked, which may be a part or
+    # another assembly. Descending is a stack, because an assembly can
+    # hold an assembly that holds the part you were after, and Return
+    # comes back up exactly one level of it.
+    #
+    # The part never moves. Its sketches, planes and features were all
+    # built in its own frame, and a part that shifted when you opened it
+    # would put every one of them somewhere else. So the rest of the
+    # machine is what moves: ghosted, unpickable, and carried down each
+    # level by the same transform, which is why this composes to any
+    # depth.
 
     def edit_in_place(self, occurrence_id: int) -> None:
-        """Open a component's part with the rest of the assembly around it.
-
-        The part opens in its own tab exactly as it always has, so saving,
-        undo and the feature tree are the ones that already work.  What is
-        different is only what is drawn: every other component, moved into
-        this part's own frame, ghosted and not pickable, so a click meant
-        for the part cannot land on the machine around it.
-        """
-        doc = self.assembly
-        occurrence = doc.occurrence(occurrence_id) if doc else None
+        """Step into a component and edit it where it sits."""
+        parent = self.assembly
+        occurrence = parent.occurrence(occurrence_id) if parent else None
         if occurrence is None:
             return
-        path = doc.component_path(occurrence)
+        path = parent.component_path(occurrence)
         if path is None:
             QtWidgets.QMessageBox.warning(
                 self, "Edit in Place",
                 "%s cannot be found at %s."
                 % (occurrence.label, occurrence.ref.path or "(no path)"))
             return
-
-        context = self._context_items(doc, occurrence_id)
-        home = self.session.active
-        title = getattr(home.document, "title", "the assembly") if home \
-            else "the assembly"
-        if not self.open_path(path):
+        try:
+            child = self._in_place_document(path)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Edit in Place",
+                "%s could not be opened: %s" % (occurrence.label, exc))
             return
-        self.in_place = (home, occurrence_id, occurrence.label, title)
-        # whatever was picked belongs to the assembly we just stepped out of
+
+        self.in_place.append({
+            "document": parent,
+            "label": occurrence.label,
+            "occurrence": occurrence_id,
+            "ghosts": self._ghosts,
+            "camera": self.viewport.camera_state(),
+        })
+        # everything already ghosted, plus this level's siblings, all moved
+        # into the frame of the thing we are stepping into
+        back = occurrence.placement.location().Inverted()
+        ghosts = [dict(g, shape=g["shape"].Moved(back)) for g in self._ghosts]
+        ghosts.extend(self._sibling_ghosts(parent, occurrence_id))
+        self._ghosts = ghosts
+
         self.viewport.clear_selection()
-        self.viewport.set_components(context, keep_camera=True)
+        self._show_in_place(child)
+        self.status_message.setStyleSheet("")
+        self.status_message.setText(
+            "Editing %s.  Return goes back to %s."
+            % (" > ".join(level["label"] for level in self.in_place[1:]
+                          ) or occurrence.label,
+               getattr(parent, "title", "the assembly")))
+
+    def finish_in_place(self) -> None:
+        """Back up one level, carrying whatever was changed with us."""
+        if not self.in_place:
+            return
+        level = self.in_place.pop()
+        self._ghosts = level["ghosts"]
+        parent = level["document"]
+
+        self._show_in_place(parent)
+        if self.in_assembly:
+            # the parent reads the live shape through the provider, so the
+            # edit is there without a file having been written before
+            # anybody decided it was finished
+            self.assembly_ui.rebuild()
+        if level.get("camera") is not None:
+            self.viewport.restore_camera(level["camera"])
         self._sync_in_place()
         self.status_message.setStyleSheet("")
         self.status_message.setText(
-            "Editing %s in place.  Return when you are done."
-            % occurrence.label)
+            "Back in %s.  %s is updated."
+            % (getattr(parent, "title", "the assembly"), level["label"]))
 
-    def _context_items(self, doc, occurrence_id: int):
-        """The rest of the assembly, ready to draw around one part."""
-        items = []
+    def _in_place_document(self, path: str):
+        """The document behind a component, opened once and kept.
+
+        Kept because it holds edits that have not been saved yet: drop it
+        and the work goes with it. It is also what the shape provider
+        hands the assembly, so what you see around you is what you just
+        changed rather than what is still on disk.
+        """
+        key = os.path.normcase(os.path.abspath(path))
+        held = self._in_place_docs.get(key)
+        if held is not None:
+            return held
+        entry = self.session.by_path(path)
+        if entry is not None:
+            # already open in a tab: one document, not two, or they will
+            # disagree and one of them will lose
+            document = entry.document
+        else:
+            document = assembly_core.open_any(path)
+            if hasattr(document, "library"):
+                document.library.provider = self._shape_provider
+        document.rebuild()
+        self._in_place_docs[key] = document
+        return document
+
+    def _shape_provider(self, path: str):
+        """What an assembly should use for a file being edited right now."""
+        held = self._in_place_docs.get(os.path.normcase(os.path.abspath(path)))
+        shape = getattr(held, "shape", None) if held is not None else None
+        if shape is not None and not shape.IsNull():
+            return shape
+        return self.session.live_shape(path)
+
+    def _sibling_ghosts(self, doc, occurrence_id: int):
+        """The rest of one assembly, ready to draw around one component."""
+        out = []
         for oid, shape in assembly_core.in_frame_of(doc, occurrence_id):
             occurrence = doc.occurrence(oid)
             path = doc.component_path(occurrence) if occurrence else None
-            items.append({
-                "id": oid,
+            look = (doc.library.appearance(path)
+                    if path and os.path.exists(path) else None)
+            # A ghost is the part's own appearance made see-through, not a
+            # transparency laid over it afterwards: opacity goes in through
+            # the same door the cab glass uses, which is the one that
+            # survives the presentation being computed.
+            ghost = copy.copy(look) if look is not None else Appearance()
+            ghost.opacity = 0.14
+            self._ghost_id -= 1
+            out.append({
+                "id": self._ghost_id,
                 "shape": shape,
-                "appearance": (doc.library.appearance(path)
-                               if path and os.path.exists(path) else None),
-                "transparency": 0.78,
+                "appearance": ghost,
                 "pickable": False,
             })
-        return items
+        return out
 
-    def finish_in_place(self) -> None:
-        """Go back to the assembly, carrying the edit with us."""
-        if self.in_place is None:
-            return
-        home, _occurrence_id, label, _title = self.in_place
-        self.in_place = None
-        self.viewport.clear_components()
-
-        entry = self.session.active
-        if entry is not None and entry.is_part:
-            # publish rather than insist on a save: the assembly reads the
-            # live shape, so the edit shows up without a file being written
-            # before anybody decided it was finished
-            entry.publish()
+    def _show_in_place(self, document) -> None:
+        """Point the whole window at one document, without opening a tab."""
+        is_assembly = isinstance(document, AssemblyDocument)
+        doc_type = fileformat.ASSEMBLY if is_assembly else fileformat.PART
+        self.document = document if not is_assembly else Document()
+        self.assembly = document if is_assembly else None
+        self._set_workspace(doc_type)
         self._sync_in_place()
-        if home is not None:
-            self.activate(home, keep_camera=True)
-            if self.in_assembly:
-                self.assembly_ui.rebuild()
-        self.status_message.setStyleSheet("")
-        self.status_message.setText("Back in the assembly.  %s is updated."
-                                    % label)
 
-    def _leave_in_place_quietly(self) -> None:
-        """Drop in-place state without navigating, for a tab change."""
-        if self.in_place is None:
-            return
-        self.in_place = None
-        self.viewport.clear_components()
-        self._sync_in_place()
+        if is_assembly:
+            self.assembly_ui.browser.set_document(self.assembly)
+            self.assembly_ui.ghosts = self._ghosts
+            self.assembly_ui.rebuild()
+        else:
+            self.assembly_ui.ghosts = []
+            self.browser.set_document(self.document)
+            self.rebuild(keep_camera=True)
+        self._material_changed()
+        if not is_assembly and self._ghosts:
+            # last, after the part is drawn and the strip has caught up:
+            # anything that redraws the body afterwards takes the ghosts'
+            # transparency with it
+            self.viewport.set_components(self._ghosts, keep_camera=True)
 
     def _component_activated(self, occurrence_id: int) -> None:
-        """Double-click on a component: edit that part where it sits."""
+        """Double-click on a component: step into it and edit it there."""
         if self.in_assembly:
             self.edit_in_place(occurrence_id)
+
+    def _leave_in_place_quietly(self) -> None:
+        """Drop the in-place view for a tab change, keeping the edits.
+
+        The documents stay: they may hold work nobody has saved, and the
+        provider still hands their shapes to anything that places them.
+        """
+        if not self.in_place:
+            return
+        self.in_place = []
+        self._ghosts = []
+        self.assembly_ui.ghosts = []
+        self.viewport.clear_components()
+        self._sync_in_place()
 
     def _viewport_delete(self) -> None:
         """Delete in the 3D view, acting on whatever workspace is open."""

@@ -554,6 +554,8 @@ class AssemblyController(QtCore.QObject):
         self.browser = AssemblyBrowser(host)
         self.dialog: Optional[QtWidgets.QDialog] = None
         self.tool: Optional[str] = None
+        # ghosted context from the levels above, while editing in place
+        self.ghosts: List[Dict[str, Any]] = []
         self._drag_snapshot: Optional[str] = None
         self._dragging: int = 0
         self._isolated: Optional[int] = None
@@ -629,6 +631,8 @@ class AssemblyController(QtCore.QObject):
         doc = self.document
         if doc is None:
             return
+        # anything above this level, while it is being edited in place
+        ghosts = list(getattr(self, "ghosts", ()))
         selected = set(self.browser.selected_occurrence_ids())
         items: List[Dict[str, Any]] = []
         for index, occurrence in enumerate(doc.occurrences):
@@ -670,7 +674,7 @@ class AssemblyController(QtCore.QObject):
             self.viewport.set_selection_mode("assembly")
         self.viewport.clear_overlay()
         self.viewport.set_shape(None, keep_camera=True)
-        self.viewport.set_components(items, keep_camera=keep_camera)
+        self.viewport.set_components(items + ghosts, keep_camera=keep_camera)
         if held:
             self.viewport.select_components(held)
         self.viewport.show_planes(self.visible_planes(), self._plane_size())

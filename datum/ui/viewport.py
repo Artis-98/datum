@@ -544,8 +544,6 @@ class Viewport(QtWidgets.QWidget):
             if item.get("appearance") is None and item.get("colour"):
                 ais.SetColor(_col(colour))
             transparency = float(item.get("transparency", 0.0))
-            if transparency:
-                ais.SetTransparency(transparency)
 
             drawer = ais.Attributes()
             drawer.SetFaceBoundaryDraw(self.display_mode != "shaded")
@@ -564,6 +562,12 @@ class Viewport(QtWidgets.QWidget):
             ctx.Display(ais, False)
             ctx.SetDisplayMode(ais, 0 if self.display_mode == "wireframe"
                                else 1, False)
+            if transparency:
+                # through the context and after the object is displayed:
+                # set on the shape beforehand it is quietly dropped when
+                # the presentation is computed, which is how a ghosted
+                # assembly came out solid
+                ctx.SetTransparency(ais, transparency, False)
             if not item.get("pickable", True):
                 # context around a part being edited in place: there to be
                 # seen, never to catch a click meant for the part itself.

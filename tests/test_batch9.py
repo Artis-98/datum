@@ -79,7 +79,13 @@ print("the start page")
 win.show_start_page()
 pump()
 check("shown on demand", win.on_start_page)
-check("ribbon is out of the way", not win.ribbon.isEnabled())
+# The pages go quiet, not the whole ribbon: there is no document for
+# Extrude to act on, but every reason to still want Open or Check for
+# Updates, and disabling the lot took those away too.
+check("the ribbon pages are out of the way",
+      not win.ribbon.stack.isEnabled()
+      and not win.ribbon._buttons["3D Model"].isEnabled())
+check("but File still works", win.ribbon.file_button.isEnabled())
 check("browser hidden", not win.browser_dock.isVisible())
 check("three New tiles", all(t is not None for t in (
     win.start_page.part_tile, win.start_page.assembly_tile,

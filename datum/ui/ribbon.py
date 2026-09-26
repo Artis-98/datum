@@ -377,6 +377,19 @@ class Ribbon(QtWidgets.QWidget):
         self.stack.setCurrentWidget(tab)
         self.tab_changed.emit(title)
 
+    def set_pages_enabled(self, enabled: bool) -> None:
+        """Grey the tabs, leaving File and the quick access icons alive.
+
+        On the home page there is no document for Extrude to act on, but
+        there is still every reason to want Open, or Check for Updates.
+        Disabling the whole ribbon took those away with the rest.
+        """
+        # the tab buttons, not the strip that holds them: File lives on
+        # that strip, and a disabled parent takes its children with it
+        self.stack.setEnabled(enabled)
+        for button in self._buttons.values():
+            button.setEnabled(enabled)
+
     def set_tab_visible(self, title: str, visible: bool) -> None:
         btn = self._buttons.get(title)
         if btn is not None:

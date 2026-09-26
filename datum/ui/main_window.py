@@ -624,7 +624,7 @@ class MainWindow(QtWidgets.QMainWindow):
             action = menu.addAction(icons.icon(icon_name, 16), label)
             action.triggered.connect(slot)
 
-        item("new", "New", "Ctrl+N", lambda: self.new_document())
+        item("new", "New...", "Ctrl+N", self.new_any)
         item("open", "Open...", "Ctrl+O", self.open_document)
         menu.addSeparator()
         item("save", "Save", "Ctrl+S", lambda: self.save_document())
@@ -645,6 +645,7 @@ class MainWindow(QtWidgets.QMainWindow):
         item("exit", "Exit", "", self.close)
 
         self.file_menu = menu
+        menu.aboutToShow.connect(self._sync_file_menu)
         self.ribbon.set_file_menu(menu)
 
     # -- docks --------------------------------------------------------------
@@ -1027,7 +1028,8 @@ class MainWindow(QtWidgets.QMainWindow):
     def show_start_page(self) -> None:
         self.start_page.refresh()
         self.stack.setCurrentWidget(self.start_page)
-        self.ribbon.setEnabled(False)
+        self.ribbon.setEnabled(True)
+        self.ribbon.set_pages_enabled(False)
         self.browser_dock.setVisible(False)
         self.doc_tabs.select(doctabs.HOME)
         self.status_message.setText(
@@ -1037,6 +1039,7 @@ class MainWindow(QtWidgets.QMainWindow):
                  % len(self.session))
 
     def show_model(self) -> None:
+        self.ribbon.set_pages_enabled(True)
         # a drawing lives on the sheet canvas; everything else on the viewport
         if self.in_drawing:
             self.stack.setCurrentWidget(self.sheet_canvas)
@@ -1212,6 +1215,24 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.new_document()
 
+    def new_any(self) -> None:
+        """Ask what kind of document, rather than assuming a part.
+
+        New used to make a part whatever you were doing, which is wrong
+        the moment you have more than one kind of document: somebody in
+        an assembly pressing New usually wants another assembly, or a
+        drawing of the one they are in.
+        """
+        from .dialogs import NewDocumentDialog
+
+        kind = NewDocumentDialog.ask(self)
+        if kind is None:
+            return
+        {fileformat.PART: self.new_document,
+         fileformat.ASSEMBLY: self.new_assembly,
+         fileformat.DRAWING: self.new_drawing,
+         fileformat.CAM: self.new_cam}[kind]()
+
     def new_document(self, prompt: bool = True) -> None:
         # ``prompt`` is kept for callers written when only one document could
         # be open at a time; a new document now opens beside the others, so
@@ -1326,6 +1347,16 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.editor.active:
             self.editor.render()
         self.viewport.redraw()
+
+    def _sync_file_menu(self) -> None:
+        """Grey the entries that need a document, when there is not one."""
+        has = not self.on_start_page and self.session.active is not None
+        needs_document = ("Save", "Save As...", "Import...", "Export...",
+                          "Parameters...", "Save as Template...")
+        for action in self.file_menu.actions():
+            label = action.text().split("\t")[0]
+            if label in needs_document:
+                action.setEnabled(has)
 
     def choose_project(self) -> None:
         """Pick which project the work goes into, from anywhere in the app."""

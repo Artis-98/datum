@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from ..core import kernel
+from ..core import fileformat, kernel
 from ..core.document import Document
 from ..core.features import (
     CUT, INTERSECT, JOIN, NEW_BODY, OPERATION_HINTS, OPERATION_LABELS,
@@ -1126,3 +1126,66 @@ def dialog_for(host, feature: Feature, is_new: bool,
     cls = DIALOGS.get(type(feature))
     return cls(host, feature, is_new, snapshot) if cls else None
 
+
+
+class NewDocumentDialog(QtWidgets.QDialog):
+    """What kind of document New should make.
+
+    New used to make a part whatever you were doing, which is wrong the
+    moment there is more than one kind: somebody in an assembly pressing
+    New usually wants another assembly, or a drawing of the one they are
+    already in.
+    """
+
+    KINDS = (
+        (fileformat.PART, "box", "Part",
+         "A solid, built on a feature tree"),
+        (fileformat.ASSEMBLY, "import", "Assembly",
+         "Parts and sub-assemblies, placed and constrained"),
+        (fileformat.DRAWING, "dimension", "Drawing",
+         "Views, dimensions and a title block"),
+        (fileformat.CAM, "section", "CAM Sheet",
+         "Flat parts nested on stock, and the toolpaths for them"),
+    )
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("New")
+        self.setWindowIcon(icons.icon("new", 24))
+        self.setMinimumWidth(420)
+        self.chosen: Optional[str] = None
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        self.list = QtWidgets.QListWidget()
+        self.list.setIconSize(QtCore.QSize(28, 28))
+        self.list.setSpacing(1)
+        for kind, icon_name, title, hint in self.KINDS:
+            item = QtWidgets.QListWidgetItem(
+                icons.icon(icon_name, 28), "%s\n%s" % (title, hint))
+            item.setData(QtCore.Qt.UserRole, kind)
+            self.list.addItem(item)
+        self.list.setCurrentRow(0)
+        self.list.itemActivated.connect(lambda _i: self.accept())
+        layout.addWidget(self.list, 1)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def accept(self) -> None:
+        item = self.list.currentItem()
+        if item is not None:
+            self.chosen = str(item.data(QtCore.Qt.UserRole))
+        super().accept()
+
+    @classmethod
+    def ask(cls, parent=None) -> Optional[str]:
+        dialog = cls(parent)
+        if dialog.exec() != QtWidgets.QDialog.Accepted:
+            return None
+        return dialog.chosen

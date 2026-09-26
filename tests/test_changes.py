@@ -85,7 +85,7 @@ check("File button has a menu", win.ribbon.file_button.menu() is not None)
 labels = [a.text().split("\t")[0] for a in win.file_menu.actions()
           if not a.isSeparator()]
 check("File menu has the document commands",
-      all(x in labels for x in ("New", "Open...", "Save", "Save As...",
+      all(x in labels for x in ("New...", "Open...", "Save", "Save As...",
                                 "Import...", "Export...", "Exit")), labels)
 qat_buttons = [win.ribbon.quick_access.itemAt(i).widget()
                for i in range(win.ribbon.quick_access.count())]

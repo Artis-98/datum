@@ -380,6 +380,17 @@ class UpdateController(QtCore.QObject):
         # offers to save anything unsaved, and stops if the answer is Cancel
         if not self.host._confirm_discard():
             return
+        # If a previous attempt left a log behind, the swap did not
+        # finish, and saying so beats offering the same restart again as
+        # if nothing had happened.
+        said = swap.last_failure()
+        if said:
+            QtWidgets.QMessageBox.warning(
+                self.host, "The last update did not finish",
+                "DATUM tried this before and could not complete it."
+                "\n\n%s\n\nThe full log is beside the installation "
+                "in datum-update-log.txt.  Trying again now."
+                % said.splitlines()[-1][:300])
         try:
             swap.apply()
         except update.UpdateError as exc:

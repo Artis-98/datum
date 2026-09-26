@@ -297,6 +297,57 @@ check("and it says why", "not newer"
       result.stderr.decode("utf-8", "replace")[-300:])
 
 
+# ==========================================================================
+print("and the launch that carries it out, not just the script it writes")
+
+if os.name == "nt":
+    # The script was always right. What was wrong was how it got started:
+    # CREATE_NO_WINDOW together with DETACHED_PROCESS, which Windows
+    # treats as mutually exclusive, so cmd never ran it. The update
+    # prepared, DATUM closed to let it work, a console blinked, and
+    # nothing at all was replaced. Testing script_for could never catch
+    # that, so this drives swap.apply itself.
+    live = os.path.join(WORK, "launch")
+    stage = update.staging_dir(live)
+    os.makedirs(os.path.join(live, "_internal"), exist_ok=True)
+    os.makedirs(stage, exist_ok=True)
+    write(live, "DATUM.exe", "old")
+    write(live, "_internal/gone.pyd", "drop me")
+    write(stage, "DATUM.exe", "new")
+    with open(os.path.join(stage, update.PLAN_FILE), "w",
+              encoding="utf-8") as handle:
+        json.dump({"version": "9.9.9", "delete": ["_internal/gone.pyd"]},
+                  handle)
+
+    # A process that is alive when the helper starts and goes away a
+    # moment later, which is what DATUM does. The waiting is the part
+    # that broke: with no console the helper could not tell whether the
+    # process was still there, ran out of tries and gave up without
+    # touching anything. A test handed a pid that was already gone would
+    # skip straight past the only thing worth testing.
+    victim = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"])
+
+    swap.apply(target=live, executable="cmd.exe /c exit", relaunch=False,
+               pid=victim.pid)
+    time.sleep(1.5)
+    victim.terminate()
+    victim.wait()
+
+    deadline = time.time() + 40
+    while time.time() < deadline and os.path.isdir(stage):
+        time.sleep(0.3)
+
+    check("the helper actually ran", not os.path.isdir(stage),
+          "staging is still there, so nothing was applied")
+    check("and replaced the executable",
+          read(live, "DATUM.exe") == "new", read(live, "DATUM.exe"))
+    check("and dropped what the release dropped",
+          read(live, "_internal/gone.pyd") is None)
+else:
+    print("  SKIP  the swap is Windows-only")
+
+
 print()
 print("the deploy checker reads a HEAD the way the server means it")
 

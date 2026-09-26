@@ -21,12 +21,24 @@ from .theme import C
 ROLE_ID = QtCore.Qt.UserRole + 1
 ROLE_KIND = QtCore.Qt.UserRole + 2
 
+# What a new rule starts as.  It is the documentation most people will
+# ever read, so it shows the three things worth knowing in the order they
+# are worth knowing them: read a parameter, drive one, and ask with a
+# window.  docs/DLOGIC.md has the rest.
 STARTER = '''"""What this rule does."""
 
-# params.<name> reads a parameter, and setting it drives the model.
-# log(...) prints below. features["Extrude1"].suppressed = True works too.
+# Read a parameter, and set one to drive the model:
+#     params.width = params.height * 2
+#
+# Ask, with sliders that move the model as you drag:
+#     form("Size",
+#          slider("width", 20, 200, 5),
+#          slider("height", 10, 120, 5))
+#
+# Turn a feature off:
+#     features["Counterbore"].suppressed = params.thickness < 6
 
-log("parameters:", ", ".join(params.names()))
+log("parameters:", ", ".join(params.names()) or "none yet")
 '''
 
 
@@ -385,3 +397,173 @@ class RulesPanel(QtWidgets.QWidget):
         rules.remove(rule.id)
         self._document.modified = True
         self.refresh()
+
+
+class FormDialog(QtWidgets.QDialog):
+    """A window a rule asked for: controls bound to parameters.
+
+    The model moves while you drag, because a slider you have to let go
+    of before anything happens is a slider you cannot judge anything
+    with. Rebuilds are coalesced on a short timer so a drag across the
+    whole range asks for a handful of rebuilds rather than two hundred.
+
+    Cancel puts every parameter back where it was, so trying something
+    costs nothing.
+    """
+
+    def __init__(self, host, document, title: str, controls) -> None:
+        super().__init__(host)
+        self.host = host
+        self.document = document
+        self.controls = list(controls)
+        self.setWindowTitle(title or "dLogic")
+        self.setWindowIcon(icons.icon("params", 24))
+        self.setMinimumWidth(380)
+
+        # what to put back if this is cancelled
+        self._before = {name: document.params[name].expression
+                        for name in document.params.names()}
+
+        self._pending = QtCore.QTimer(self)
+        self._pending.setSingleShot(True)
+        self._pending.setInterval(120)
+        self._pending.timeout.connect(self._rebuild)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+
+        form = QtWidgets.QFormLayout()
+        form.setSpacing(8)
+        self.widgets = {}
+        for control in self.controls:
+            widget = self._build(control)
+            if widget is None:
+                continue
+            if control.kind == "label":
+                form.addRow(widget)
+            else:
+                form.addRow(control.label, widget)
+        layout.addLayout(form)
+        layout.addStretch(1)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    # -- building ----------------------------------------------------------
+
+    def _value(self, name: str, fallback: float = 0.0) -> float:
+        params = self.document.params
+        if name in params:
+            return float(params[name].value)
+        return fallback
+
+    def _build(self, control):
+        if control.kind == "label":
+            label = QtWidgets.QLabel(control.label)
+            label.setWordWrap(True)
+            label.setProperty("hint", True)
+            return label
+
+        if control.param and control.param not in self.document.params:
+            # a form may name a parameter the model has not got yet, and
+            # making it is friendlier than refusing to open
+            self.document.params.add(control.param,
+                                     repr(float(control.low)))
+            self._before.pop(control.param, None)
+
+        if control.kind == "slider":
+            return self._slider(control)
+        if control.kind == "choice":
+            return self._choice(control)
+        return self._number(control)
+
+    def _slider(self, control):
+        row = QtWidgets.QWidget()
+        line = QtWidgets.QHBoxLayout(row)
+        line.setContentsMargins(0, 0, 0, 0)
+        line.setSpacing(8)
+
+        step = control.step or 1.0
+        slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        slider.setMinimum(0)
+        slider.setMaximum(max(1, int(round((control.high - control.low)
+                                           / step))))
+        slider.setValue(int(round(
+            (self._value(control.param, control.low) - control.low) / step)))
+        readout = QtWidgets.QLabel("")
+        readout.setMinimumWidth(56)
+        readout.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        def moved(ticks: int) -> None:
+            value = control.low + ticks * step
+            readout.setText(("%g" % value))
+            self._set(control.param, value)
+
+        slider.valueChanged.connect(moved)
+        moved(slider.value())
+        line.addWidget(slider, 1)
+        line.addWidget(readout)
+        self.widgets[control.param] = slider
+        return row
+
+    def _number(self, control):
+        box = QtWidgets.QDoubleSpinBox()
+        box.setRange(-1e6, 1e6)
+        box.setDecimals(3)
+        box.setValue(self._value(control.param))
+        box.valueChanged.connect(
+            lambda v, p=control.param: self._set(p, v))
+        self.widgets[control.param] = box
+        return box
+
+    def _choice(self, control):
+        combo = QtWidgets.QComboBox()
+        combo.addItems(control.options)
+        combo.currentTextChanged.connect(
+            lambda text, p=control.param: self._set_text(p, text))
+        self.widgets[control.param] = combo
+        return combo
+
+    # -- driving the model -------------------------------------------------
+
+    def _set(self, name: str, value: float) -> None:
+        if not name:
+            return
+        self.document.params.set_expression(name, repr(float(value)))
+        self.document.modified = True
+        self._pending.start()
+
+    def _set_text(self, name: str, text: str) -> None:
+        """A choice that names a material sets the material, not a number."""
+        if name == "material" and hasattr(self.document, "material"):
+            self.document.material = text
+            self.document.modified = True
+            self._pending.start()
+            return
+        try:
+            self._set(name, float(text))
+        except ValueError:
+            pass
+
+    def _rebuild(self) -> None:
+        try:
+            self.host.rebuild(keep_camera=True)
+        except Exception:
+            pass
+
+    def reject(self) -> None:
+        for name, expression in self._before.items():
+            if name in self.document.params:
+                self.document.params.set_expression(name, expression)
+        self._rebuild()
+        super().reject()
+
+
+def open_form(host, document, title: str, controls) -> bool:
+    """What core.rules calls when a rule asks for a window."""
+    dialog = FormDialog(host, document, title, controls)
+    return dialog.exec() == QtWidgets.QDialog.Accepted

@@ -30,7 +30,8 @@ from ..core.sketch import STANDARD_PLANES, Sketch, SketchPlane
 from . import dialogs, icons
 from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
-from .rules_ui import RulesPanel
+from ..core import rules as core_rules
+from .rules_ui import RulesPanel, open_form
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
 from .cam_ui import CamController
@@ -679,6 +680,10 @@ class MainWindow(QtWidgets.QMainWindow):
         # nothing is a panel in the way.
         self.rules_panel = RulesPanel(self)
         self.rules_panel.changed.connect(self._rules_changed)
+        # what a rule calls when it asks for a window of its own
+        core_rules.show_form = (
+            lambda document, title, controls:
+            open_form(self, document, title, controls))
         rules_dock = QtWidgets.QDockWidget("dLogic", self)
         rules_dock.setObjectName("RulesDock")
         rules_dock.setWidget(self.rules_panel)

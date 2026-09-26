@@ -149,6 +149,59 @@ check("but not when asked directly",
 
 
 print()
+print("a rule can ask, with a window")
+
+asked = {}
+
+
+def fake_form(document, title, controls):
+    asked["title"] = title
+    asked["kinds"] = [c.kind for c in controls]
+    asked["params"] = [c.param for c in controls if c.param]
+    # answer it the way somebody dragging a slider would
+    document.params.set_expression("width", "77")
+    return True
+
+
+doc = box()
+rules.show_form = fake_form
+try:
+    result = rules.run(rules.Rule(name="Ask", source=source(
+        'ok = form("Size",',
+        '          note("drag me"),',
+        '          slider("width", 20, 200, 5),',
+        '          choice("material", ["Steel, Mild"]))',
+        'log("answered", ok, "width", params.width)',
+    )), doc)
+    check("the rule ran", result.ok, result.error)
+    check("the window was asked for", asked.get("title") == "Size", asked)
+    check("with the controls it named",
+          asked.get("kinds") == ["label", "slider", "choice"], asked)
+    check("and the answer reached the model",
+          doc.params["width"].value == 77.0, doc.params["width"].value)
+    check("which the rule could see", "width 77.0" in result.output,
+          result.output)
+
+    # a rebuild must never stop to open a window
+    doc.rules.add("Asks", 'log("shown", form("Size", slider("width", 1, 2)))')
+    doc.rules.trusted = True
+    quiet = doc.rules.run_all(doc, only_on_rebuild=True)
+    check("a rebuild does not open one",
+          quiet and "not shown" in quiet[0].output, quiet[0].output if quiet
+          else "nothing ran")
+    loud = doc.rules.run_all(doc)
+    check("but asking directly does",
+          loud and "shown True" in loud[0].output,
+          loud[0].output if loud else "nothing ran")
+finally:
+    rules.show_form = None
+
+check("with no interface at all it is a quiet no",
+      "not shown" in rules.run(rules.Rule(
+          name="Headless", source='log(form("x"))'), doc).output)
+
+
+print()
 print("every kind of document carries them, and none carries trust")
 
 for cls in (Document, AssemblyDocument, DrawingDocument, CamDocument):

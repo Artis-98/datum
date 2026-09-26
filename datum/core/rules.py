@@ -40,7 +40,75 @@ import io
 import math
 import traceback
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
+
+
+# --------------------------------------------------------------------- forms
+#
+# A rule that only runs is half of what people want from one. The other
+# half is a rule that asks: a window with a slider on it, and the model
+# moving while you drag. iLogic calls those Forms and builds them in a
+# designer; here a form is three lines in the rule itself, because the
+# rule already knows which parameters it cares about and a designer would
+# only be somewhere else to keep that same list.
+#
+#     form("Size",
+#          slider("width", 20, 200),
+#          slider("height", 10, 100),
+#          choice("material", ["Steel, Mild", "Aluminium 6061"]))
+#
+# The controls are described here, in core, where they are only data. The
+# window that shows them lives in the interface and installs itself
+# through show_form. With nothing installed, which is how a headless
+# build and every test runs, a form is a no-op that reports that nobody
+# answered it, so a rule full of forms still runs to the end.
+
+
+@dataclass
+class Control:
+    """One row on a form, naming the parameter it drives."""
+
+    kind: str = "number"            # slider / number / choice / label
+    param: str = ""
+    label: str = ""
+    low: float = 0.0
+    high: float = 100.0
+    step: float = 1.0
+    options: List[str] = field(default_factory=list)
+
+
+def slider(param: str, low: float, high: float, step: float = 1.0,
+           label: str = "") -> Control:
+    """A parameter you drag rather than type."""
+    return Control(kind="slider", param=param, label=label or param,
+                   low=float(low), high=float(high), step=float(step))
+
+
+def number(param: str, label: str = "") -> Control:
+    return Control(kind="number", param=param, label=label or param)
+
+
+def choice(param: str, options: Sequence[str], label: str = "") -> Control:
+    return Control(kind="choice", param=param, label=label or param,
+                   options=[str(o) for o in options])
+
+
+def note(text: str) -> Control:
+    """A line of explanation, driving nothing."""
+    return Control(kind="label", label=text)
+
+
+# Set by the interface. Takes (document, title, controls) and returns
+# True when the person accepted the form.
+show_form: Optional[Callable[[Any, str, List[Control]], bool]] = None
+
+# True while rules are running because the document rebuilt, rather than
+# because somebody asked. A rebuild must never stop to open a window.
+_automatic = False
+
+
+def forms_allowed() -> bool:
+    return show_form is not None and not _automatic
 
 
 class RuleError(RuntimeError):
@@ -206,6 +274,15 @@ def environment(document) -> Dict[str, Any]:
     def log(*parts: Any) -> None:
         lines.append(" ".join(str(p) for p in parts))
 
+    def form(title: str, *controls: Control) -> bool:
+        """Ask, with a window.  False when nobody answered."""
+        if not forms_allowed():
+            lines.append("(form %r not shown: %s)"
+                         % (title, "a rebuild is running" if _automatic
+                            else "no interface"))
+            return False
+        return bool(show_form(document, title, list(controls)))
+
     return {
         "params": params,
         "doc": document,
@@ -213,6 +290,11 @@ def environment(document) -> Dict[str, Any]:
         "log": log,
         "math": math,
         "units": getattr(document, "units", "mm"),
+        "form": form,
+        "slider": slider,
+        "number": number,
+        "choice": choice,
+        "note": note,
         "_log_lines": lines,
         "__builtins__": dict(SAFE_BUILTINS),
     }
@@ -309,14 +391,25 @@ class RuleSet:
 
     def run_all(self, document, only_on_rebuild: bool = False
                 ) -> List[RuleResult]:
-        """Run every enabled rule, in order, and report on each."""
+        """Run every enabled rule, in order, and report on each.
+
+        ``only_on_rebuild`` also means "nobody asked for this", so forms
+        stay shut: a model that opens a window every time it rebuilds is
+        a model you cannot work in.
+        """
+        global _automatic
         if not self.trusted:
             return []
-        out = []
-        for rule in self.rules:
-            if not rule.enabled:
-                continue
-            if only_on_rebuild and not rule.on_rebuild:
-                continue
-            out.append(run(rule, document))
+        was = _automatic
+        _automatic = only_on_rebuild
+        try:
+            out = []
+            for rule in self.rules:
+                if not rule.enabled:
+                    continue
+                if only_on_rebuild and not rule.on_rebuild:
+                    continue
+                out.append(run(rule, document))
+        finally:
+            _automatic = was
         return out

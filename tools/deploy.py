@@ -424,6 +424,22 @@ def do_ls(target: str, remote: str) -> int:
 # ---------------------------------------------------------------- checking
 
 
+def served_ok(expected: int, content_length) -> bool:
+    """Whether a 200 response really is the file the manifest describes.
+
+    Pulled out and tested because getting it wrong looks exactly like a
+    broken upload.  A HEAD of an empty file comes back from this server
+    with no Content-Length at all, and reading that as "wrong size"
+    reported a file missing that was sitting there serving perfectly.
+    """
+    if content_length is None:
+        return expected == 0
+    try:
+        return int(content_length) == expected
+    except (TypeError, ValueError):
+        return False
+
+
 def do_check(expect: str = "") -> int:
     """Read the published channel the way an installed copy reads it."""
     import concurrent.futures as cf
@@ -475,8 +491,8 @@ def do_check(expect: str = "") -> int:
             headers={"User-Agent": "DATUM-deploy-check"})
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
-                got = int(response.headers.get("Content-Length", -1))
-                return name, entry, got == entry["size"]
+                return name, entry, served_ok(
+                    entry["size"], response.headers.get("Content-Length"))
         except Exception:
             return name, entry, False
 

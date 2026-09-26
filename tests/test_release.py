@@ -297,6 +297,22 @@ check("and it says why", "not newer"
       result.stderr.decode("utf-8", "replace")[-300:])
 
 
+print()
+print("the deploy checker reads a HEAD the way the server means it")
+
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools"))
+from deploy import served_ok                                   # noqa: E402
+
+check("a size that matches is fine", served_ok(1234, "1234"))
+check("a size that does not is not", not served_ok(1234, "9"))
+# An empty file draws no Content-Length out of that host at all, and
+# calling that a mismatch reported a published file as missing twice.
+check("no header on an empty file is fine", served_ok(0, None))
+check("no header on a file with content is not", not served_ok(10, None))
+check("nonsense in the header is not", not served_ok(10, "banana"))
+
+
 # ==========================================================================
 print()
 if FAILS:

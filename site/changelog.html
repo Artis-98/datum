@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.1</span></div>
+        <span id="live-version">Latest: 0.2.2</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.1/DATUM-0.2.1-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.2/DATUM-0.2.2-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -61,9 +61,57 @@
 
     <div class="release current">
       <div class="head">
-        <span class="ver">0.2.1</span>
+        <span class="ver">0.2.2</span>
         <span class="when">26 September 2026</span>
         <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        Rules, editing a part inside the assembly it belongs to, and
+        opening a large assembly nineteen times faster.
+      </p>
+      <ul>
+        <li><strong>dLogic.</strong> Rules that drive a document, in parts,
+          assemblies, drawings and CAM sheets alike. A rule reads the
+          parameters, works something out and writes them back, and the
+          model rebuilds around the answer. The language is Python, which
+          is what DATUM itself is written in, so a rule is not a guest in
+          the application and there is nothing it cannot reach. Rules run
+          when you ask and after a rebuild if they say so.
+          <br><em>Nothing runs until you allow it.</em> A document that
+          carries rules can run code on whatever machine opens it, so a
+          file arrives untrusted every time, and it is you who says
+          otherwise, not the file.</li>
+        <li><strong>Edit a part in place.</strong> Double-click a
+          component and edit it where it sits, with the rest of the
+          machine ghosted around it. No new tab: the assembly stays in the
+          tree with the part you stepped into bolted inside it, and
+          Return comes back up one level at a time however deep you
+          went.</li>
+        <li><strong>Two ways to read the tree.</strong> Assembly shows
+          what holds a component in place, Modeling shows what it is made
+          of. Same components in the same order either way.</li>
+        <li><strong>Opening an assembly is about nineteen times
+          faster.</strong> The excavator sample went from 5.3 seconds to
+          0.28. Part files store a feature tree and no geometry, which is
+          the right thing to store, but it meant every assembly rebuilt
+          every component from scratch on every open. Built bodies are now
+          kept on disk, keyed on the exact bytes of the part they came
+          from, so editing a part by a millimetre makes the old body
+          unreachable rather than merely unlikely.</li>
+        <li><strong>Booleans use more than one core</strong>, which is
+          worth about 7 per cent on a full assembly build.</li>
+        <li><strong>Relationship icons that mean something.</strong> Mate,
+          Flush, Angle, Tangent and Insert each get their own glyph
+          instead of borrowing the sketch constraint ones. They were
+          borrowed, and somebody on r/AutodeskInventor read the result
+          exactly as it was drawn.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
+        <span class="ver">0.2.1</span>
+        <span class="when">26 September 2026</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         Materials and appearances, a long list of things that were wrong
@@ -177,12 +225,12 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.1/DATUM-0.2.1-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.2/DATUM-0.2.2-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>
         </svg>
-        DATUM <span id="latest-ver">0.2.1</span> for Windows
+        DATUM <span id="latest-ver">0.2.2</span> for Windows
       </a>
     </div>
   </div>

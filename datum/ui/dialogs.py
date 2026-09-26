@@ -21,7 +21,7 @@ from ..core.features import (
     OPERATIONS, ChamferFeature, ExtrudeFeature, Feature, FilletFeature,
     HoleFeature, ImportFeature, LoftFeature, MirrorFeature, MoveFeature,
     PatternFeature, PrimitiveFeature, RevolveFeature, ShellFeature,
-    SketchFeature, SweepFeature, WorkPlaneFeature,
+    SketchFeature, SweepFeature, WorkPlaneFeature, CodeFeature,
 )
 from ..core.naming import RefSet
 from . import icons
@@ -39,7 +39,7 @@ OP_OPTIONS = [(op, OP_ICONS[op],
 
 # feature types that put a solid into the part
 SOLID_MAKERS = (ExtrudeFeature, RevolveFeature, SweepFeature, LoftFeature,
-                PrimitiveFeature, ImportFeature)
+                PrimitiveFeature, ImportFeature, CodeFeature)
 
 
 class FeatureDialog(QtWidgets.QDialog):

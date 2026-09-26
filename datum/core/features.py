@@ -1532,7 +1532,7 @@ class CodeFeature(Feature):
     """
 
     type_name: str = "code"
-    icon: str = "auto"
+    icon: str = "code"
     name: str = "Code"
     source: str = ""
     operation: str = NEW_BODY
@@ -1545,7 +1545,8 @@ class CodeFeature(Feature):
                 "trusted.  Allow it from the dLogic panel." % self.name)
         from .rules import run_code
 
-        solid, _output = run_code(self.source, ctx.scope, self.name)
+        self.output = ""
+        solid, self.output = run_code(self.source, ctx.scope, self.name)
         if solid is None:
             raise FeatureError("%s built nothing: call result(solid), or "
                                "leave the solid in a variable called body"

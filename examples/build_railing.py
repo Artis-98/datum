@@ -69,14 +69,19 @@ result(union(parts))
 log(n, "steps,", round(n * rise), "mm up,", round(run), "mm along")
 '''
 
-RAILING = '''\
-"""Newels, balusters and a swept handrail, on one side or both."""
+RAILING = '''"""Newels, balusters and a swept handrail, on one side or both."""
 n, rise, going = int(params.steps), params.rise, params.going
 H, gap = params.rail_height, params.baluster_gap
 r_rail, r_bal, post = 25, 9, 80
+top = n * rise                         # the last tread, where the rail levels
 
 def pitch(x):
+    """Height of the nosing line at x."""
     return rise + x * rise / going
+
+def rail(x):
+    """Height of the handrail's centre: up the pitch, then level."""
+    return min(pitch(x), top) + H
 
 first = going * 0.35                   # bottom newel, on the first tread
 last = (n - 1) * going + going * 0.6   # top newel, on the last one
@@ -84,14 +89,15 @@ sides = [params.width - 45] if params.sides < 2 else [45, params.width - 45]
 
 parts = []
 for y in sides:
-    # newel posts stand on their treads and rise past the rail
+    # newel posts stand on their treads and finish just above the rail
     for x, step in ((first, 0), (last, n - 1)):
         foot = (step + 1) * rise
-        parts.append(box(post, post, pitch(x) + H + 60 - foot)
+        parts.append(box(post, post, rail(x) + 60 - foot)
                      .move(x - post / 2, y - post / 2, foot)
                      .fillet(4))
 
-    # balusters: as many per tread as it takes to keep under the gap
+    # balusters: as many per tread as it takes to keep under the gap,
+    # each buried in the rail so none of them stops short of it
     per = max(1, math.ceil(going / gap))
     count = 0
     for i in range(n):
@@ -99,15 +105,16 @@ for y in sides:
             x = i * going + (k + 0.5) * going / per
             if x < first + post / 2 + gap / 2 or x > last - post / 2 - gap / 2:
                 continue
-            parts.append(rod((x, y, (i + 1) * rise),
-                             (x, y, pitch(x) + H - r_rail), r_bal))
+            parts.append(rod((x, y, (i + 1) * rise), (x, y, rail(x)), r_bal))
             count += 1
 
-    # the handrail follows the pitch, then turns level over the landing
-    a = (first - 150, y, pitch(first - 150) + H)
-    b = (last, y, pitch(last) + H)
-    c = (last + 350, y, pitch(last) + H)
-    parts.append(circle(r_rail).sweep(path([a, b, c], corner=120)))
+    # the handrail runs newel to newel: up the pitch, a rounded bend at the
+    # last nosing, then level into the top post.  Both ends finish inside
+    # a post, so nothing sticks out past them.
+    corner = (n - 1) * going
+    parts.append(circle(r_rail).sweep(path(
+        [(first, y, rail(first)), (corner, y, top + H), (last, y, top + H)],
+        corner=120)))
     log("side at y =", round(y), ":", count, "balusters")
 
 result(union(parts))

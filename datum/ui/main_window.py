@@ -23,7 +23,7 @@ from ..core.features import (
     ChamferFeature, ExtrudeFeature, Feature, FilletFeature, HoleFeature,
     ImportFeature, LoftFeature, MirrorFeature, MoveFeature, PatternFeature,
     PrimitiveFeature, RevolveFeature, ShellFeature, SketchFeature,
-    SweepFeature, WorkPlaneFeature, plane_from_face,
+    SweepFeature, WorkPlaneFeature, plane_from_face, CodeFeature,
 )
 from ..core.naming import RefSet, ShapeRef
 from ..core.sketch import STANDARD_PLANES, Sketch, SketchPlane
@@ -31,7 +31,7 @@ from . import dialogs, icons
 from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
 from ..core import rules as core_rules
-from .rules_ui import RulesPanel, open_form
+from .rules_ui import CODE_STARTER, RulesPanel, open_form
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
 from .cam_ui import CamController
@@ -417,6 +417,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         ).clicked.connect(self.edit_parameters)
         panel.add_small("material", "Properties", "Mass and bounding box"
                         ).clicked.connect(self.show_properties)
+        panel.add_small("auto", "dLogic", "Rules that drive this assembly"
+                        ).clicked.connect(self.show_rules)
 
         # --------------------------------------------------------------- CAM
         cam = r.add_tab(TAB_CAM)
@@ -430,6 +432,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         ).clicked.connect(self.cam_ui.regenerate)
         panel.add_small("params", "Parameters", "Named parameters (Ctrl+P)"
                         ).clicked.connect(self.edit_parameters)
+        panel.add_small("auto", "dLogic", "Rules that drive this sheet"
+                        ).clicked.connect(self.show_rules)
 
         panel = cam.add_panel("Parts")
         panel.add_big("import", "Add\nPart", "Put a part on the sheet (P)"
@@ -527,6 +531,8 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: self.drawing_ui.rebuild(force=True))
         panel.add_small("material", "Properties").clicked.connect(
             self.show_properties)
+        panel.add_small("auto", "dLogic", "Rules that drive this drawing"
+                        ).clicked.connect(self.show_rules)
 
         panel = drawing_tab.add_panel("Output")
         panel.add_big("export", "Export\nPDF", "Every sheet, at true size"
@@ -562,6 +568,10 @@ class MainWindow(QtWidgets.QMainWindow):
         panel.add_big("auto", "dLogic",
                       "Rules that drive this document"
                       ).clicked.connect(self.show_rules)
+        panel.add_big("code", "Code\nFeature",
+                      "A feature whose solid a script builds: stairs, "
+                      "railings, anything a loop can describe"
+                      ).clicked.connect(self.new_code_feature)
 
         panel = manage.add_panel("Update")
         panel.add_big("rollback", "Roll to\nEnd", "Rebuild the whole tree"
@@ -1127,6 +1137,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if entry.is_part:
             entry.publish()
         self._sync_update_button()
+        self._code_on_open(document)
         return entry
 
     def activate(self, entry: Optional[session.OpenDocument],
@@ -1544,6 +1555,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 fileformat.save_filter(document.doc_type))
             if not path:
                 return False
+        self._run_event_rules(document, "before_save")
         try:
             written = document.save(path, thumbnail=self._thumbnail())
         except Exception as exc:
@@ -2939,11 +2951,13 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         document = self.active_document
         rules = getattr(document, "rules", None)
-        if rules is None or not rules.trusted or self._rules_running:
+        if (rules is None or self._rules_running
+                or not core_rules.document_trusted(document)):
             return
         self._rules_running = True
+        results = []
         try:
-            results = rules.run_all(document, only_on_rebuild=True)
+            results = rules.run_event(document, "on_rebuild")
             if any(r.changed for r in results):
                 document.rebuild()
             failed = [r for r in results if not r.ok]
@@ -2954,6 +2968,103 @@ class MainWindow(QtWidgets.QMainWindow):
             self._rules_running = False
         if results:
             self.rules_panel.refresh()
+
+    def _run_event_rules(self, document, event: str) -> None:
+        """Run what an open or a save sets off, and catch the model up."""
+        rules = getattr(document, "rules", None)
+        if rules is None or not len(rules) or self._rules_running:
+            return
+        if not core_rules.document_trusted(document):
+            return
+        self._rules_running = True
+        try:
+            results = rules.run_event(document, event)
+        finally:
+            self._rules_running = False
+        if not results:
+            return
+        failed = [r for r in results if not r.ok]
+        if failed:
+            self.status_message.setStyleSheet("color: %s;" % C.error)
+            self.status_message.setText(failed[0].summary())
+        if any(r.changed for r in results) and \
+                document is self.active_document:
+            self._rules_changed()
+        self.rules_panel.refresh()
+
+    def _code_on_open(self, document) -> None:
+        """A document just arrived: run it, or say plainly why not.
+
+        Trusted, its on-open rules run. Not trusted but carrying code, the
+        dLogic panel opens on it so the reason its code features show as
+        failed, and the button that fixes that, are both in front of you
+        rather than somewhere you would have to know to look.
+        """
+        rules = getattr(document, "rules", None)
+        code = [f for f in getattr(document, "features", ()) or ()
+                if isinstance(f, CodeFeature)]
+        if rules is None or not (len(rules) or code):
+            return
+        if core_rules.document_trusted(document):
+            self._run_event_rules(document, "on_open")
+            return
+        self.show_rules()
+
+        def warn() -> None:
+            # after whatever the opener says, or "Opened ..." would hide it
+            self.status_message.setStyleSheet("color: %s;" % C.warn)
+            self.status_message.setText(
+                "This document carries code that has not been allowed to "
+                "run. Allow it in the dLogic panel if you trust where it "
+                "came from.")
+        QtCore.QTimer.singleShot(0, warn)
+
+    def after_trust(self, document, paths) -> None:
+        """Code was just allowed: build what could not be built before."""
+        trusted = {os.path.normcase(os.path.abspath(p)) for p in paths if p}
+        for entry in self.session.documents:
+            library = getattr(entry.document, "library", None)
+            if library is not None:
+                for path in paths:
+                    library.forget(path)
+            other = entry.document
+            if other is document or not getattr(other, "path", ""):
+                continue
+            if os.path.normcase(os.path.abspath(other.path)) in trusted \
+                    and hasattr(other, "features"):
+                try:
+                    other.rebuild()
+                except Exception:
+                    pass
+        if document is self.active_document:
+            self._rules_changed()
+        self._run_event_rules(document, "on_open")
+
+    def new_code_feature(self) -> None:
+        """Add a feature whose solid a script builds, and open it."""
+        if not self.in_part:
+            QtWidgets.QMessageBox.information(
+                self, "Code Feature",
+                "A code feature builds a solid, so it belongs in a part. "
+                "Open or make a part first.")
+            return
+        if self.editor.active:
+            self.finish_sketch()
+        snapshot = self.document.snapshot()
+        self.document.push_undo()
+        feature = CodeFeature()
+        existing = {f.name for f in self.document.features}
+        index = 1
+        while "Code%d" % index in existing:
+            index += 1
+        feature.name = "Code%d" % index
+        feature.source = CODE_STARTER
+        if self.document.shape is not None:
+            feature.operation = "join"
+        # code you are writing yourself is code you meant to run
+        self.document.rules.trusted = True
+        self.document.add_feature(feature, self._insert_index())
+        self._open_dialog(feature, is_new=True, snapshot=snapshot)
 
     def _component_activated(self, occurrence_id: int) -> None:
         """Double-click on a component: step into it and edit it there."""

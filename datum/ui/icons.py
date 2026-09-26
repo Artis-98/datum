@@ -759,6 +759,18 @@ def _i_c_pointon(p):
     p.drawEllipse(QtCore.QPointF(12, 12), 3.0, 3.0)
 
 
+def _i_code(p):
+    # a block with brackets over it: a solid a script builds
+    _face(p, [(4, 15), (10, 18), (16, 15), (10, 12)], _SOLID, 165)
+    _face(p, [(4, 15), (10, 18), (10, 21), (4, 18)], _SOLID, 80)
+    _face(p, [(16, 15), (10, 18), (10, 21), (16, 18)], _SOLID, 120)
+    _pen(p, _WARM, 1.7)
+    p.drawPolyline(_poly((8, 3.5), (4.5, 7), (8, 10.5)))
+    p.drawPolyline(_poly((16, 3.5), (19.5, 7), (16, 10.5)))
+    _pen(p, _ACCENT, 1.5)
+    p.drawLine(QtCore.QPointF(13.3, 3), QtCore.QPointF(10.7, 11))
+
+
 def _i_auto(p):
     _pen(p, _ACCENT, 1.7)
     p.drawPolyline(_poly((4, 16), (10, 8), (16, 14), (20, 8)))
@@ -912,6 +924,7 @@ PAINTERS: Dict[str, Callable[[QtGui.QPainter], None]] = {
     "c_equal": _i_c_equal, "c_concentric": _i_c_concentric,
     "c_midpoint": _i_c_midpoint, "c_symmetric": _i_c_symmetric,
     "c_fix": _i_c_fix, "c_pointon": _i_c_pointon, "auto": _i_auto,
+    "code": _i_code,
     # the assembly ones, which are a different thing from the sketch ones
     "c3d_mate": _i_c3d_mate, "c3d_flush": _i_c3d_flush,
     "c3d_angle": _i_c3d_angle, "c3d_tangent": _i_c3d_tangent,

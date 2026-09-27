@@ -130,6 +130,10 @@ after = kernel.pieces(own.shape)
 check("  the rest are the very blocks the window built itself",
       sum(1 for p in after if any(p.IsEqual(q) for q in before)) == 11)
 check("  and the model is right", volume(own) == local(own))
+from datum.core import mesh  # noqa: E402
+new = [p for p in after if not any(p.IsEqual(q) for q in before)]
+check("  the block that came back came meshed, ready to draw",
+      len(new) == 1 and mesh.is_meshed(new[0], mesh.deflection(own.shape)))
 
 went = []
 

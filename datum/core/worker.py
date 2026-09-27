@@ -173,16 +173,25 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
     for body in document.bodies:
         if body.shape is None or body.shape.IsNull():
             continue
-        mesh.mesh(body.shape)
         parts = kernel.pieces(body.shape)
+        before = len(packed)
         if len(parts) >= PIECES_MIN:
             # A body of many pieces goes back a piece at a time, and only
             # the pieces the window has not got: a hole through a big
             # import sends three solids, not three hundred.
             bodies.append({"name": body.name,
                            "pieces": [send(p) for p in parts]})
+            fresh = packed[before:]
+            if fresh:
+                # Only what goes across needs triangles, the window has the
+                # rest drawn already; made to the whole body's tolerance, as
+                # the window makes a new piece of it. Meshing the whole body
+                # walked fifteen thousand faces to find the forty new ones.
+                mesh.mesh(kernel.compound(fresh), mesh.deflection(body.shape))
         else:
             entry = send(body.shape)
+            if len(packed) > before:
+                mesh.mesh(body.shape)
             entry["name"] = body.name
             bodies.append(entry)
     sent.clear()

@@ -409,6 +409,10 @@ class SketchFeature(Feature):
     sketch: Sketch = field(default_factory=Sketch)
     # when the sketch was placed on a model face, this lets the plane follow it
     face_ref: Optional[ShapeRef] = None
+    # facing the other way from the face's own axis: the side the face was
+    # looked at from when the sketch was made, which a face's axis does not
+    # say (half the faces of a solid have theirs pointing inwards)
+    reverse_face: bool = False
     # a consumed sketch is nested under the feature that used it; sharing it
     # also keeps it visible at the top of the tree for reuse
     shared: bool = False
@@ -419,6 +423,8 @@ class SketchFeature(Feature):
             if face is not None:
                 derived = plane_from_face(TopoDS.Face_s(face))
                 if derived is not None:
+                    if self.reverse_face:
+                        derived = reversed_plane(derived)
                     derived.name = self.sketch.plane.name
                     self.sketch.plane = derived
         # Anything projected onto this sketch is a shadow of the body as it
@@ -439,6 +445,10 @@ class SketchFeature(Feature):
                              "shared": self.shared}
         if self.face_ref is not None:
             d["face_ref"] = self.face_ref.to_dict()
+        if self.reverse_face:
+            # written only when set, so every sketch made before it existed
+            # reads, and fingerprints, exactly as it did
+            d["reverse_face"] = True
         return d
 
     def load_fields(self, data: Dict[str, Any]) -> None:
@@ -446,6 +456,7 @@ class SketchFeature(Feature):
         self.shared = bool(data.get("shared", False))
         if data.get("face_ref"):
             self.face_ref = ShapeRef.from_dict(data["face_ref"])
+        self.reverse_face = bool(data.get("reverse_face", False))
 
 
 @dataclass
@@ -534,6 +545,12 @@ def _rotate_plane(plane: SketchPlane, axis: Sequence[float],
 
     return SketchPlane(plane.origin, rot(plane.normal), rot(plane.xdir),
                        plane.name)
+
+
+def reversed_plane(plane: SketchPlane) -> SketchPlane:
+    """The same plane seen from the other side: normal turned round, x kept."""
+    return SketchPlane(plane.origin, tuple(-c for c in plane.normal),
+                       plane.xdir, plane.name)
 
 
 def plane_from_face(face) -> Optional[SketchPlane]:

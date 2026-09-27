@@ -1142,6 +1142,32 @@ class Viewport(QtWidgets.QWidget):
             pass
         self.redraw()
 
+    def eye_side(self, plane: SketchPlane) -> float:
+        """1.0 when the camera sees a plane from the side its normal points
+        to, -1.0 when it sees it from behind."""
+        if not self._ready:
+            return 1.0
+        try:
+            camera = self.view.Camera()
+            eye, centre = camera.Eye(), camera.Center()
+            toward = (eye.X() - centre.X(), eye.Y() - centre.Y(),
+                      eye.Z() - centre.Z())
+        except Exception:
+            return 1.0
+        dot = sum(a * b for a, b in zip(toward, plane.normal))
+        return -1.0 if dot < -1e-9 else 1.0
+
+    def _square_on(self, plane: SketchPlane) -> None:
+        """Look straight at a plane from the side the camera is on already.
+
+        Not from the side its normal happens to point to: an origin plane
+        looked at from below, or a face whose axis points into the part,
+        used to swing the view round to the far side of the model.
+        """
+        side = self.eye_side(plane)
+        n = plane.normal
+        self.view.SetProj(n[0] * side, n[1] * side, n[2] * side)
+
     def look_at_plane(self, plane: SketchPlane, fit: bool = True,
                       default_span: float = 180.0,
                       animate: bool = False) -> None:
@@ -1150,8 +1176,7 @@ class Viewport(QtWidgets.QWidget):
             return
 
         def apply() -> None:
-            n = plane.normal
-            self.view.SetProj(n[0], n[1], n[2])
+            self._square_on(plane)
             y = plane.ydir
             try:
                 self.view.SetUp(y[0], y[1], y[2])
@@ -1175,8 +1200,7 @@ class Viewport(QtWidgets.QWidget):
             return
 
         def apply() -> None:
-            n = plane.normal
-            self.view.SetProj(n[0], n[1], n[2])
+            self._square_on(plane)
             y = plane.ydir
             try:
                 self.view.SetUp(y[0], y[1], y[2])

@@ -2600,7 +2600,37 @@ class MainWindow(QtWidgets.QMainWindow):
         self._begin_sketch(SketchPlane(plane.origin, plane.normal, plane.xdir,
                                        plane.name), None)
 
-    def _begin_sketch(self, plane: SketchPlane, face_ref) -> None:
+    def sketch_on_face(self, face) -> bool:
+        """Start a sketch on a flat face, facing the side it is seen from.
+
+        A face's own axis points whichever way its surface was made, into
+        the part as often as out of it, and the sketch used to take that
+        side: the view swung round behind the face and an extrusion went
+        into the body. The sketch faces the camera instead, and remembers
+        that it does, so it keeps facing that way through every rebuild.
+        """
+        plane = plane_from_face(face)
+        if plane is None:
+            self.status_message.setText(
+                "That face is not flat - pick a planar face.")
+            return False
+        from ..core.features import reversed_plane
+        from ..core.naming import RefSet
+        refs = RefSet()
+        refs.capture_from(self.document.shape, "face", [face])
+        ref = refs.refs[0] if refs.refs else None
+        self._pending_plane_pick = False
+        self.viewport.hide_plane_picker()
+        self.set_pick_mode(None)
+        behind = self.viewport.eye_side(plane) < 0
+        if behind:
+            plane = reversed_plane(plane)
+        plane.name = "Face"
+        self._begin_sketch(plane, ref, reverse_face=behind)
+        return True
+
+    def _begin_sketch(self, plane: SketchPlane, face_ref,
+                      reverse_face: bool = False) -> None:
         self.close_dialogs()
         self._pending_plane_pick = False
         self.viewport.hide_plane_picker()
@@ -2608,6 +2638,7 @@ class MainWindow(QtWidgets.QMainWindow):
         feature = SketchFeature()
         feature.sketch = Sketch(plane, "Sketch")
         feature.face_ref = face_ref
+        feature.reverse_face = reverse_face
         self.document.add_feature(feature, self._insert_index())
         feature.sketch.name = feature.name
         self.rebuild()
@@ -2820,20 +2851,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
             faces = self.viewport.selected_faces()
             if faces:
-                plane = plane_from_face(faces[0])
-                if plane is None:
-                    self.status_message.setText(
-                        "That face is not flat - pick a planar face.")
-                    return
-                from ..core.naming import RefSet, ShapeRef
-                refs = RefSet()
-                refs.capture_from(self.document.shape, "face", [faces[0]])
-                ref = refs.refs[0] if refs.refs else None
-                self._pending_plane_pick = False
-                self.viewport.hide_plane_picker()
-                self.set_pick_mode(None)
-                plane.name = "Face"
-                self._begin_sketch(plane, ref)
+                self.sketch_on_face(faces[0])
             return
 
         if self._active_dialog is not None:

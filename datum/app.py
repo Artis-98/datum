@@ -108,6 +108,19 @@ def selftest(report_path: str = "") -> int:
                     note("FAIL  a worker built something else")
                     return 1
                 note("ok  a worker built the same solid and sent it back")
+                # and read a STEP file, which is what opening one does now
+                from .core import fileio
+                folder = tempfile.mkdtemp(prefix="datum-selftest-step-")
+                step = os.path.join(folder, "t.step")
+                fileio.write_shape(document.shape, step)
+                helpers.submit("translate", path=step).result(timeout=120)
+                read = fileio._from_disk_cache(step)
+                import shutil as _shutil
+                _shutil.rmtree(folder, ignore_errors=True)
+                if read is None or abs(kernel.volume(read) - volume) > 1e-3:
+                    note("FAIL  a worker could not translate a STEP file")
+                    return 1
+                note("ok  a worker translated a STEP file")
             finally:
                 helpers.shutdown()
 

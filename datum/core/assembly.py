@@ -687,21 +687,9 @@ class AssemblyDocument:
         """Same shape of answer as a part, so the panel needs no special case."""
         if self.shape is None:
             return {}
-        vol = kernel.volume(self.shape)
-        area = kernel.surface_area(self.shape)
-        cx, cy, cz = kernel.centre_of_mass(self.shape)
-        xmin, ymin, zmin, xmax, ymax, zmax = kernel.bounding_box(self.shape)
-        return {
-            "volume_mm3": vol,
-            "area_mm2": area,
-            "mass_g": vol / 1000.0 * self.density,
-            "centre": (cx, cy, cz),
-            "bbox": (xmax - xmin, ymax - ymin, zmax - zmin),
-            "bbox_min": (xmin, ymin, zmin),
-            "bbox_max": (xmax, ymax, zmax),
-            "faces": len(kernel.faces(self.shape)),
-            "edges": len(kernel.edges(self.shape)),
-        }
+        props = kernel.geometry_properties(self.shape)
+        props["mass_g"] = props["volume_mm3"] / 1000.0 * self.density
+        return props
 
     # ------------------------------------------------------------ edit stack
 

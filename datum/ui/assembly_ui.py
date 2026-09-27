@@ -1022,7 +1022,15 @@ class AssemblyController(QtCore.QObject):
                 % (occurrence.label, occurrence.ref.path or "(no path)"))
             return
         already = self.host.session.by_path(path)
+        seen = self.host.viewport.camera_state()
         self.host.open_path(path)
+        if already is None and seen is not None:
+            # a part opened fresh from here is seen from where it was seen
+            # in the assembly, carried into its own frame, not from a fit
+            # somewhere else; one already open keeps the view it had
+            self.host.viewport.restore_camera(self.host.viewport.carried(
+                seen, occurrence.placement.location().Inverted()
+                .Transformation()))
         if already is None:
             self.host.status_message.setStyleSheet("")
             self.host.status_message.setText(

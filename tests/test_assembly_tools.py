@@ -535,6 +535,40 @@ check("and the edit came all the way up with it",
 
 # ==========================================================================
 print()
+print("stepping into a part keeps the view where it was")
+
+from OCP.gp import gp_Pnt                                       # noqa: E402
+from datum.core.document import Document as _Part             # noqa: E402
+
+plate_part = _Part.load(PLATE)
+plate_part.rebuild()
+box = kernel.bounding_box(plate_part.shape)
+local = ((box[0] + box[3]) / 2, (box[1] + box[4]) / 2, (box[2] + box[5]) / 2)
+plate = win.assembly.occurrences[1]
+moved = gp_Pnt(*local).Transformed(plate.placement.location().Transformation())
+world = (moved.X(), moved.Y(), moved.Z())
+win.viewport.set_view("iso")
+pump(4)
+before = win.viewport.project(world)
+win.edit_in_place(plate.id)
+pump(8)
+inside = win.viewport.project(local)
+check("the part is on screen exactly where it was in the assembly",
+      abs(inside[0] - before[0]) <= 2 and abs(inside[1] - before[1]) <= 2,
+      (before, inside))
+win.viewport.set_view("front")
+pump(4)
+turned = win.viewport.project(local)
+win.finish_in_place()
+pump(8)
+out = win.viewport.project(world)
+check("  and turned round inside, it comes back out seen the same way",
+      abs(out[0] - turned[0]) <= 2 and abs(out[1] - turned[1]) <= 2,
+      (turned, out))
+
+
+# ==========================================================================
+print()
 if FAILS:
     print("%d FAILED" % len(FAILS))
     for name in FAILS:

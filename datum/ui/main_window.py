@@ -3038,22 +3038,34 @@ class MainWindow(QtWidgets.QMainWindow):
                 "%s could not be opened: %s" % (occurrence.label, exc))
             return
 
+        seen = self.viewport.camera_state()
+        where = occurrence.placement.location()
         self.in_place.append({
             "document": parent,
             "label": occurrence.label,
             "occurrence": occurrence_id,
             "ghosts": self._ghosts,
-            "camera": self.viewport.camera_state(),
+            "camera": seen,
+            # how to carry the view back up: this level's placement
+            "placement": where.Transformation(),
         })
         # everything already ghosted, plus this level's siblings, all moved
         # into the frame of the thing we are stepping into
-        back = occurrence.placement.location().Inverted()
+        back = where.Inverted()
         ghosts = [dict(g, shape=g["shape"].Moved(back)) for g in self._ghosts]
         ghosts.extend(self._sibling_ghosts(parent, occurrence_id))
         self._ghosts = ghosts
 
         self.viewport.clear_selection()
         self._show_in_place(child)
+        # The part stays in its own frame and the machine moves into it, so
+        # the view moves with the machine: the same parts in the same places
+        # on screen, only now the one double-clicked is the one being edited.
+        # On a part placed far from the origin, every part of an Inventor
+        # export, the view used to jump somewhere else entirely.
+        if seen is not None:
+            self.viewport.restore_camera(
+                Viewport.carried(seen, back.Transformation()))
         self.status_message.setStyleSheet("")
         self.status_message.setText(
             "Editing %s.  Return goes back to %s."
@@ -3068,6 +3080,9 @@ class MainWindow(QtWidgets.QMainWindow):
         level = self.in_place.pop()
         self._ghosts = level["ghosts"]
         parent = level["document"]
+        # the view as it is now, carried back up, so turning the part round
+        # while inside is not undone on the way out
+        here = self.viewport.camera_state()
         # back out of the part: the component stops being the live one and
         # the tree goes back to showing what holds things together
         self.assembly_ui.browser.set_active(None)
@@ -3080,7 +3095,10 @@ class MainWindow(QtWidgets.QMainWindow):
             # edit is there without a file having been written before
             # anybody decided it was finished
             self.assembly_ui.rebuild()
-        if level.get("camera") is not None:
+        if here is not None and level.get("placement") is not None:
+            self.viewport.restore_camera(
+                Viewport.carried(here, level["placement"]))
+        elif level.get("camera") is not None:
             self.viewport.restore_camera(level["camera"])
         self._sync_in_place()
         self.status_message.setStyleSheet("")

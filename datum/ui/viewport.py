@@ -1293,6 +1293,23 @@ class Viewport(QtWidgets.QWidget):
         except Exception:
             return None
 
+    @staticmethod
+    def carried(state: Optional[Tuple], trsf) -> Optional[Tuple]:
+        """A camera state moved by a transform, eye, target and up alike.
+
+        Whatever is on screen moved by the same transform looks exactly as
+        it did: stepping into a part puts the rest of the machine in the
+        part's frame, and the view goes with it so nothing jumps.
+        """
+        if not state:
+            return state
+        eye, centre, up, scale, orthographic = state
+        e = gp_Pnt(*eye).Transformed(trsf)
+        c = gp_Pnt(*centre).Transformed(trsf)
+        u = gp_Dir(*up).Transformed(trsf)
+        return ((e.X(), e.Y(), e.Z()), (c.X(), c.Y(), c.Z()),
+                (u.X(), u.Y(), u.Z()), scale, orthographic)
+
     def restore_camera(self, state: Optional[Tuple]) -> bool:
         if not self._ready or not state:
             return False

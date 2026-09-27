@@ -415,25 +415,33 @@ class Document:
                 if report is not None:
                     return report
             remote = REMOTE
-            if remote is None or not REUSE_RESULTS:
-                return self._rebuild_here()
-            cost = (walked or self._walk())[1]
-            if cost < REMOTE_AFTER and not (ahead is not None
+            report = None
+            if remote is not None and REUSE_RESULTS:
+                cost = (walked or self._walk())[1]
+                if cost >= REMOTE_AFTER or (ahead is not None
                                             and ahead.holds(self)):
-                return self._rebuild_here()
-            self._again = False
-            self._rebuilding = True
-            try:
-                report = remote(self)
-            except Exception:
-                report = None
-            finally:
-                self._rebuilding = False
+                    self._again = False
+                    self._rebuilding = True
+                    try:
+                        report = remote(self)
+                    except Exception:
+                        report = None
+                    finally:
+                        self._rebuilding = False
             if report is None:
-                return self._rebuild_here()
+                # Built here, but guarded all the same: a build here can
+                # wait for a worker too, a file being translated say, with
+                # the window live, and a slider moved meanwhile must not
+                # start a second build inside this one.
+                self._again = False
+                self._rebuilding = True
+                try:
+                    report = self._rebuild_here()
+                finally:
+                    self._rebuilding = False
             if not self._again:
                 return report
-            # something changed while the worker built: build that too
+            # something changed while it built: build that too
 
     def estimate(self) -> float:
         """Roughly how long the next rebuild will take, in seconds.

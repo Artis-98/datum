@@ -67,6 +67,8 @@ def read_shape(path: str) -> TopoDS_Shape:
     if ext not in (".step", ".stp", ".iges", ".igs", ".brep", ".brp"):
         raise KernelError("unsupported import format: %s" % ext)
     shape = _from_disk_cache(path)
+    if shape is None and ext not in (".brep", ".brp"):
+        shape = _translate_elsewhere(path)
     if shape is None:
         if ext in (".step", ".stp"):
             shape = read_step(path)
@@ -79,6 +81,30 @@ def read_shape(path: str) -> TopoDS_Shape:
     while len(_READ) > _READ_KEEP:
         _READ.popitem(last=False)
     return shape
+
+
+def _translate_elsewhere(path: str) -> Optional[TopoDS_Shape]:
+    """Have a worker translate a file into the cache, the window live meanwhile.
+
+    Translating a 15 MB STEP export and meshing it is nine seconds that
+    the window used to spend frozen. A worker does it instead and leaves
+    it in the body cache, and reading it from there takes half a second.
+    Only in the window, which says how it waits (document.WAIT): a script,
+    or a worker, translates for itself. None if no worker could.
+    """
+    from . import document, workers
+    if document.WAIT is None:
+        return None
+    helpers = workers.pool()
+    if helpers is None:
+        return None
+    try:
+        # one still starting is worth waiting for: a second or two, against
+        # the whole translation with the window frozen
+        document.WAIT(helpers.submit("translate", path=os.path.abspath(path)))
+    except Exception:
+        return None
+    return _from_disk_cache(path)
 
 
 def _from_disk_cache(path: str) -> Optional[TopoDS_Shape]:

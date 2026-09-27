@@ -1919,7 +1919,9 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QApplication.processEvents()
 
         try:
-            top = stepimport.import_assembly(path, folder, report)
+            top = self._import_elsewhere(path, folder, report)
+            if top is None:
+                top = stepimport.import_assembly(path, folder, report)
         except Exception as exc:
             progress.close()
             QtWidgets.QMessageBox.critical(
@@ -1938,6 +1940,65 @@ class MainWindow(QtWidgets.QMainWindow):
             "Opened %s as an assembly of %d parts, saved in %s"
             % (os.path.basename(path), parts, folder))
         return True
+
+    def _import_elsewhere(self, path: str, folder: str, report):
+        """Read and write out a foreign assembly in a worker, the window live.
+
+        Reading the file is most of it, and one core's work: done here it
+        froze the window, progress dialog and all, for six seconds on a
+        15 MB export. A worker reads it and writes the parts out, telling
+        the window how far it has got through a file; then every worker
+        meshes the parts, biggest first. None if no worker could, and it is
+        done here as before.
+        """
+        helpers = workers.pool()
+        if helpers is None:
+            return None
+        import tempfile
+        import uuid
+        note = os.path.join(tempfile.gettempdir(),
+                            "datum-import-%s.json" % uuid.uuid4().hex)
+        poll = QtCore.QTimer(self)
+        poll.setInterval(100)
+
+        def look() -> None:
+            try:
+                with open(note, encoding="utf-8") as handle:
+                    state = json.load(handle)
+            except (OSError, ValueError):
+                return
+            report(state.get("message", ""), int(state.get("done", 0)),
+                   int(state.get("total", 0)))
+
+        poll.timeout.connect(look)
+        poll.start()
+        try:
+            answer = self._wait_responsive(helpers.submit(
+                "import_assembly", path=os.path.abspath(path),
+                folder=os.path.abspath(folder), progress=note),
+                "Opening...")
+        except Exception:
+            return None
+        finally:
+            poll.stop()
+            for leftover in (note, note + ".new"):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+        top = answer.get("top")
+        if not top or not os.path.exists(top):
+            return None
+        # every part is new, so none is looked up first, and they go out
+        # heaviest first as workers come free
+        parts = list(answer.get("parts") or [])
+        report("Meshing %d parts" % len(parts), 0, len(parts))
+        trusted = sorted(core_rules.trusted_paths())
+        helpers.map("build", [{"path": p, "trusted": trusted} for p in parts],
+                    wait=lambda f: self._wait_responsive(f, "Opening..."),
+                    each=lambda done, total: report("Meshing parts",
+                                                    done, total))
+        return top
 
     def export_geometry(self) -> None:
         if self.in_cam:
@@ -3240,7 +3301,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
         return document.apply_remote(result, request)
 
-    def _wait_responsive(self, future):
+    def _wait_responsive(self, future, message: str = "Rebuilding..."):
         """Wait for a worker without the window going dead.
 
         The window keeps painting, the view keeps panning, orbiting and
@@ -3279,7 +3340,7 @@ class MainWindow(QtWidgets.QMainWindow):
         cursor = [False]
 
         def show_busy() -> None:
-            self.status_message.setText("Rebuilding...")
+            self.status_message.setText(message)
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.BusyCursor)
             cursor[0] = True
 

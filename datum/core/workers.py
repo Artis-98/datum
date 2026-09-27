@@ -99,6 +99,9 @@ def _environment() -> Dict[str, str]:
             os.path.abspath(__file__))))
         env["PYTHONPATH"] = root + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONIOENCODING"] = "utf-8"
+    # a worker never starts workers of its own: whatever it runs that would
+    # use them, an import say, runs in it alone
+    env["DATUM_NO_WORKERS"] = "1"
     return env
 
 
@@ -122,6 +125,8 @@ class _Worker:
         self.ready = threading.Event()
         self.pending: Dict[int, Future] = {}
         self.lock = threading.Lock()
+        # one line at a time down the pipe, from whichever thread sends it
+        self.write_lock = threading.Lock()
         self.alive = True
         self.pid = self.process.pid
         threading.Thread(target=self._read, name="datum-worker-%d" % self.pid,
@@ -176,8 +181,9 @@ class _Worker:
         with self.lock:
             self.pending[ident] = future
         try:
-            self.process.stdin.write(line.encode("utf-8"))
-            self.process.stdin.flush()
+            with self.write_lock:
+                self.process.stdin.write(line.encode("utf-8"))
+                self.process.stdin.flush()
         except OSError:
             self._lost()
 
@@ -368,20 +374,58 @@ class Pool:
         return outer
 
     def map(self, op: str, requests: Iterable[Dict[str, Any]],
-            timeout: Optional[float] = None) -> List[Any]:
-        """Run many requests and wait for them all, in order.
+            timeout: Optional[float] = None, wait=None,
+            each=None) -> List[Any]:
+        """Run many requests and wait for them all, answers in order.
 
         A request that failed, or whose worker was lost, comes back as the
         exception rather than stopping the others: the caller decides
         what to do about one bad part in fifty.
+
+        Requests are handed out as workers come free, in the order given,
+        rather than all queued at once: queued, the biggest part could sit
+        behind four small ones on one worker while the others stood idle.
+        ``wait`` is how to wait for an answer (blocking by default), and
+        ``each`` is told how many have been answered so far.
         """
-        futures = [self.submit(op, **r) for r in requests]
-        out: List[Any] = []
-        for future in futures:
+        requests = list(requests)
+        answers: List[Future] = [Future() for _ in requests]
+        queue = list(range(len(requests)))
+        lock = threading.Lock()
+
+        def launch() -> None:
+            with lock:
+                if not queue:
+                    return
+                index = queue.pop(0)
             try:
-                out.append(future.result(timeout=timeout))
+                inner = self.submit(op, **requests[index])
+            except Exception as exc:                    # noqa: BLE001
+                answers[index].set_exception(exc)
+                launch()
+                return
+
+            def done(finished: Future, index=index) -> None:
+                error = finished.exception()
+                if error is not None:
+                    answers[index].set_exception(error)
+                else:
+                    answers[index].set_result(finished.result())
+                launch()
+
+            inner.add_done_callback(done)
+
+        for _ in range(min(max(1, self.running or self.size), len(queue))):
+            launch()
+        out: List[Any] = []
+        for count, answer in enumerate(answers, 1):
+            try:
+                out.append(wait(answer) if wait is not None
+                           else answer.result(timeout=timeout))
             except Exception as exc:                    # noqa: BLE001
                 out.append(exc)
+            if each is not None:
+                each(count, len(answers))
         self._last_used = time.monotonic()
         return out
 

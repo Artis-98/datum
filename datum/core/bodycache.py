@@ -31,7 +31,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from typing import Optional
+from typing import List, Optional
 
 from OCP.BinTools import BinTools
 from OCP.TopoDS import TopoDS_Shape
@@ -64,13 +64,35 @@ def key_for(path: str) -> str:
     copied from somewhere else, or restored from a backup, keeps whatever
     timestamp it arrived with, and two files that are byte for byte the
     same build to the same body whatever their timestamps say.
+
+    Within one session a file is hashed once for as long as its size and
+    time stay as they were: opening an assembly asked for the same sixty
+    five files six times each, and on Windows every look at a file just
+    written waits for the virus scanner, a second in all.
     """
+    try:
+        stat = os.stat(path)
+        stamp = (os.path.abspath(path), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        stamp = None
+    known = _HASHED.get(stamp) if stamp else None
+    if known is not None:
+        return known
     digest = hashlib.sha256()
     digest.update(b"datum-body-%d\n" % CACHE_VERSION)
     with open(path, "rb") as handle:
         for block in iter(lambda: handle.read(1 << 16), b""):
             digest.update(block)
-    return digest.hexdigest()
+    key = digest.hexdigest()
+    if stamp:
+        _HASHED[stamp] = key
+        while len(_HASHED) > 4096:
+            _HASHED.pop(next(iter(_HASHED)))
+    return key
+
+
+# a file as it stands (path, size, time) -> its key; see key_for
+_HASHED: dict = {}
 
 
 def key_for_part(path: str) -> str:
@@ -85,8 +107,19 @@ def key_for_part(path: str) -> str:
 
     digest = hashlib.sha256()
     digest.update(key_for(path).encode("ascii"))
+    for place in imported_files(path):
+        digest.update(b"\nimport ")
+        digest.update(key_for(place).encode("ascii"))
+    return digest.hexdigest()
+
+
+def imported_files(path: str) -> List[str]:
+    """The files a part's import features read, as absolute paths."""
+    from . import fileformat
+
     geometry = fileformat.read(path).geometry
     folder_of = os.path.dirname(os.path.abspath(path))
+    out = []
     for feature in geometry.get("features", []) or []:
         if feature.get("type") != "import" or feature.get("suppressed"):
             continue
@@ -95,9 +128,8 @@ def key_for_part(path: str) -> str:
             continue
         if not os.path.isabs(place):
             place = os.path.normpath(os.path.join(folder_of, place))
-        digest.update(b"\nimport ")
-        digest.update(key_for(place).encode("ascii"))
-    return digest.hexdigest()
+        out.append(place)
+    return out
 
 
 def has(key: str) -> bool:

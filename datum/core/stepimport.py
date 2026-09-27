@@ -306,12 +306,15 @@ def default_folder(path: str) -> str:
 
 
 def import_assembly(path: str, folder: Optional[str] = None,
-                    progress: Optional[Progress] = None) -> str:
+                    progress: Optional[Progress] = None,
+                    cache: bool = True) -> str:
     """Turn a STEP or IGES file into DATUM parts and assemblies.
 
     Returns the path of the assembly at the top. Everything is written
     into ``folder``, made if it is missing; by default a new folder beside
-    the file, named for it.
+    the file, named for it. ``cache`` False writes the files and leaves
+    meshing and caching the parts to the caller, a window that has
+    workers to share it out between, say.
     """
     from . import workers
     # started now, so they have loaded by the time there is meshing to do:
@@ -327,11 +330,11 @@ def import_assembly(path: str, folder: Optional[str] = None,
     if not top.name or top.name.startswith("Assembly "):
         top.name = _stem(path)
     top.name = _strip_origin(top.name)
-    return write(top, folder or default_folder(path), progress)
+    return write(top, folder or default_folder(path), progress, cache)
 
 
 def write(top: Product, folder: str,
-          progress: Optional[Progress] = None) -> str:
+          progress: Optional[Progress] = None, cache: bool = True) -> str:
     """Write a product tree out as DATUM parts and assemblies.
 
     Returns the path of the assembly at the top.
@@ -361,8 +364,8 @@ def write(top: Product, folder: str,
     # meshed in one of them once it is written, several at once; without,
     # they are meshed here together, which at least shares out the cores
     # within each part.
-    helpers = workers.pool()
-    if helpers is None:
+    helpers = workers.pool() if cache else None
+    if helpers is None and cache:
         if progress:
             progress("Meshing %d parts" % len(all_parts), 0, 0)
         mesh.mesh_all(p.shape for p in all_parts)
@@ -395,7 +398,7 @@ def write(top: Product, folder: str,
         target = os.path.join(parts_dir, stem + ".pdat")
         part.save(target)
 
-        if helpers is None:
+        if helpers is None and cache:
             # kept, meshed, now rather than on first open: the assembly is
             # about to be opened, and translating was the slow part
             try:

@@ -24,6 +24,19 @@ MAX_NESTING = 8
 PREFETCH_START = 30
 
 
+def _weight(path: str) -> int:
+    """Roughly how much building a part is: its file and what it imports."""
+    from . import bodycache
+    try:
+        total = os.path.getsize(path)
+        for place in bodycache.imported_files(path):
+            if os.path.exists(place):
+                total += os.path.getsize(place)
+        return total
+    except Exception:
+        return 0
+
+
 def leaf_parts(path: str, depth: int = 0, seen=None) -> List[str]:
     """Every part file an assembly places, sub-assemblies opened up.
 
@@ -138,7 +151,8 @@ class PartLibrary:
         except Exception:
             return False
 
-    def prefetch(self, paths: Iterable[str], force: bool = False) -> int:
+    def prefetch(self, paths: Iterable[str], force: bool = False,
+                 wait=None, each=None) -> int:
         """Build the parts that are not built yet, on every core at once.
 
         Parts are independent of each other, so an assembly's missing
@@ -147,6 +161,9 @@ class PartLibrary:
         in the body cache, which the ordinary build then reads in a moment.
         Returns how many were built this way; nothing is lost when it is
         none, because the ordinary build still builds whatever is missing.
+        The biggest go first, so no core is left with a big one at the end
+        while the others are done. ``wait`` and ``each`` are as for
+        Pool.map: how to wait, and who to tell how far it has got.
         """
         from . import rules, workers
 
@@ -166,8 +183,9 @@ class PartLibrary:
         if not force and held.running == 0 and len(wanted) < PREFETCH_START:
             return 0
         trusted = sorted(rules.trusted_paths())
+        wanted.sort(key=_weight, reverse=True)
         results = held.map("build", [{"path": p, "trusted": trusted}
-                                     for p in wanted])
+                                     for p in wanted], wait=wait, each=each)
         return sum(1 for r in results if isinstance(r, dict) and r.get("built"))
 
     def looks(self, path: str, depth: int = 0):

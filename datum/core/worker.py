@@ -258,6 +258,60 @@ def _measure(path: str, indices=()) -> Dict[str, Any]:
     return {"measures": out}
 
 
+def _translate(path: str) -> Dict[str, Any]:
+    """Translate a STEP or IGES file into the body cache, meshed.
+
+    The window then reads the cached translation, which takes a fraction
+    of the time, instead of translating it with everything else waiting.
+    """
+    from . import fileio
+    fileio.read_shape(path)
+    return {"translated": True}
+
+
+def _import_assembly(path: str, folder: str,
+                     progress: str = "") -> Dict[str, Any]:
+    """Read a STEP file and write it out as parts and assemblies.
+
+    How far it has got goes into the file ``progress`` names, for the
+    window to show while it waits. The parts are left for the window to
+    have meshed, on every worker at once.
+    """
+    from . import stepimport
+
+    last = [0.0]
+
+    def report(message: str, done: int, total: int) -> None:
+        if not progress or (time.monotonic() - last[0] < 0.1
+                            and done != total):
+            return
+        last[0] = time.monotonic()
+        try:
+            with open(progress + ".new", "w", encoding="utf-8") as handle:
+                json.dump({"message": message, "done": done,
+                           "total": total}, handle)
+            os.replace(progress + ".new", progress)
+        except OSError:
+            pass
+
+    top = stepimport.import_assembly(path, folder, report, cache=False)
+    # the parts, heaviest first by what they import, measured from here:
+    # the window looking at files just written waits on the virus scanner
+    parts_dir = os.path.join(folder, "Parts")
+    parts = []
+    for name in os.listdir(parts_dir):
+        stem, ext = os.path.splitext(name)
+        if ext.lower() != ".pdat":
+            continue
+        weight = os.path.getsize(os.path.join(parts_dir, name))
+        brep = os.path.join(parts_dir, stem + ".brep")
+        if os.path.exists(brep):
+            weight += os.path.getsize(brep)
+        parts.append((weight, os.path.join(parts_dir, name)))
+    parts.sort(reverse=True)
+    return {"top": top, "parts": [p for _w, p in parts]}
+
+
 def _forget(keys=()) -> Dict[str, Any]:
     """Let go of the copies kept for these keys: their part has closed."""
     gone = 0
@@ -276,6 +330,8 @@ OPERATIONS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "project": _project,
     "rebuild": _rebuild,
     "forget": _forget,
+    "import_assembly": _import_assembly,
+    "translate": _translate,
     "measure": _measure,
     "ping": _ping,
 }

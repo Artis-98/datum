@@ -227,5 +227,30 @@ check("a later session reads the translation back, mesh and all",
 
 
 print()
+print("a body of many pieces is measured a piece at a time")
+
+from OCP.BRepGProp import BRepGProp                              # noqa: E402
+from OCP.GProp import GProp_GProps                               # noqa: E402
+
+blocks = geometry.box(10, 10, 10).repeat(12, x=30).shape
+whole = GProp_GProps()
+BRepGProp.VolumeProperties_s(blocks, whole)
+volume, centre = kernel.volume_and_centre(blocks)
+check("the pieces add up to the whole",
+      abs(volume - whole.Mass()) < 1e-9 * whole.Mass()
+      and abs(centre[0] - whole.CentreOfMass().X()) < 1e-6,
+      (volume, whole.Mass(), centre))
+check("  area too", abs(kernel.total_area(blocks) - 12 * 600.0) < 1e-6)
+drilled = kernel.combine(blocks, kernel.cylinder(3, 40, (35, 5, -5)), "cut")
+before = sum(len(v) for v in kernel._MEASURES.values())
+volume = kernel.volume_and_centre(drilled)[0]
+measured = sum(len(v) for v in kernel._MEASURES.values()) - before
+check("after a hole, only the block it went through is measured again",
+      measured == 1, measured)
+check("  and the total is right",
+      abs(volume - (12000.0 - 3.141592653589793 * 9 * 10)) < 1e-3, volume)
+
+
+print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)

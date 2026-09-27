@@ -104,9 +104,12 @@ class ModelBrowser(QtWidgets.QTreeWidget):
                 item.setData(0, ROLE_KIND, "body")
                 item.setData(0, ROLE_ID, body.name)
                 try:
-                    item.setToolTip(0, "%s  -  %.3f cm3"
-                                    % (body.name,
-                                       kernel.volume(body.shape) / 1000.0))
+                    # measured a piece at a time and remembered, so a
+                    # refresh after every rebuild does not integrate every
+                    # body again
+                    item.setToolTip(0, "%s  -  %.3f cm3" % (
+                        body.name,
+                        kernel.volume_and_centre(body.shape)[0] / 1000.0))
                 except Exception:
                     item.setToolTip(0, body.name)
             folder.setExpanded(True)

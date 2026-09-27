@@ -207,12 +207,66 @@ def volume_and_centre(shape: TopoDS_Shape
     """Volume and centre of mass from the one integration that gives both.
 
     Asking for them separately integrates the whole body twice, which on a
-    15 000 face import is two seconds each.
+    15 000 face import is two seconds each. And a body of many pieces is
+    integrated a piece at a time, each piece once: after a hole through a
+    300 solid import only the solids it cut are measured again, which is
+    the difference between four and a half seconds and a few hundredths.
+    Volume and first moments add up, so the sum is the whole.
     """
+    total = 0.0
+    moment = [0.0, 0.0, 0.0]
+    for part in _measured_pieces(shape):
+        volume, first = _measure(part, "volume")
+        total += volume
+        for axis in range(3):
+            moment[axis] += first[axis]
+    if abs(total) < 1e-12:
+        # nothing to weigh the centre by: a sheet, or nothing at all
+        props = GProp_GProps()
+        BRepGProp.VolumeProperties_s(shape, props)
+        p = props.CentreOfMass()
+        return props.Mass(), (p.X(), p.Y(), p.Z())
+    return total, (moment[0] / total, moment[1] / total, moment[2] / total)
+
+
+def total_area(shape: TopoDS_Shape) -> float:
+    """Surface area, a piece at a time and each piece once; see above."""
+    return sum(_measure(part, "area")[0] for part in _measured_pieces(shape))
+
+
+# Pieces already integrated, by what was asked of them: hash -> entries of
+# (piece, what, answer). Kept to a size, oldest first out.
+_MEASURES: "OrderedDict[int, list]" = OrderedDict()
+_MEASURES_KEEP = 8192
+
+
+def _measured_pieces(shape: TopoDS_Shape) -> List[TopoDS_Shape]:
+    if shape.ShapeType() == TopAbs_COMPOUND:
+        found = pieces(shape)
+        if len(found) > 1:
+            return found
+    return [shape]
+
+
+def _measure(piece: TopoDS_Shape, what: str):
+    key = hash(piece)
+    for held, kind, answer in _MEASURES.get(key, ()):
+        if kind == what and held.IsEqual(piece):
+            return answer
     props = GProp_GProps()
-    BRepGProp.VolumeProperties_s(shape, props)
-    p = props.CentreOfMass()
-    return props.Mass(), (p.X(), p.Y(), p.Z())
+    if what == "volume":
+        BRepGProp.VolumeProperties_s(piece, props)
+        volume = props.Mass()
+        p = props.CentreOfMass()
+        answer = (volume, (volume * p.X(), volume * p.Y(), volume * p.Z()))
+    else:
+        BRepGProp.SurfaceProperties_s(piece, props)
+        answer = (props.Mass(),)
+    _MEASURES.setdefault(key, []).append((piece, what, answer))
+    _MEASURES.move_to_end(key)
+    while len(_MEASURES) > _MEASURES_KEEP:
+        _MEASURES.popitem(last=False)
+    return answer
 
 
 def geometry_properties(shape: TopoDS_Shape) -> Dict[str, Any]:
@@ -221,7 +275,7 @@ def geometry_properties(shape: TopoDS_Shape) -> Dict[str, Any]:
     xmin, ymin, zmin, xmax, ymax, zmax = bounding_box(shape)
     return {
         "volume_mm3": vol,
-        "area_mm2": surface_area(shape),
+        "area_mm2": total_area(shape),
         "centre": centre,
         "bbox": (xmax - xmin, ymax - ymin, zmax - zmin),
         "bbox_min": (xmin, ymin, zmin),

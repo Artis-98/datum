@@ -166,6 +166,10 @@ def install() -> None:
     import tempfile
 
     os.environ.setdefault("DATUM_SETTINGS_ORG", "IITEG-tests")
+    # The window's tests run everything in their own process, as they
+    # always have, so what they check is the model and not the timing of
+    # other processes. The workers have tests of their own.
+    os.environ.setdefault("DATUM_NO_WORKERS", "1")
     os.environ.setdefault("DATUM_DOCUMENTS",
                           tempfile.mkdtemp(prefix="datum_documents_"))
 

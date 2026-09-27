@@ -78,6 +78,11 @@ def trust_path(path: str) -> None:
         _TRUSTED_PATHS.add(_norm(path))
 
 
+def trusted_paths() -> List[str]:
+    """The files allowed this session, for a worker to be told about."""
+    return list(_TRUSTED_PATHS)
+
+
 def trusted_folders() -> List[str]:
     try:
         from . import prefs

@@ -313,6 +313,10 @@ def import_assembly(path: str, folder: Optional[str] = None,
     into ``folder``, made if it is missing; by default a new folder beside
     the file, named for it.
     """
+    from . import workers
+    # started now, so they have loaded by the time there is meshing to do:
+    # reading the file takes longer than they take to start
+    workers.warm()
     roots = read(path, progress)
     if len(roots) == 1 and roots[0].is_assembly:
         top = roots[0]
@@ -348,15 +352,20 @@ def write(top: Product, folder: str,
         taken[base.lower()] = n + 1
         return base if n == 0 else "%s (%d)" % (base, n + 1)
 
+    from . import workers
+
     written: Dict[Tuple[int, bool], str] = {}
     all_parts = _distinct_parts(top)
     done = [0]
-    # Meshed together, before anything is written: one part at a time,
-    # sixty small parts cannot keep twelve cores busy, and the meshing was
-    # a third of the import. Each part still gets its own tolerance.
-    if progress:
-        progress("Meshing %d parts" % len(all_parts), 0, 0)
-    mesh.mesh_all(p.shape for p in all_parts)
+    # Meshing was a third of the import. With workers, every part is
+    # meshed in one of them once it is written, several at once; without,
+    # they are meshed here together, which at least shares out the cores
+    # within each part.
+    helpers = workers.pool()
+    if helpers is None:
+        if progress:
+            progress("Meshing %d parts" % len(all_parts), 0, 0)
+        mesh.mesh_all(p.shape for p in all_parts)
 
     def write_part(node: Product, mirrored: Optional[gp_Trsf] = None) -> str:
         key = (node.key, mirrored is not None)
@@ -386,14 +395,15 @@ def write(top: Product, folder: str,
         target = os.path.join(parts_dir, stem + ".pdat")
         part.save(target)
 
-        # Read back, meshed and kept, now rather than on first open: the
-        # assembly is about to be opened, and translating was the slow part
-        try:
-            mesh.mesh(shape)
-            bodycache.store(bodycache.key_for(brep), shape)
-            fileio.remember(brep, shape)
-        except Exception:
-            pass
+        if helpers is None:
+            # kept, meshed, now rather than on first open: the assembly is
+            # about to be opened, and translating was the slow part
+            try:
+                mesh.mesh(shape)
+                bodycache.store(bodycache.key_for(brep), shape)
+                fileio.remember(brep, shape)
+            except Exception:
+                pass
         if mirrored is None:
             written[key] = target
             done[0] += 1
@@ -437,6 +447,13 @@ def write(top: Product, folder: str,
         return target
 
     result = write_assembly(top, is_top=True)
+    if helpers is not None:
+        # every part read back, meshed and kept by the workers, several at
+        # a time, so the assembly opens from the cache
+        if progress:
+            progress("Meshing %d parts" % len(all_parts), 0, 0)
+        from .parts import PartLibrary
+        PartLibrary().prefetch(list(written.values()), force=True)
     if progress:
         progress("Done", len(all_parts), len(all_parts))
     return result

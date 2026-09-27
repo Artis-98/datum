@@ -486,6 +486,22 @@ class AssemblyDocument:
         report = AssemblyReport()
         base = base_dir if base_dir is not None else self.base_dir
 
+        if depth == 0:
+            # every part not built yet, built on every core before the
+            # assembly goes looking for them one at a time
+            from .parts import leaf_parts
+            wanted = []
+            for occurrence in self.occurrences:
+                if occurrence.suppressed:
+                    continue
+                path = self.component_path(occurrence, base)
+                if path:
+                    wanted += leaf_parts(path)
+            try:
+                self.library.prefetch(wanted)
+            except Exception:
+                pass            # the ordinary build below still builds them
+
         for occurrence in self.occurrences:
             occurrence.error = ""
             occurrence.shape = None

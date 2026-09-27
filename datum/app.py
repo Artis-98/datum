@@ -69,6 +69,19 @@ def selftest(report_path: str = "") -> int:
         from .core.features import PrimitiveFeature
         note("ok  imported the kernel (OpenCASCADE loaded)")
 
+        from .core import workers
+        if workers.ENABLED:
+            helpers = workers.Pool(size=1)
+            try:
+                helpers.start()
+                if not helpers.wait_ready(timeout=90):
+                    raise RuntimeError("a worker process did not start")
+                answer = helpers.submit("ping").result(timeout=30)
+                note("ok  a worker process answered (pid %s)"
+                     % answer.get("pid"))
+            finally:
+                helpers.shutdown()
+
         document = Document()
         for kind, a, b, c, operation in (("box", 40, 30, 10, "new"),
                                          ("cylinder", 5, 40, 0, "cut")):
@@ -136,6 +149,11 @@ def selftest(report_path: str = "") -> int:
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
 
+    if "--worker" in argv:
+        # a copy of DATUM doing geometry for the window: no Qt, no window,
+        # just requests on stdin (see core/worker.py)
+        from .core import worker
+        return worker.serve()
     if "--selftest" in argv:
         where = argv.index("--selftest")
         report = argv[where + 1] if len(argv) > where + 1 else ""

@@ -9,7 +9,7 @@ neither has to depend on the other.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
@@ -17,6 +17,40 @@ from . import fileformat
 from .fileformat import ASSEMBLY, PART, FileFormatError
 
 MAX_NESTING = 8
+
+
+# Below this many parts to build, and with no workers running, the build
+# stays in the window: starting workers would cost more than it saved.
+PREFETCH_START = 30
+
+
+def leaf_parts(path: str, depth: int = 0, seen=None) -> List[str]:
+    """Every part file an assembly places, sub-assemblies opened up.
+
+    Read from the files alone, without building anything, so the parts
+    can be handed out to be built before the assembly is.
+    """
+    seen = set() if seen is None else seen
+    key = os.path.normcase(os.path.abspath(path))
+    if key in seen or depth > MAX_NESTING or not os.path.isfile(path):
+        return []
+    seen.add(key)
+    if not path.lower().endswith(".adat"):
+        return [path]
+    try:
+        geometry = fileformat.read(path).geometry
+    except Exception:
+        return []
+    base = os.path.dirname(os.path.abspath(path))
+    out: List[str] = []
+    for component in geometry.get("components", []) or []:
+        place = str(component.get("path") or "")
+        if not place:
+            continue
+        if not os.path.isabs(place):
+            place = os.path.normpath(os.path.join(base, place))
+        out += leaf_parts(place, depth + 1, seen)
+    return out
 
 
 class PartLibrary:
@@ -89,6 +123,53 @@ class PartLibrary:
         self._looks[key] = (stamp, look)
         return look
 
+    def is_fresh(self, path: str) -> bool:
+        """Whether this file's body is already to hand, here or on disk."""
+        from . import bodycache
+
+        hit = self._cache.get(self._key(path))
+        try:
+            if hit is not None and hit[0] == os.path.getmtime(path):
+                return True
+        except OSError:
+            return False
+        try:
+            return bodycache.has(bodycache.key_for_part(path))
+        except Exception:
+            return False
+
+    def prefetch(self, paths: Iterable[str], force: bool = False) -> int:
+        """Build the parts that are not built yet, on every core at once.
+
+        Parts are independent of each other, so an assembly's missing
+        bodies can all be built together, each in its own worker, instead
+        of one after another in the window. The workers leave their bodies
+        in the body cache, which the ordinary build then reads in a moment.
+        Returns how many were built this way; nothing is lost when it is
+        none, because the ordinary build still builds whatever is missing.
+        """
+        from . import rules, workers
+
+        wanted, seen = [], set()
+        for path in paths:
+            key = self._key(path)
+            if key in seen or not os.path.isfile(path):
+                continue
+            seen.add(key)
+            if path.lower().endswith(".pdat") and not self.is_fresh(path):
+                wanted.append(os.path.abspath(path))
+        held = workers.pool()
+        if held is None or not wanted:
+            return 0
+        # Starting workers takes a second or two, so it is only worth it
+        # for a good number of parts, unless they are running already.
+        if not force and held.running == 0 and len(wanted) < PREFETCH_START:
+            return 0
+        trusted = sorted(rules.trusted_paths())
+        results = held.map("build", [{"path": p, "trusted": trusted}
+                                     for p in wanted])
+        return sum(1 for r in results if isinstance(r, dict) and r.get("built"))
+
     def looks(self, path: str, depth: int = 0):
         """What an assembly's parts look like, in the order of its bodies.
 
@@ -160,8 +241,8 @@ class PartLibrary:
             # for every component it places.
             key = ""
             try:
-                key = bodycache.key_for(path)
-            except OSError:
+                key = bodycache.key_for_part(path)
+            except Exception:
                 key = ""
             if key:
                 held = bodycache.load(key)

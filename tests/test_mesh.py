@@ -157,7 +157,7 @@ library = PartLibrary()
 shape = library.shape(part_path)
 check("a part built for an assembly is meshed as it is cached",
       shape is not None and mesh.is_meshed(shape))
-again = bodycache.load(bodycache.key_for(part_path))
+again = bodycache.load(bodycache.key_for_part(part_path))
 check("  and the mesh is kept with the cached body",
       again is not None and mesh.is_meshed(again))
 check("the cache was bumped for it", bodycache.CACHE_VERSION >= 2)

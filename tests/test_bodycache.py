@@ -50,7 +50,7 @@ first = library.shape(path)
 check("the part builds", first is not None and not first.IsNull())
 check("and the body was kept", bodycache.size() > 0, bodycache.size())
 
-key = bodycache.key_for(path)
+key = bodycache.key_for_part(path)
 check("it can be read straight back", bodycache.load(key) is not None)
 check("and it is the same body",
       abs(kernel.volume(bodycache.load(key)) - kernel.volume(first)) < 1e-6)
@@ -75,15 +75,26 @@ check("and not the old one",
 
 
 print()
-print("what must not be cached, is not")
+print("a part that imports a file is keyed on that file too")
 
+from datum.core import fileio                                   # noqa
+source = os.path.join(WORK, "somewhere.brep")
+fileio.write_shape(kernel.box(5, 5, 5), source)
 imported = Document()
 feature = ImportFeature()
-feature.path = os.path.join(WORK, "somewhere.step")
+feature.path = "somewhere.brep"
 imported.add_feature(feature)
-check("a part that imports another file is not cacheable",
-      not bodycache.cacheable(imported))
-check("but an ordinary one is", bodycache.cacheable(Document()))
+importer = imported.save(os.path.join(WORK, "importer.pdat"))
+first_key = bodycache.key_for_part(importer)
+fileio.write_shape(kernel.box(5, 5, 9), source)
+check("changing the imported file changes the part's key",
+      bodycache.key_for_part(importer) != first_key)
+os.remove(source)
+try:
+    bodycache.key_for_part(importer)
+    check("a part whose import is missing gets no key at all", False)
+except OSError:
+    check("a part whose import is missing gets no key at all", True)
 
 empty = Document()
 check("a body that is nothing is not stored",
@@ -96,7 +107,7 @@ print("a broken entry is a miss, not a crash")
 path = part(12, "third.pdat")
 library = PartLibrary()
 library.shape(path)
-key = bodycache.key_for(path)
+key = bodycache.key_for_part(path)
 target = bodycache._file_for(key)
 check("the entry is there", os.path.exists(target))
 with open(target, "wb") as handle:

@@ -31,7 +31,7 @@ from . import dialogs, icons
 from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
 from ..core import rules as core_rules
-from ..core import stepimport
+from ..core import stepimport, workers
 from .rules_ui import CODE_STARTER, RulesPanel, open_form
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
@@ -1152,6 +1152,10 @@ class MainWindow(QtWidgets.QMainWindow):
             entry.publish()
         self._sync_update_button()
         self._code_on_open(document)
+        # the first document of a session is when the workers start
+        # loading, in the background, so they are ready by the time there
+        # is an assembly to build or a rebuild to take off the window
+        workers.warm()
         return entry
 
     def activate(self, entry: Optional[session.OpenDocument],

@@ -73,6 +73,38 @@ def key_for(path: str) -> str:
     return digest.hexdigest()
 
 
+def key_for_part(path: str) -> str:
+    """A name for a part as built: its own bytes and every file it imports.
+
+    A part that imports geometry builds to whatever that file holds, so
+    the file is part of the answer and goes into the key. Change either
+    and the key changes. A part whose imported file is missing gets no
+    key at all, because it has no build worth keeping.
+    """
+    from . import fileformat
+
+    digest = hashlib.sha256()
+    digest.update(key_for(path).encode("ascii"))
+    geometry = fileformat.read(path).geometry
+    folder_of = os.path.dirname(os.path.abspath(path))
+    for feature in geometry.get("features", []) or []:
+        if feature.get("type") != "import" or feature.get("suppressed"):
+            continue
+        place = str(feature.get("path") or "")
+        if not place:
+            continue
+        if not os.path.isabs(place):
+            place = os.path.normpath(os.path.join(folder_of, place))
+        digest.update(b"\nimport ")
+        digest.update(key_for(place).encode("ascii"))
+    return digest.hexdigest()
+
+
+def has(key: str) -> bool:
+    """Whether a body is kept under that key."""
+    return ENABLED and bool(key) and os.path.exists(_file_for(key))
+
+
 def _file_for(key: str) -> str:
     return os.path.join(folder(), key[:2], key[2:] + ".bin")
 
@@ -122,14 +154,12 @@ def store(key: str, shape: Optional[TopoDS_Shape]) -> bool:
 
 
 def cacheable(document) -> bool:
-    """Whether this document's body depends only on this document.
+    """Whether this document's body can be kept under its part's key.
 
-    An imported body comes from a file this one does not hash, so its
-    build is not decided by its own bytes and it cannot be keyed on them.
+    It can now even when it imports geometry, because key_for_part hashes
+    the imported files too. Kept as the one place that decides, for the
+    day something else a part depends on turns up.
     """
-    for feature in getattr(document, "features", ()) or ():
-        if getattr(feature, "path", ""):
-            return False
     return True
 
 

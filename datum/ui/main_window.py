@@ -32,6 +32,7 @@ from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
 from ..core import rules as core_rules
 from ..core import document as core_document
+from ..core import ahead as core_ahead
 from ..core import stepimport, workers
 from .rules_ui import CODE_STARTER, RulesPanel, open_form
 from .assembly_ui import AssemblyController
@@ -1675,6 +1676,11 @@ class MainWindow(QtWidgets.QMainWindow):
         dependents = self.session.dependents_of(entry)
         was_active = self.session.active is entry
         self.session.remove(entry)
+        # the copy a worker kept of it, to rebuild only what changed
+        helpers = workers.pool() if workers.ENABLED else None
+        key = getattr(entry.document, "remote_key", None)
+        if helpers is not None and key:
+            helpers.release([key])
 
         # anything that placed it has to fall back to the file on disk
         for other in dependents:
@@ -3196,12 +3202,32 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception:
             pass
 
+    def build_ahead(self, document):
+        """Spare cores to build a part's nearby values, or None.
+
+        Only for a part, only with workers, and only with more than one:
+        the part's own worker never builds ahead, it stays free for the
+        value the slider actually stops on.
+        """
+        helpers = workers.pool()
+        if helpers is None or core_document.REMOTE is None \
+                or not isinstance(document, Document) or helpers.size < 2:
+            return None
+        return core_ahead.BuildAhead(document, helpers)
+
     def _remote_rebuild(self, document):
         """Rebuild in a worker, keeping the window alive until it is done.
 
         Returns None, to have it built here after all, when no worker is
         ready or the worker could not do it.
         """
+        ahead = getattr(document, "ahead", None)
+        if ahead is not None:
+            # already being built on a spare core, because a slider was
+            # heading here: waiting for that is quicker than starting over
+            report = ahead.take(document, wait=self._wait_responsive)
+            if report is not None:
+                return report
         helpers = workers.pool()
         if helpers is None or helpers.ready == 0:
             return None

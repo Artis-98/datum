@@ -24,6 +24,7 @@ from typing import Callable, List, Optional, Sequence, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..core import ahead as core_ahead
 from ..core import geometry
 from ..core import rules as core
 from ..core.features import CodeFeature
@@ -1428,6 +1429,27 @@ class FormDialog(QtWidgets.QDialog):
         self._pending.setInterval(120)
         self._pending.timeout.connect(self._rebuild)
 
+        # Spare cores build the values the controls are about to reach, so
+        # arriving at one shows it rather than builds it. Topped up now and
+        # then as cores come free, near whatever was touched last.
+        self._ahead = None
+        start = getattr(host, "build_ahead", None)
+        if start is not None:
+            try:
+                self._ahead = start(document)
+            except Exception:
+                self._ahead = None
+        if self._ahead is not None:
+            document.ahead = self._ahead
+        self._focus = None
+        self._topped = None
+        self._refill = QtCore.QTimer(self)
+        self._refill.setInterval(200)
+        self._refill.timeout.connect(self._top_up)
+        if self._ahead is not None:
+            self._refill.start()
+        self.finished.connect(self._stop_ahead)
+
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(14, 12, 14, 12)
         layout.setSpacing(8)
@@ -1435,6 +1457,8 @@ class FormDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout()
         form.setSpacing(8)
         self.widgets = {}
+        # per control, the values it could be set to next, likeliest first
+        self._neighbours = {}
         for control in self.controls:
             widget = self._build(control)
             if widget is None:
@@ -1505,13 +1529,25 @@ class FormDialog(QtWidgets.QDialog):
         readout.setMinimumWidth(56)
         readout.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
+        def at(ticks: int) -> float:
+            return control.low + ticks * step
+
+        last = [slider.value()]
+
+        def ahead_of(ticks: int):
+            return [at(t) for t in core_ahead.around(
+                ticks, ticks - last[0], slider.maximum())]
+
         def moved(ticks: int) -> None:
-            value = control.low + ticks * step
+            value = at(ticks)
             readout.setText(("%g" % value))
             self._set(control.param, value)
+            self._look_ahead(control.param, ahead_of(ticks))
+            last[0] = ticks
 
         slider.valueChanged.connect(moved)
         moved(slider.value())
+        self._neighbours[control.param] = lambda: ahead_of(slider.value())
         line.addWidget(slider, 1)
         line.addWidget(readout)
         self.widgets[control.param] = slider
@@ -1525,6 +1561,8 @@ class FormDialog(QtWidgets.QDialog):
         box.valueChanged.connect(
             lambda v, p=control.param: self._set(p, v))
         self.widgets[control.param] = box
+        self._neighbours[control.param] = lambda: [
+            box.value() + box.singleStep(), box.value() - box.singleStep()]
         return box
 
     def _choice(self, control):
@@ -1549,6 +1587,20 @@ class FormDialog(QtWidgets.QDialog):
         combo.currentTextChanged.connect(
             lambda text, p=control.param: self._set_text(p, text))
         self.widgets[control.param] = combo
+        if control.param != "material":
+            def options():
+                # the ones next to the current choice first
+                here = combo.currentIndex()
+                order = sorted(range(combo.count()),
+                               key=lambda i: (abs(i - here), i))
+                out = []
+                for i in order:
+                    try:
+                        out.append(float(combo.itemText(i)))
+                    except ValueError:
+                        pass
+                return out
+            self._neighbours[control.param] = options
         return combo
 
     # -- driving the model -------------------------------------------------
@@ -1561,7 +1613,13 @@ class FormDialog(QtWidgets.QDialog):
             return
         self.document.params.set_expression(name, text)
         self.document.modified = True
-        self._pending.start()
+        self._focus = name
+        if self._ahead is not None and self._ahead.ready(self.document):
+            # built ahead: shown now, not after the pause a drag waits for
+            self._pending.stop()
+            self._rebuild()
+        else:
+            self._pending.start()
 
     def _set_text(self, name: str, text: str) -> None:
         """A choice that names a material sets the material, not a number."""
@@ -1584,6 +1642,58 @@ class FormDialog(QtWidgets.QDialog):
                 self.host.rebuild(keep_camera=True)
         except Exception:
             pass
+
+    # -- building ahead ----------------------------------------------------
+
+    def _look_ahead(self, name: str, values) -> None:
+        if self._ahead is None or not name:
+            return
+        try:
+            self._ahead.offer({name: v} for v in values)
+        except Exception:
+            pass
+
+    def _top_up(self) -> None:
+        """Give cores that came free something near where the form is now."""
+        ahead = self._ahead
+        if ahead is None or not ahead.free():
+            return
+        state = (tuple(self.document.params[n].expression
+                       for n in self._neighbours
+                       if n in self.document.params), ahead.freed)
+        if state == self._topped:
+            return      # nothing moved and nothing came free: asked already
+        self._topped = state
+        # the control touched last first, then the others in turn
+        names = list(self._neighbours)
+        if self._focus in names:
+            names.remove(self._focus)
+            names.insert(0, self._focus)
+        lists = []
+        for name in names:
+            try:
+                lists.append([(name, v) for v in self._neighbours[name]()])
+            except Exception:
+                continue
+        variants = []
+        depth = max((len(values) for values in lists), default=0)
+        for i in range(depth):
+            for values in lists:
+                if i < len(values):
+                    variants.append({values[i][0]: values[i][1]})
+        try:
+            ahead.offer(variants)
+        except Exception:
+            pass
+
+    def _stop_ahead(self, *_args) -> None:
+        self._refill.stop()
+        ahead, self._ahead = self._ahead, None
+        if ahead is None:
+            return
+        if getattr(self.document, "ahead", None) is ahead:
+            self.document.ahead = None
+        ahead.close()
 
     def reject(self) -> None:
         for name, expression in self._before.items():

@@ -34,10 +34,11 @@ from OCP.BRepMesh import BRepMesh_IncrementalMesh
 from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
 from OCP.IMeshTools import IMeshTools_MeshAlgoType, IMeshTools_Parameters
-from OCP.TopAbs import TopAbs_FACE
+from OCP.TopAbs import TopAbs_COMPOUND, TopAbs_FACE
 from OCP.TopExp import TopExp_Explorer
 from OCP.TopLoc import TopLoc_Location
-from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Shape
+from OCP.TopoDS import (TopoDS, TopoDS_Compound, TopoDS_Iterator,
+                        TopoDS_Shape)
 
 # The viewport's quality, the same numbers it has always used: a relative
 # deviation, which OpenCASCADE scales by four and by the largest side of
@@ -88,21 +89,62 @@ def _unplaced(shape: TopoDS_Shape) -> TopoDS_Shape:
     return shape.Located(TopLoc_Location())
 
 
+# Boxes of the pieces of bodies already measured. A body of three hundred
+# solids with a hole moved through one of them is, but for that one, the
+# body it was, and measuring every piece of it again, several times over
+# for each redraw, was a tenth of a second a step.
+_BOXES: "OrderedDict[int, list]" = OrderedDict()
+_BOXES_KEEP = 8192
+
+
+def _box(piece: TopoDS_Shape):
+    key = hash(piece)
+    for held, got in _BOXES.get(key, ()):
+        if held.IsEqual(piece):
+            return got
+    box = Bnd_Box()
+    BRepBndLib.Add_s(piece, box, False)
+    got = None if box.IsVoid() else box.Get()
+    _BOXES.setdefault(key, []).append((piece, got))
+    while len(_BOXES) > _BOXES_KEEP:
+        _BOXES.popitem(last=False)
+    return got
+
+
+def _leaves(shape: TopoDS_Shape) -> List[TopoDS_Shape]:
+    """A shape's pieces, compounds opened all the way down."""
+    if shape.ShapeType() != TopAbs_COMPOUND:
+        return [shape]
+    out: List[TopoDS_Shape] = []
+    pending = [shape]
+    while pending:
+        children = TopoDS_Iterator(pending.pop())
+        while children.More():
+            child = children.Value()
+            if child.ShapeType() == TopAbs_COMPOUND:
+                pending.append(child)
+            else:
+                out.append(child)
+            children.Next()
+    return out
+
+
 def deflection(shape: TopoDS_Shape) -> float:
     """How far a facet may stray from the surface, for this body.
 
     Taken from the body as it was modelled, not as it is placed, so every
     copy of a part asks for the same mesh and one mesh serves them all.
     """
-    box = Bnd_Box()
     try:
-        BRepBndLib.Add_s(_unplaced(shape), box, False)
+        boxes = [b for b in map(_box, _leaves(_unplaced(shape)))
+                 if b is not None]
     except Exception:
         return 0.1
-    if box.IsVoid():
+    if not boxes:
         return 0.1
-    x0, y0, z0, x1, y1, z1 = box.Get()
-    size = max(x1 - x0, y1 - y0, z1 - z0)
+    size = max(max(b[3] for b in boxes) - min(b[0] for b in boxes),
+               max(b[4] for b in boxes) - min(b[1] for b in boxes),
+               max(b[5] for b in boxes) - min(b[2] for b in boxes))
     if not size > 0.0:
         return 0.1
     return size * DEVIATION * 4.0

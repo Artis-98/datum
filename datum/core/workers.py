@@ -227,6 +227,10 @@ class Pool:
                 except OSError:
                     break
             if self._reaper is None:
+                # the first start in this window: results a crashed one
+                # never collected can go
+                from .worker import sweep_bodies
+                sweep_bodies()
                 self._reaper = threading.Thread(
                     target=self._reap, name="datum-worker-reaper",
                     daemon=True)
@@ -265,6 +269,55 @@ class Pool:
         """How many workers have loaded and can take work right now."""
         return sum(1 for w in self._workers if w.alive and w.ready.is_set())
 
+    def _keys_on(self, worker: "_Worker") -> int:
+        """How many keys a worker is keeping state for."""
+        return sum(1 for w in self._affinity.values() if w is worker)
+
+    def bind(self, affinity: str, avoid: Iterable[str] = ()) -> bool:
+        """Give a key a worker of its own, away from the workers of others.
+
+        A key already on a live worker that is not one of theirs stays
+        where it is, with whatever that worker is keeping for it. Otherwise
+        it goes to a ready worker none of the ``avoid`` keys are on, the
+        least busy and least burdened. False when there is no such worker.
+        """
+        self.start()
+        with self._lock:
+            taken = set()
+            for key in avoid:
+                held = self._affinity.get(key)
+                if held is not None and held.alive:
+                    taken.add(id(held))
+            current = self._affinity.get(affinity)
+            if current is not None and current.alive and \
+                    id(current) not in taken:
+                return True
+            choice = [w for w in self._workers if w.alive
+                      and w.ready.is_set() and id(w) not in taken]
+            if not choice:
+                return False
+            self._affinity[affinity] = min(
+                choice, key=lambda w: (w.load, self._keys_on(w)))
+            return True
+
+    def release(self, keys: Iterable[str]) -> None:
+        """Done with these keys: their workers can let go of what they keep.
+
+        Nothing is waited for, and a worker that has gone kept nothing.
+        """
+        with self._lock:
+            held: Dict[int, Any] = {}
+            for key in keys:
+                worker = self._affinity.pop(key, None)
+                if worker is not None and worker.alive:
+                    held.setdefault(id(worker), (worker, []))[1].append(key)
+            ident = [next(self._ids) for _ in held]
+        for number, (worker, names) in zip(ident, held.values()):
+            try:
+                worker.send(number, "forget", {"keys": names}, Future())
+            except Exception:
+                pass
+
     def submit_to(self, affinity: str, op: str, **args: Any) -> Future:
         """Send a request to the worker that took this key's last one.
 
@@ -293,7 +346,7 @@ class Pool:
                 if not live:
                     outer.set_exception(WorkerLost("no worker could start"))
                     return outer
-                worker = min(live, key=lambda w: w.load)
+                worker = min(live, key=lambda w: (w.load, self._keys_on(w)))
                 if affinity:
                     self._affinity[affinity] = worker
             ident = next(self._ids)

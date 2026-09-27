@@ -145,26 +145,28 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
     from . import kernel
 
     have = set(have or ())
-    by_hash: Dict[int, list] = {}
+    named = _names(document)
+    # a shape no feature can be named for keeps the name this copy made
+    # up for it last time, so it is not sent again either
     for key_, shape_ in sent.items():
-        if key_ in have:
-            by_hash.setdefault(hash(shape_), []).append((key_, shape_))
+        _name(named, shape_, key_)
     kept: Dict[str, Any] = {}
     # Everything the window has not got goes into one file, in order.
     # Three hundred small files cost three and a half seconds to read,
     # one file with the same in it well under half a second.
     packed: list = []
+    packed_at: Dict[str, int] = {}
 
     def send(shape_) -> Dict[str, Any]:
         """One shape: named if the window has it, else packed for it."""
-        for key_, held_ in by_hash.get(hash(shape_), ()):
-            if held_.IsEqual(shape_):
-                kept[key_] = shape_
-                return {"key": key_}
-        new = uuid.uuid4().hex
-        kept[new] = shape_
-        packed.append(shape_)
-        return {"key": new, "pack": len(packed) - 1}
+        name = _named(named, shape_) or uuid.uuid4().hex
+        kept[name] = shape_
+        if name in have:
+            return {"key": name}
+        if name not in packed_at:
+            packed_at[name] = len(packed)
+            packed.append(shape_)
+        return {"key": name, "pack": packed_at[name]}
 
     bodies = []
     for body in document.bodies:
@@ -200,7 +202,80 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
         "warnings": list(report.warnings),
         "duration": report.duration,
         "feature_count": report.feature_count,
+        "chain": document._chain,
     }
+
+
+def _names(document) -> Dict[int, list]:
+    """Every shape a rebuild made, named for what made it.
+
+    The name is the fingerprint of the tree up to the first feature that
+    held the shape, with the body and the piece it is. Any worker building
+    the same tree arrives at the same names, so a piece the window already
+    has from one worker is not sent again by another, and stays drawn: a
+    hole slid along a big import sends the solids it cuts and not the ones
+    it leaves alone, whichever core happened to build it.
+    """
+    from . import kernel
+    from .document import _fingerprint
+
+    named: Dict[int, list] = {}
+    limit = (len(document.features) if document.rollback_index is None
+             else document.rollback_index)
+    for feature in document.features[:limit]:
+        entries = document._built.get(feature.id)
+        if not entries:
+            continue
+        # this rebuild's result comes first, the one kept from before after
+        chain, built = entries[0]
+        for body, shape in built.bodies:
+            if shape is None or shape.IsNull():
+                continue
+            _name(named, shape, _fingerprint(chain, body))
+            parts = kernel.pieces(shape)
+            if len(parts) > 1:
+                for index, part in enumerate(parts):
+                    _name(named, part, _fingerprint(chain, body, index))
+    return named
+
+
+def _name(named: Dict[int, list], shape, name: str) -> None:
+    """Name a shape, unless it has a name already: the first one stands."""
+    bucket = named.setdefault(hash(shape), [])
+    if not any(held.IsEqual(shape) for held, _n in bucket):
+        bucket.append((shape, name))
+
+
+def _named(named: Dict[int, list], shape):
+    for held, name in named.get(hash(shape), ()):
+        if held.IsEqual(shape):
+            return name
+    return None
+
+
+def sweep_bodies(age: float = 86400.0) -> None:
+    """Delete results nobody collected, left by a window that crashed."""
+    try:
+        folder = _bodies_folder()
+        cutoff = time.time() - age
+        for name in os.listdir(folder):
+            path = os.path.join(folder, name)
+            try:
+                if os.path.getmtime(path) < cutoff:
+                    os.remove(path)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _forget(keys=()) -> Dict[str, Any]:
+    """Let go of the copies kept for these keys: their part has closed."""
+    gone = 0
+    for key in keys or ():
+        if _MIRRORS.pop(key, None) is not None:
+            gone += 1
+    return {"forgotten": gone}
 
 
 def _ping() -> Dict[str, Any]:
@@ -211,6 +286,7 @@ OPERATIONS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "build": _build,
     "project": _project,
     "rebuild": _rebuild,
+    "forget": _forget,
     "ping": _ping,
 }
 

@@ -169,11 +169,25 @@ def is_valid(shape: Optional[TopoDS_Shape]) -> bool:
 
 
 def bounding_box(shape: TopoDS_Shape) -> Tuple[float, float, float, float, float, float]:
+    if shape.ShapeType() == TopAbs_COMPOUND:
+        # a compound of many pieces, measured a piece at a time and each
+        # piece only once: most of them are the same pieces as last time
+        parts = pieces(shape)
+        if len(parts) > 1:
+            boxes = [b for b in map(_box_of, parts) if b != _NO_BOX]
+            if not boxes:
+                return _NO_BOX
+            return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+                    min(b[2] for b in boxes), max(b[3] for b in boxes),
+                    max(b[4] for b in boxes), max(b[5] for b in boxes))
     box = Bnd_Box()
     BRepBndLib.Add_s(shape, box, True)
     if box.IsVoid():
-        return (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return _NO_BOX
     return box.Get()
+
+
+_NO_BOX = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
 
 
 def volume(shape: TopoDS_Shape) -> float:

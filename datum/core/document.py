@@ -47,6 +47,8 @@ REMOTE: Optional[Callable[["Document"], Optional["RebuildReport"]]] = None
 REMOTE_AFTER = 0.3
 # what a feature never built here is guessed to cost
 UNKNOWN_COST = 0.05
+# how many worker results' shapes a document holds on to, by name
+REMOTE_KEEP = 4
 
 
 def _fingerprint(*parts: Any) -> str:
@@ -57,6 +59,30 @@ def _fingerprint(*parts: Any) -> str:
         digest.update(repr(part).encode("utf-8", "replace"))
         digest.update(b"\x00")
     return digest.hexdigest()
+
+
+def _unpack(result: Dict[str, Any]) -> List[TopoDS_Shape]:
+    """The shapes a worker packed into one file, in order; the file goes."""
+    from OCP.BinTools import BinTools
+    from OCP.TopoDS import TopoDS_Iterator
+
+    pack = result.get("pack")
+    if not pack:
+        return []
+    whole = TopoDS_Shape()
+    try:
+        BinTools.Read_s(whole, pack)
+    finally:
+        try:
+            os.remove(pack)
+        except OSError:
+            pass
+    out: List[TopoDS_Shape] = []
+    children = TopoDS_Iterator(whole)
+    while children.More():
+        out.append(children.Value())
+        children.Next()
+    return out
 
 
 def _strings(value: Any):
@@ -70,6 +96,21 @@ def _strings(value: Any):
             yield from _strings(item)
 
 
+def _reads(feature: Feature, scope: Dict[str, float],
+           data: Optional[Dict[str, Any]] = None) -> List[str]:
+    """The parameters a feature's build reads, by name."""
+    if isinstance(feature, CodeFeature):
+        return sorted(scope)
+    found = set()
+    for text in _strings(feature.to_dict() if data is None else data):
+        if len(text) > 200 or not text.strip():
+            continue
+        for name in referenced_names(text):
+            if name in scope:
+                found.add(name)
+    return sorted(found)
+
+
 def _definition(feature: Feature, scope: Dict[str, float],
                 base_dir: str = "") -> str:
     """Everything a feature's build reads, as one string.
@@ -79,17 +120,7 @@ def _definition(feature: Feature, scope: Dict[str, float],
     reads a file, so the file's size and time are part of it.
     """
     data = feature.to_dict()
-    if isinstance(feature, CodeFeature):
-        names = sorted(scope)
-    else:
-        found = set()
-        for text in _strings(data):
-            if len(text) > 200 or not text.strip():
-                continue
-            for name in referenced_names(text):
-                if name in scope:
-                    found.add(name)
-        names = sorted(found)
+    names = _reads(feature, scope, data)
     values = [(name, scope.get(name)) for name in names]
     extra: Any = None
     if isinstance(feature, ImportFeature) and feature.path:
@@ -201,6 +232,12 @@ class Document:
         import uuid
         self.remote_key = uuid.uuid4().hex
         self._remote_shapes: Dict[str, TopoDS_Shape] = {}
+        self._remote_recent: List[List[str]] = []
+        # rebuilds of nearby parameter values done on spare cores while a
+        # dLogic form is open; see ahead.BuildAhead
+        self.ahead = None
+        self._chain: Optional[str] = None
+        self._applied_chain: Optional[str] = None
         self._rebuilding = False
         self._again = False
         self._sketch_cache: Dict[int, Sketch] = {}
@@ -303,9 +340,28 @@ class Document:
             self._again = True
             return self.last_report
         while True:
+            walked = None
+            if self._applied_chain is not None and REUSE_RESULTS:
+                walked = self._walk()
+                if walked[0] == self._applied_chain:
+                    # What a worker last sent is still the answer: all that
+                    # changed since is something no feature reads, like the
+                    # description a rule writes after every rebuild. Built
+                    # here instead, it would be built from nothing.
+                    return self._unchanged()
+            ahead = self.ahead if REUSE_RESULTS else None
+            if ahead is not None:
+                # built already, on a core with nothing else to do, because
+                # a slider was heading this way
+                report = ahead.take(self)
+                if report is not None:
+                    return report
             remote = REMOTE
-            if remote is None or not REUSE_RESULTS or \
-                    self.estimate() < REMOTE_AFTER:
+            if remote is None or not REUSE_RESULTS:
+                return self._rebuild_here()
+            cost = (walked or self._walk())[1]
+            if cost < REMOTE_AFTER and not (ahead is not None
+                                            and ahead.holds(self)):
                 return self._rebuild_here()
             self._again = False
             self._rebuilding = True
@@ -328,11 +384,15 @@ class Document:
         that will not, and everything after it, cost what they took last
         time. A feature never built here yet is guessed small.
         """
+        return self._walk()[1]
+
+    def _walk(self) -> Tuple[Optional[str], float]:
+        """The fingerprint of the whole tree as it stands, and the estimate."""
         try:
             self.params.evaluate_all()
             scope = self.params.scope()
         except Exception:
-            return 0.0
+            return None, 0.0
         from .rules import document_trusted
         base_dir = (os.path.dirname(os.path.abspath(self.path))
                     if self.path else "")
@@ -342,8 +402,9 @@ class Document:
         missed = False
         cost = 0.0
         # a feature never built here costs more on a bigger body: a cut
-        # through fifteen thousand faces is not a cut through fifty
-        unknown = UNKNOWN_COST + self._weight() * 0.5 / 10000.0
+        # through fifteen thousand faces is not a cut through fifty; the
+        # faces are counted only when there is such a feature
+        unknown = None
         for i, feature in enumerate(self.features[:limit]):
             if feature.suppressed:
                 chain = _fingerprint(chain, "suppressed", feature.id)
@@ -353,8 +414,53 @@ class Document:
                     k == key for k, _b in self._built.get(feature.id, ())):
                 missed = True
             if missed:
+                if feature.id not in self._costs and unknown is None:
+                    unknown = UNKNOWN_COST + self._weight() * 0.5 / 10000.0
                 cost += self._costs.get(feature.id, unknown)
             chain = key
+        return chain, cost
+
+    def _unchanged(self) -> RebuildReport:
+        """The report of a rebuild that had nothing to do."""
+        last = self.last_report
+        report = RebuildReport(ok=last.ok, errors=list(last.errors),
+                               warnings=list(last.warnings), duration=0.0,
+                               feature_count=last.feature_count)
+        self.last_report = report
+        return report
+
+    def change_cost(self, names) -> float:
+        """Roughly how long a rebuild takes after these parameters change.
+
+        Everything from the first feature that reads one of them, or reads
+        a parameter worked out from one of them, to the end of the tree, at
+        what each took last time it was built.
+        """
+        try:
+            self.params.evaluate_all()
+            scope = self.params.scope()
+        except Exception:
+            return 0.0
+        moved = set(names)
+        grew = True
+        while grew:
+            grew = False
+            for param in self.params:
+                if param.name not in moved and moved.intersection(
+                        referenced_names(param.expression)):
+                    moved.add(param.name)
+                    grew = True
+        limit = (len(self.features) if self.rollback_index is None
+                 else self.rollback_index)
+        cost = 0.0
+        reached = False
+        for feature in self.features[:limit]:
+            if feature.suppressed:
+                continue
+            if not reached:
+                reached = bool(moved.intersection(_reads(feature, scope)))
+            if reached:
+                cost += self._costs.get(feature.id, UNKNOWN_COST)
         return cost
 
     def _weight(self) -> int:
@@ -450,6 +556,9 @@ class Document:
                     if all(key != k for k, _b in entries):
                         entries.append((key, built))
             self._built = kept
+        # sent back by a worker, so the window knows what its answer is for
+        self._chain = chain if reuse else None
+        self._applied_chain = None
 
         for name, err in [(p.name, p.error) for p in self.params if p.error]:
             report.errors.append((-1, "parameter %s: %s" % (name, err)))
@@ -487,10 +596,41 @@ class Document:
         already holds is named, not sent. What a build wrote back into a
         feature, a solved sketch or a reference that followed its face, is
         taken only if nobody has edited that feature in the meantime.
+
+        The shapes are gathered before anything is changed: a result that
+        names a shape this document has since let go of raises LookupError
+        and leaves the document as it was, to be rebuilt some other way.
         """
-        from OCP.BinTools import BinTools
         from . import mesh
         from .features import Body, CodeFeature
+
+        unpacked = _unpack(result)
+        shapes: Dict[str, TopoDS_Shape] = {}
+
+        def take(entry) -> TopoDS_Shape:
+            key = entry["key"]
+            shape = self._remote_shapes.get(key)
+            if shape is None:
+                if "pack" not in entry:
+                    raise LookupError("a shape this document no longer has")
+                shape = unpacked[entry["pack"]]
+                # meshed in the worker before it was sent, so a face
+                # without triangles is one the mesher gave up on there
+                mesh.accept_stored(shape)
+            shapes[key] = shape
+            return shape
+
+        bodies = []
+        for entry in result.get("bodies", []):
+            if "pieces" in entry:
+                # a body sent a piece at a time: the pieces the window
+                # already had are the very same objects, so what is drawn
+                # of them stays drawn
+                parts = [take(p) for p in entry["pieces"]]
+                shape = kernel.compound(parts)
+            else:
+                shape = take(entry)
+            bodies.append(Body(entry["name"], shape))
 
         sent = {f.get("id"): json.dumps(f, sort_keys=True)
                 for f in request["data"].get("features", [])}
@@ -508,46 +648,9 @@ class Document:
                     == sent.get(feature.id):
                 feature.load_fields(written)
 
-        shapes: Dict[str, TopoDS_Shape] = {}
-        # what the window has not got came in one file, in order
-        unpacked: List[TopoDS_Shape] = []
-        if result.get("pack"):
-            whole = TopoDS_Shape()
-            BinTools.Read_s(whole, result["pack"])
-            try:
-                os.remove(result["pack"])
-            except OSError:
-                pass
-            from OCP.TopoDS import TopoDS_Iterator
-            children = TopoDS_Iterator(whole)
-            while children.More():
-                piece = children.Value()
-                # meshed in the worker before it was sent, so a face
-                # without triangles is one the mesher gave up on there
-                mesh.accept_stored(piece)
-                unpacked.append(piece)
-                children.Next()
-
-        def take(entry) -> TopoDS_Shape:
-            key = entry["key"]
-            shape = self._remote_shapes.get(key)
-            if shape is None:
-                shape = unpacked[entry["pack"]]
-            shapes[key] = shape
-            return shape
-
-        bodies = []
-        for entry in result.get("bodies", []):
-            if "pieces" in entry:
-                # a body sent a piece at a time: the pieces the window
-                # already had are the very same objects, so what is drawn
-                # of them stays drawn
-                parts = [take(p) for p in entry["pieces"]]
-                shape = kernel.compound(parts)
-            else:
-                shape = take(entry)
-            bodies.append(Body(entry["name"], shape))
-        self._remote_shapes = shapes
+        self._keep_remote(shapes)
+        # the tree this answer is for; see rebuild()
+        self._applied_chain = result.get("chain")
         self.bodies = bodies
         live = [b for b in bodies if b.valid]
         self.shape = (None if not live else live[0].shape if len(live) == 1
@@ -567,6 +670,22 @@ class Document:
         report.feature_count = int(result.get("feature_count", 0))
         self.last_report = report
         return report
+
+    def _keep_remote(self, shapes: Dict[str, TopoDS_Shape]) -> None:
+        """Hold on to the shapes of the last few results, by name.
+
+        Not just the last one: a result built ahead was asked for a moment
+        ago, and names what the window held then. Anything no recent result
+        names is let go.
+        """
+        self._remote_recent.insert(0, list(shapes))
+        del self._remote_recent[REMOTE_KEEP:]
+        pool = dict(self._remote_shapes)
+        pool.update(shapes)
+        wanted = set()
+        for keys in self._remote_recent:
+            wanted.update(keys)
+        self._remote_shapes = {k: pool[k] for k in wanted if k in pool}
 
     def all_sketches(self) -> Dict[int, Sketch]:
         return self._sketch_cache

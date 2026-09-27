@@ -655,12 +655,16 @@ class AssemblyController(QtCore.QObject):
             path = occurrence.ref.resolve(doc.base_dir) if doc.base_dir                 else None
             look = (doc.library.appearance(path)
                     if path and os.path.exists(path) else None)
-            items.append({
+            item = {
                 "id": occurrence.id,
                 "shape": placed,
                 "appearance": look,
                 "highlight": occurrence.id in selected,
-            })
+            }
+            if path and path.lower().endswith(".adat"):
+                # a sub-assembly: each of its parts in its own colour
+                item["looks"] = doc.library.looks(path)
+            items.append(item)
         # Anything the part workspace left lying about goes: a part's
         # sketches are drawn as an overlay, and switching to an assembly
         # never cleared them, so one would float in the middle of the

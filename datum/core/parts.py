@@ -9,7 +9,7 @@ neither has to depend on the other.
 from __future__ import annotations
 
 import os
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
@@ -32,6 +32,8 @@ class PartLibrary:
         # appearances, keyed the same way: an assembly wants the
         # colour without rebuilding the whole feature tree for it
         self._looks: Dict[str, Tuple[float, Any]] = {}
+        # for an assembly: the files its bodies came from, in order
+        self._members: Dict[str, List[Optional[str]]] = {}
         # Set by the window when documents are open in tabs: a part being
         # edited in its own tab is what an assembly should use, not the older
         # copy sitting on disk.  The provider decides *when* that edit becomes
@@ -87,6 +89,27 @@ class PartLibrary:
         self._looks[key] = (stamp, look)
         return look
 
+    def looks(self, path: str, depth: int = 0):
+        """What an assembly's parts look like, in the order of its bodies.
+
+        A list with an appearance for each part and a nested list for each
+        sub-assembly, matching the compound the assembly builds, so whoever
+        draws it can colour each part as itself. None for a part, which
+        has one look and is asked for it with appearance().
+        """
+        members = self._members.get(self._key(path))
+        if members is None or depth > MAX_NESTING:
+            return None
+        out = []
+        for member in members:
+            if not member:
+                out.append(None)
+            elif self._key(member) in self._members:
+                out.append(self.looks(member, depth + 1) or None)
+            else:
+                out.append(self.appearance(member))
+        return out
+
     def shape(self, path: str, depth: int = 0) -> Optional[TopoDS_Shape]:
         """The body a referenced file builds to, or None when it has none."""
         if self.provider is not None:
@@ -124,6 +147,8 @@ class PartLibrary:
             sub = AssemblyDocument.load(path)
             sub.library = self
             sub.rebuild(depth=depth + 1)
+            self._members[self._key(path)] = list(
+                getattr(sub, "members", []))
             return sub.shape
         if manifest.type == PART:
             from . import bodycache, mesh
@@ -141,6 +166,7 @@ class PartLibrary:
             if key:
                 held = bodycache.load(key)
                 if held is not None:
+                    mesh.accept_stored(held)
                     return held
 
             # load builds it; building it again was half of every cold open

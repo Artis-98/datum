@@ -31,6 +31,7 @@ from . import dialogs, icons
 from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
 from ..core import rules as core_rules
+from ..core import stepimport
 from .rules_ui import CODE_STARTER, RulesPanel, open_form
 from .assembly_ui import AssemblyController
 from .browser import ModelBrowser
@@ -1433,6 +1434,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.status_message.setText(
                 "%s is already open." % os.path.basename(path))
             return True
+        if os.path.splitext(path)[1].lower() in stepimport.FOREIGN:
+            return self.open_foreign(path)
 
         try:
             manifest = (fileformat.peek(path)
@@ -1737,6 +1740,25 @@ class MainWindow(QtWidgets.QMainWindow):
             fileio.IMPORT_FILTER)
         if not path:
             return
+        placements, solids = stepimport.survey(path)
+        if placements or solids > 1:
+            answer = QtWidgets.QMessageBox.question(
+                self, "Import",
+                "%s is %s.\n\nOpen it as an assembly instead? Every part "
+                "becomes its own DATUM part, placed where it was, with its "
+                "name and colour, and a part used many times is stored "
+                "once. Large models stay quick that way.\n\n"
+                "Yes opens it as an assembly. No brings the whole thing "
+                "into this part as a single body."
+                % (os.path.basename(path), self._describe_foreign(
+                    placements, solids)),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                | QtWidgets.QMessageBox.Cancel, QtWidgets.QMessageBox.Yes)
+            if answer == QtWidgets.QMessageBox.Cancel:
+                return
+            if answer == QtWidgets.QMessageBox.Yes:
+                self.import_as_assembly(path)
+                return
         self.document.push_undo()
         feature = ImportFeature()
         feature.path = path
@@ -1746,6 +1768,109 @@ class MainWindow(QtWidgets.QMainWindow):
         report = self.rebuild(keep_camera=False)
         if not report.ok:
             QtWidgets.QMessageBox.warning(self, "Import", report.message)
+
+    @staticmethod
+    def _describe_foreign(placements: int, solids: int) -> str:
+        if placements:
+            return "an assembly, with %d placements in it" % placements
+        return "one part with %d separate bodies" % solids
+
+    def open_foreign(self, path: str) -> bool:
+        """A file from another CAD system, opened the way Inventor would.
+
+        With parts in it, as an assembly of them. Otherwise as a new part
+        holding its one body, which is what opening a single solid means.
+        """
+        placements, solids = stepimport.survey(path)
+        if placements or solids > 1:
+            folder = self._import_folder(path)
+            answer = QtWidgets.QMessageBox.question(
+                self, "Open %s" % os.path.basename(path),
+                "%s is %s.\n\nDATUM opens it as an assembly: every part "
+                "its own DATUM part, placed where it was, sub-assemblies, "
+                "names and colours kept, into a new folder:\n\n    %s\n\n"
+                "No opens it as a single part instead, everything in one "
+                "body."
+                % (os.path.basename(path),
+                   self._describe_foreign(placements, solids), folder),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+                | QtWidgets.QMessageBox.Cancel, QtWidgets.QMessageBox.Yes)
+            if answer == QtWidgets.QMessageBox.Cancel:
+                return False
+            if answer == QtWidgets.QMessageBox.Yes:
+                return self.import_as_assembly(path, folder)
+        self.new_document(prompt=False)
+        # a new part comes with an example parameter to show where they
+        # live; a part that is an imported body has no use for it
+        try:
+            self.document.params.remove("d1")
+        except Exception:
+            pass
+        feature = ImportFeature()
+        feature.path = path
+        feature.name = stepimport._stem(path)
+        feature.operation = "new"
+        self.document.add_feature(feature)
+        report = self.rebuild(keep_camera=False)
+        if not report.ok:
+            QtWidgets.QMessageBox.warning(self, "Open", report.message)
+        self.status_message.setText(
+            "Opened %s as a part. Save it to keep it." % os.path.basename(path))
+        return True
+
+    def _import_folder(self, path: str) -> str:
+        """A new folder for the parts an import makes: the project's, or
+        beside the file."""
+        project = self.project_folder()
+        if project and os.path.isdir(project):
+            base = os.path.join(project, stepimport._stem(path))
+            folder, n = base, 2
+            while os.path.exists(folder):
+                folder = "%s (%d)" % (base, n)
+                n += 1
+            return folder
+        return stepimport.default_folder(path)
+
+    def import_as_assembly(self, path: str,
+                           folder: Optional[str] = None) -> bool:
+        """Write a foreign file out as DATUM parts and assemblies, and open it."""
+        folder = folder or self._import_folder(path)
+        progress = QtWidgets.QProgressDialog(
+            "Reading %s" % os.path.basename(path), "", 0, 0, self)
+        progress.setWindowTitle("Opening as an assembly")
+        progress.setCancelButton(None)
+        progress.setWindowModality(QtCore.Qt.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.show()
+        QtWidgets.QApplication.processEvents()
+
+        def report(message: str, done: int, total: int) -> None:
+            progress.setLabelText(
+                "%s  %d of %d" % (message, done, total) if total else message)
+            progress.setMaximum(total)
+            progress.setValue(done)
+            QtWidgets.QApplication.processEvents()
+
+        try:
+            top = stepimport.import_assembly(path, folder, report)
+        except Exception as exc:
+            progress.close()
+            QtWidgets.QMessageBox.critical(
+                self, "Open failed",
+                "%s could not be opened as an assembly:\n\n%s"
+                % (os.path.basename(path), exc))
+            return False
+        progress.close()
+        if not self.open_path(top):
+            return False
+        parts = len([n for n in os.listdir(os.path.join(folder, "Parts"))
+                     if n.lower().endswith(fileformat.extension_for(
+                         fileformat.PART))])
+        self.status_message.setStyleSheet("")
+        self.status_message.setText(
+            "Opened %s as an assembly of %d parts, saved in %s"
+            % (os.path.basename(path), parts, folder))
+        return True
 
     def export_geometry(self) -> None:
         if self.in_cam:

@@ -82,6 +82,9 @@ class BuildContext:
         # Set by the document from its trust, never by the file, so a part
         # somebody sent you cannot run anything by being opened.
         self.code_allowed = False
+        # the folder the document is saved in, which a relative path in it
+        # is relative to
+        self.base_dir = ""
 
     def evaluate(self, expression: Any, what: str) -> float:
         try:
@@ -1180,7 +1183,8 @@ class ImportFeature(Feature):
             if not self.path:
                 raise FeatureError("%s: no file path" % self.name)
             try:
-                self._cache = fileio.read_shape(self.path)
+                self._cache = fileio.read_shape(
+                    self.resolved(ctx.base_dir))
             except Exception as exc:
                 raise FeatureError("%s: %s" % (self.name, exc)) from exc
         # The body read from the file, as it is, not a copy of it. Copying
@@ -1189,6 +1193,18 @@ class ImportFeature(Feature):
         # import was meshed again after every command. Nothing downstream
         # changes a shape in place, so there is nothing to protect it from.
         ctx.apply(self._cache, self.operation, self.id, name=self.body_name)
+
+    def resolved(self, base_dir: str = "") -> str:
+        """The file, found beside the part when its path is relative.
+
+        A STEP file opened as an assembly writes each part's geometry next
+        to the part, and names it from there, so the whole folder can be
+        moved or sent without every part losing its body.
+        """
+        import os
+        if not self.path or os.path.isabs(self.path) or not base_dir:
+            return self.path
+        return os.path.normpath(os.path.join(base_dir, self.path))
 
     def summary(self) -> str:
         import os

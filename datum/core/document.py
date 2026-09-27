@@ -60,7 +60,8 @@ def _strings(value: Any):
             yield from _strings(item)
 
 
-def _definition(feature: Feature, scope: Dict[str, float]) -> str:
+def _definition(feature: Feature, scope: Dict[str, float],
+                base_dir: str = "") -> str:
     """Everything a feature's build reads, as one string.
 
     Its own definition, and the value of every parameter it names. A code
@@ -83,7 +84,7 @@ def _definition(feature: Feature, scope: Dict[str, float]) -> str:
     extra: Any = None
     if isinstance(feature, ImportFeature) and feature.path:
         try:
-            stat = os.stat(feature.path)
+            stat = os.stat(feature.resolved(base_dir))
             extra = (stat.st_size, stat.st_mtime_ns)
         except OSError:
             extra = "missing"
@@ -275,6 +276,8 @@ class Document:
         # the file itself has no say in that
         from .rules import document_trusted
         ctx.code_allowed = document_trusted(self)
+        ctx.base_dir = (os.path.dirname(os.path.abspath(self.path))
+                        if self.path else "")
         report = RebuildReport()
 
         limit = (len(self.features) if self.rollback_index is None
@@ -301,7 +304,8 @@ class Document:
                 chain = _fingerprint(chain, "suppressed", feature.id)
                 continue
             if reuse:
-                key = _fingerprint(chain, _definition(feature, scope))
+                key = _fingerprint(chain, _definition(feature, scope,
+                                                      ctx.base_dir))
                 held = next((b for k, b in self._built.get(feature.id, ())
                              if k == key), None)
                 if held is not None:
@@ -324,7 +328,8 @@ class Document:
                 # fingerprinted as the feature stands after building: a
                 # sketch solves, a reference refreshes what it last found,
                 # and the next rebuild will see it as it is now
-                key = _fingerprint(chain, _definition(feature, scope))
+                key = _fingerprint(chain, _definition(feature, scope,
+                                                      ctx.base_dir))
                 chain = key
                 entries = kept.setdefault(feature.id, [])
                 entries.append((key, _Built.take(ctx, feature.error)))

@@ -37,6 +37,15 @@ USER_FILE = "materials.json"
 DEFAULT_DENSITY = 1.0
 
 
+def plain_colour(name: str) -> str:
+    """"#rrggbb" when a name is a colour and nothing else, "" otherwise."""
+    text = (name or "").strip()
+    if len(text) == 7 and text.startswith("#") and all(
+            c in "0123456789abcdefABCDEF" for c in text[1:]):
+        return text.lower()
+    return ""
+
+
 @dataclass
 class Appearance:
     """How something looks.  Nothing here affects mass or strength."""
@@ -333,6 +342,13 @@ class MaterialLibrary:
         found = self.appearances.get(name)
         if found is not None:
             return found
+        colour = plain_colour(name)
+        if colour:
+            # A colour on its own, "#83807d", as a part from another CAD
+            # system arrives with: what it looked like there, without
+            # adding a library entry for every shade of grey in the file.
+            return Appearance(name=colour, category="Imported",
+                              colour=colour, roughness=0.5)
         return self.appearances.get("Default") or Appearance()
 
     def appearance_for(self, material_name: str) -> Appearance:

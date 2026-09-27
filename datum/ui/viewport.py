@@ -16,7 +16,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from OCP.AIS import (
     AIS_DisplayMode, AIS_InteractiveContext, AIS_InteractiveObject, AIS_Line,
-    AIS_Plane, AIS_Point, AIS_SelectionScheme, AIS_Shape, AIS_TextLabel,
+    AIS_ColoredShape, AIS_Plane, AIS_Point, AIS_SelectionScheme, AIS_Shape,
+    AIS_TextLabel,
     AIS_ViewCube,
 )
 from OCP.Aspect import (
@@ -566,7 +567,8 @@ class Viewport(QtWidgets.QWidget):
             shape = item.get("shape")
             if shape is None or shape.IsNull():
                 continue
-            ais = AIS_Shape(shape)
+            looks = item.get("looks")
+            ais = AIS_ColoredShape(shape) if looks else AIS_Shape(shape)
             colour = item.get("colour") or C.material
 
             if item.get("wire"):
@@ -594,6 +596,8 @@ class Viewport(QtWidgets.QWidget):
             self.apply_appearance(ais, item.get("appearance"))
             if item.get("appearance") is None and item.get("colour"):
                 ais.SetColor(_col(colour))
+            if looks:
+                self._paint_parts(ais, shape, looks)
             transparency = float(item.get("transparency", 0.0))
 
             drawer = ais.Attributes()
@@ -634,6 +638,28 @@ class Viewport(QtWidgets.QWidget):
         if not keep_camera:
             self.fit_all()
         self.redraw()
+
+    @staticmethod
+    def _paint_parts(ais, shape, looks) -> None:
+        """Colour each part of a sub-assembly as the part itself is coloured.
+
+        The sub-assembly arrives as one compound, a body per part in the
+        order its looks are listed, sub-assemblies of its own nested the
+        same way. Walking the two together finds each part's piece of the
+        compound, and that piece gets the part's colour.
+        """
+        from OCP.TopoDS import TopoDS_Iterator
+
+        children = TopoDS_Iterator(shape)
+        for look in looks:
+            if not children.More():
+                break
+            child = children.Value()
+            if isinstance(look, list):
+                Viewport._paint_parts(ais, child, look)
+            elif look is not None:
+                ais.SetCustomColor(child, _col(look.colour))
+            children.Next()
 
     def clear_components(self) -> None:
         if not self._ready:

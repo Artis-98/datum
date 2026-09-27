@@ -185,6 +185,32 @@ def _give_up_on(faces) -> None:
         _UNMESHABLE.popitem(last=False)
 
 
+def accept_stored(shape: Optional[TopoDS_Shape]) -> None:
+    """Take a body read back from the cache as meshed, gaps and all.
+
+    Everything the cache holds was meshed before it was stored, so a face
+    that came back without triangles is one the mesher already failed on.
+    Without this a new session tried those faces again, a second on the
+    Inventor export, before drawing anything.
+    """
+    if not has_faces(shape):
+        return
+    body = _unplaced(shape)
+    location = TopLoc_Location()
+    total = meshed = 0
+    for face in _faces(body):
+        total += 1
+        triangles = BRep_Tool.Triangulation_s(face, location)
+        if triangles is not None and triangles.NbTriangles() > 0:
+            meshed += 1
+        else:
+            _UNMESHABLE[hash(face)] = face
+    while len(_UNMESHABLE) > UNMESHABLE_KEEP:
+        _UNMESHABLE.popitem(last=False)
+    if meshed:
+        _remember(body, deflection(body), meshed)
+
+
 def forget() -> None:
     """Drop the memory, and the bodies it keeps alive."""
     _MESHED.clear()

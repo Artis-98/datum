@@ -522,9 +522,20 @@ class AssemblyDocument:
             if constraint.id in solved.unsatisfied and not constraint.error:
                 constraint.error = "cannot be satisfied with the others"
 
-        bodies = [o.placed() for o in self.active() if o.visible]
-        bodies = [b for b in bodies if b is not None]
+        bodies, members = [], []
+        for occurrence in self.active():
+            if not occurrence.visible:
+                continue
+            placed = occurrence.placed()
+            if placed is None:
+                continue
+            bodies.append(placed)
+            members.append(self.component_path(occurrence, base))
         self.shape = kernel.compound(bodies) if bodies else None
+        # which file each body in that compound came from, in its order, so
+        # an assembly placed in another can still show every part in its
+        # own colour rather than all of them in one
+        self.members = members
 
         report.placed = sum(1 for o in self.active() if o.shape is not None)
         report.dof = solved.dof

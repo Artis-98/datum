@@ -107,8 +107,11 @@ def open_filter(doc_type: Optional[str] = None) -> str:
     if doc_type:
         return "%s;;All files (*)" % save_filter(doc_type)
     everything = " ".join("*%s" % extension_for(k) for k in DOCUMENT_TYPES)
-    parts = ["DATUM documents (%s)" % everything]
+    foreign = "*.step *.stp *.iges *.igs"
+    parts = ["Everything DATUM opens (%s %s)" % (everything, foreign),
+             "DATUM documents (%s)" % everything]
     parts += [save_filter(k) for k in DOCUMENT_TYPES]
+    parts.append("STEP and IGES, from other CAD systems (%s)" % foreign)
     parts.append("Legacy FORGE part (*%s)" % LEGACY_EXTENSION)
     parts.append("All files (*)")
     return ";;".join(parts)

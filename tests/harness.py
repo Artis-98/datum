@@ -155,7 +155,20 @@ def _make(kind: str):
 
 
 def install() -> None:
-    """Replace every modal with one that answers itself."""
+    """Replace every modal with one that answers itself.
+
+    And keep the run out of the real projects. A test opens and saves
+    files, and every one lands in the active project's recent list; run
+    against the real Documents folder that list filled with temp files
+    and pushed out what somebody had actually been working on.
+    """
+    import os
+    import tempfile
+
+    os.environ.setdefault("DATUM_SETTINGS_ORG", "IITEG-tests")
+    os.environ.setdefault("DATUM_DOCUMENTS",
+                          tempfile.mkdtemp(prefix="datum_documents_"))
+
     box = QtWidgets.QMessageBox
     for kind in KINDS:
         setattr(box, kind, _make(kind))

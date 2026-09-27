@@ -39,13 +39,27 @@ _READ: "OrderedDict[tuple, TopoDS_Shape]" = OrderedDict()
 _READ_KEEP = 6
 
 
+def _key(path: str):
+    stat = os.stat(path)
+    return (os.path.normcase(os.path.abspath(path)), stat.st_size,
+            stat.st_mtime_ns)
+
+
+def remember(path: str, shape: TopoDS_Shape) -> None:
+    """This file reads as this shape: it was just written from it."""
+    try:
+        _READ[_key(path)] = shape
+    except OSError:
+        return
+    while len(_READ) > _READ_KEEP:
+        _READ.popitem(last=False)
+
+
 def read_shape(path: str) -> TopoDS_Shape:
     ext = _ext(path)
     if not os.path.exists(path):
         raise KernelError("file not found: %s" % path)
-    stat = os.stat(path)
-    key = (os.path.normcase(os.path.abspath(path)), stat.st_size,
-           stat.st_mtime_ns)
+    key = _key(path)
     held = _READ.get(key)
     if held is not None:
         _READ.move_to_end(key)
@@ -76,11 +90,14 @@ def _from_disk_cache(path: str) -> Optional[TopoDS_Shape]:
     keyed on those bytes and stored with its mesh, so opening it again
     reads a binary file instead of translating and meshing.
     """
-    from . import bodycache
+    from . import bodycache, mesh
     try:
-        return bodycache.load(bodycache.key_for(path))
+        shape = bodycache.load(bodycache.key_for(path))
     except OSError:
         return None
+    if shape is not None:
+        mesh.accept_stored(shape)
+    return shape
 
 
 def _to_disk_cache(path: str, shape: TopoDS_Shape) -> None:

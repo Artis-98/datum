@@ -35,8 +35,10 @@ class SettingsStore:
 
 def manager() -> core.ProjectManager:
     """A manager pointed at this machine's real Documents folder."""
-    documents = QtCore.QStandardPaths.writableLocation(
-        QtCore.QStandardPaths.DocumentsLocation)
+    # DATUM_DOCUMENTS stands in for Documents, so a test run keeps its
+    # projects, and the recent files in them, out of the real one
+    documents = os.environ.get("DATUM_DOCUMENTS") or         QtCore.QStandardPaths.writableLocation(
+            QtCore.QStandardPaths.DocumentsLocation)
     return core.ProjectManager(SettingsStore(), home=documents or None)
 
 

@@ -155,6 +155,11 @@ class Viewport(QtWidgets.QWidget):
         self._cube: Optional[AIS_ViewCube] = None
 
         self._model_ais: Optional[AIS_Shape] = None
+        # or, for a body of many pieces, one per piece
+        self._model_chunks: List[AIS_Shape] = []
+        # set while a rebuild runs in a worker: the view still pans,
+        # orbits and zooms, but a click does not select or open a menu
+        self.busy = False
         # what the model on screen was drawn from, so a rebuild that
         # changed nothing about the solid can leave it there
         self._model_shape: Optional[TopoDS_Shape] = None
@@ -451,6 +456,11 @@ class Viewport(QtWidgets.QWidget):
         ais.SetColor(base)
         ais.SetTransparency(transparency)
 
+    # A body of at least this many separate pieces, an import of three
+    # hundred solids say, is drawn one piece at a time, so a change to a
+    # few of them redraws those few and not the rest.
+    CHUNK_MIN = 8
+
     def set_shape(self, shape: Optional[TopoDS_Shape],
                   keep_camera: bool = True, appearance=None) -> None:
         """Show the document body, preserving selection-free camera state."""
@@ -460,7 +470,7 @@ class Viewport(QtWidgets.QWidget):
         assert ctx is not None
 
         look = self._look_key(appearance)
-        if (self._model_ais is not None and shape is not None
+        if (self.has_model and shape is not None
                 and kernel.same_shape(shape, self._model_shape)):
             # Most commands do not touch the solid: a sketch, a plane, a
             # rename, a parameter nothing uses. Drawing it again anyway
@@ -468,39 +478,37 @@ class Viewport(QtWidgets.QWidget):
             # changed, so the one on screen stays, recoloured if the
             # material is what changed.
             if look != self._model_look:
-                self.apply_appearance(self._model_ais, appearance,
-                                      restyle=True)
+                for ais in self._model_pieces():
+                    self.apply_appearance(ais, appearance, restyle=True)
                 self._model_look = look
             if not keep_camera:
                 self.fit_all()
             self.redraw()
             return
 
-        if self._model_ais is not None:
-            ctx.Remove(self._model_ais, False)
-            self._model_ais = None
-        self._model_shape = None
-        self._model_look = None
+        pieces = self._pieces_of(shape)
+        if (pieces is not None and self._model_chunks
+                and look == self._model_look):
+            # The same body with a few pieces changed, which is what a hole
+            # through a big import is: those few are drawn, the rest stay.
+            self._update_chunks(shape, pieces, appearance)
+            if not keep_camera:
+                self.fit_all()
+            self.redraw()
+            return
 
+        self._clear_model()
         if shape is not None and not shape.IsNull():
-            ais = AIS_Shape(shape)
-            self.apply_appearance(ais, appearance)
-
-            drawer = ais.Attributes()
-            drawer.SetFaceBoundaryDraw(True)
-            boundary = Prs3d_LineAspect(_col(C.material_edge),
-                                        Aspect_TypeOfLine.Aspect_TOL_SOLID, 1.4)
-            drawer.SetFaceBoundaryAspect(boundary)
-            drawer.SetLineAspect(boundary)
-            drawer.SetWireAspect(boundary)
-            drawer.SetIsoOnTriangulation(False)
-            drawer.SetDeviationCoefficient(mesh.DEVIATION)
-            drawer.SetDeviationAngle(mesh.ANGLE)
-            if mesh.mesh(shape):
-                drawer.SetAutoTriangulation(False)
-
-            ctx.Display(ais, False)
-            self._model_ais = ais
+            meshed = mesh.mesh(shape)
+            if pieces is not None:
+                for piece in pieces:
+                    ais = self._model_piece(piece, appearance, meshed)
+                    ctx.Display(ais, False)
+                    self._model_chunks.append(ais)
+            else:
+                ais = self._model_piece(shape, appearance, meshed)
+                ctx.Display(ais, False)
+                self._model_ais = ais
             self._model_shape = shape
             self._model_look = look
             self._apply_display_mode()
@@ -510,9 +518,95 @@ class Viewport(QtWidgets.QWidget):
             self.fit_all()
         self.redraw()
 
+    def _model_piece(self, shape: TopoDS_Shape, appearance,
+                     meshed: bool) -> AIS_Shape:
+        """The model, or one piece of it, dressed to be drawn."""
+        ais = AIS_Shape(shape)
+        self.apply_appearance(ais, appearance)
+        drawer = ais.Attributes()
+        drawer.SetFaceBoundaryDraw(True)
+        boundary = Prs3d_LineAspect(_col(C.material_edge),
+                                    Aspect_TypeOfLine.Aspect_TOL_SOLID, 1.4)
+        drawer.SetFaceBoundaryAspect(boundary)
+        drawer.SetLineAspect(boundary)
+        drawer.SetWireAspect(boundary)
+        drawer.SetIsoOnTriangulation(False)
+        drawer.SetDeviationCoefficient(mesh.DEVIATION)
+        drawer.SetDeviationAngle(mesh.ANGLE)
+        if meshed:
+            # the body was meshed as a whole, so every piece of it has its
+            # triangles already, made to the whole body's tolerance
+            drawer.SetAutoTriangulation(False)
+        return ais
+
+    def _pieces_of(self, shape: Optional[TopoDS_Shape]):
+        """A body's separate pieces, when there are enough to draw apart."""
+        found = kernel.pieces(shape)
+        return found if len(found) >= self.CHUNK_MIN else None
+
+    def _update_chunks(self, shape: TopoDS_Shape, pieces, appearance) -> None:
+        ctx = self.context
+        held: Dict[int, List[AIS_Shape]] = {}
+        for ais in self._model_chunks:
+            held.setdefault(hash(ais.Shape()), []).append(ais)
+        fresh: List[TopoDS_Shape] = []
+        order: List[Any] = []
+        for piece in pieces:
+            bucket = held.get(hash(piece)) or []
+            match = next((a for a in bucket if a.Shape().IsEqual(piece)), None)
+            if match is not None:
+                bucket.remove(match)
+                order.append(match)
+            else:
+                order.append(piece)
+                fresh.append(piece)
+        for bucket in held.values():
+            for gone in bucket:
+                ctx.Remove(gone, False)
+        # only the new pieces need triangles, made to the whole body's
+        # tolerance so they match the pieces around them
+        meshed = True
+        if fresh:
+            meshed = mesh.mesh(kernel.compound(fresh), mesh.deflection(shape))
+        chunks: List[AIS_Shape] = []
+        for entry in order:
+            if isinstance(entry, AIS_Shape):
+                chunks.append(entry)
+                continue
+            ais = self._model_piece(entry, appearance, meshed)
+            ctx.Display(ais, False)
+            chunks.append(ais)
+        self._model_chunks = chunks
+        self._model_shape = shape
+        if fresh:
+            self._apply_display_mode()
+            self._apply_selection_mode()
+
+    def _clear_model(self) -> None:
+        ctx = self.context
+        if self._model_ais is not None:
+            ctx.Remove(self._model_ais, False)
+            self._model_ais = None
+        for ais in self._model_chunks:
+            ctx.Remove(ais, False)
+        self._model_chunks = []
+        self._model_shape = None
+        self._model_look = None
+
+    def _model_pieces(self) -> List[AIS_Shape]:
+        return ([self._model_ais] if self._model_ais is not None
+                else list(self._model_chunks))
+
+    @property
+    def has_model(self) -> bool:
+        return self._model_ais is not None or bool(self._model_chunks)
+
     @property
     def model_ais(self) -> Optional[AIS_Shape]:
-        return self._model_ais
+        """The part on screen, or its first piece when drawn in pieces."""
+        if self._model_ais is not None:
+            return self._model_ais
+        return self._model_chunks[0] if self._model_chunks else None
 
     @staticmethod
     def _look_key(appearance):
@@ -874,14 +968,13 @@ class Viewport(QtWidgets.QWidget):
 
     def _bodies(self) -> List[AIS_Shape]:
         """Everything pickable on screen - the part, or the components."""
-        bodies = [] if self._model_ais is None else [self._model_ais]
-        return bodies + list(self._component_ais.values())
+        return self._model_pieces() + list(self._component_ais.values())
 
     def _solids(self) -> List[AIS_Shape]:
         """Just the ones a shaded display mode means anything for."""
-        bodies = [] if self._model_ais is None else [self._model_ais]
-        return bodies + [ais for key, ais in self._component_ais.items()
-                         if key not in self._component_wires]
+        return self._model_pieces() + [
+            ais for key, ais in self._component_ais.items()
+            if key not in self._component_wires]
 
     def set_display_mode(self, mode: str) -> None:
         self.display_mode = mode
@@ -997,7 +1090,7 @@ class Viewport(QtWidgets.QWidget):
                 self.view.SetUp(y[0], y[1], y[2])
             except Exception:
                 pass
-            if fit and self._model_ais is not None:
+            if fit and self.has_model:
                 self.fit_all()
             else:
                 # nothing to fit to yet, so frame a sensible working area
@@ -1937,10 +2030,10 @@ class Viewport(QtWidgets.QWidget):
 
     def _orbit_centre(self) -> Tuple[float, float, float]:
         """Rotate about the model, falling back to the view target."""
-        if self._model_ais is not None:
+        if self._model_shape is not None:
             try:
                 xmin, ymin, zmin, xmax, ymax, zmax = kernel.bounding_box(
-                    self._model_ais.Shape())
+                    self._model_shape)
                 return ((xmin + xmax) / 2.0, (ymin + ymax) / 2.0,
                         (zmin + zmax) / 2.0)
             except Exception:
@@ -2131,7 +2224,8 @@ class Viewport(QtWidgets.QWidget):
 
         if event.button() in (QtCore.Qt.MiddleButton, QtCore.Qt.RightButton):
             self._navigating = False
-            if event.button() == QtCore.Qt.RightButton and not moved:
+            if event.button() == QtCore.Qt.RightButton and not moved \
+                    and not self.busy:
                 # select whatever is under the cursor first, so the menu can
                 # offer actions for that face rather than generic ones
                 self._menu_pos = QtCore.QPoint(pos)

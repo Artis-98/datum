@@ -76,6 +76,133 @@ def _project(path: str, direction, up, hidden: bool = True,
                       for line in projection.lines]}
 
 
+# Documents this worker keeps a copy of, with what it has already sent
+# back of each: key -> (document, {body key: shape}).  The copy keeps its
+# own results between requests, so a rebuild sent here builds only what
+# changed since the last one.
+_MIRRORS: Dict[str, Any] = {}
+_MIRROR_KEEP = 4
+# a body of at least this many pieces is sent a piece at a time
+PIECES_MIN = 8
+
+
+def _bodies_folder() -> str:
+    import tempfile
+    folder = os.path.join(tempfile.gettempdir(), "datum-bodies")
+    os.makedirs(folder, exist_ok=True)
+    return folder
+
+
+def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
+             rollback=None, have=(), prime: bool = False) -> Dict[str, Any]:
+    """Rebuild a document the window sent, and say what came of it.
+
+    Bodies go back as files, and only those the window has not already
+    got: a sketch added at the end of a long tree sends nothing heavy
+    back at all. ``prime`` builds without sending anything, to have the
+    copy ready before the first real request.
+    """
+    import json
+    import uuid
+    from collections import OrderedDict
+    from OCP.BinTools import BinTools
+    from . import mesh
+    from .document import Document
+    from .features import CodeFeature
+
+    global _MIRRORS
+    if not isinstance(_MIRRORS, OrderedDict):
+        _MIRRORS = OrderedDict(_MIRRORS)
+    held = _MIRRORS.pop(key, None) or (Document(), {})
+    document, sent = held
+    _MIRRORS[key] = held
+    while len(_MIRRORS) > _MIRROR_KEEP:
+        _MIRRORS.popitem(last=False)
+
+    before = {f.get("id"): json.dumps(f, sort_keys=True)
+              for f in data.get("features", [])}
+    document.path = path or ""
+    document.load_dict(data)
+    document.rules.trusted = bool(trusted)
+    document.rollback_index = rollback
+    report = document.rebuild()
+    if prime:
+        return {"primed": True, "duration": report.duration}
+
+    features = []
+    built = set(document._built_now)
+    for feature in document.features:
+        state: Dict[str, Any] = {"id": feature.id, "error": feature.error}
+        if isinstance(feature, CodeFeature):
+            state["output"] = getattr(feature, "output", "")
+        if feature.id in built:
+            state["cost"] = document._costs.get(feature.id)
+        now = feature.to_dict()
+        if json.dumps(now, sort_keys=True) != before.get(feature.id):
+            state["definition"] = now
+        features.append(state)
+
+    from . import kernel
+
+    have = set(have or ())
+    by_hash: Dict[int, list] = {}
+    for key_, shape_ in sent.items():
+        if key_ in have:
+            by_hash.setdefault(hash(shape_), []).append((key_, shape_))
+    kept: Dict[str, Any] = {}
+    # Everything the window has not got goes into one file, in order.
+    # Three hundred small files cost three and a half seconds to read,
+    # one file with the same in it well under half a second.
+    packed: list = []
+
+    def send(shape_) -> Dict[str, Any]:
+        """One shape: named if the window has it, else packed for it."""
+        for key_, held_ in by_hash.get(hash(shape_), ()):
+            if held_.IsEqual(shape_):
+                kept[key_] = shape_
+                return {"key": key_}
+        new = uuid.uuid4().hex
+        kept[new] = shape_
+        packed.append(shape_)
+        return {"key": new, "pack": len(packed) - 1}
+
+    bodies = []
+    for body in document.bodies:
+        if body.shape is None or body.shape.IsNull():
+            continue
+        mesh.mesh(body.shape)
+        parts = kernel.pieces(body.shape)
+        if len(parts) >= PIECES_MIN:
+            # A body of many pieces goes back a piece at a time, and only
+            # the pieces the window has not got: a hole through a big
+            # import sends three solids, not three hundred.
+            bodies.append({"name": body.name,
+                           "pieces": [send(p) for p in parts]})
+        else:
+            entry = send(body.shape)
+            entry["name"] = body.name
+            bodies.append(entry)
+    sent.clear()
+    sent.update(kept)
+    pack = ""
+    if packed:
+        pack = os.path.join(_bodies_folder(), uuid.uuid4().hex + ".bin")
+        BinTools.Write_s(kernel.compound(packed), pack)
+
+    return {
+        "pack": pack,
+        "features": features,
+        "bodies": bodies,
+        "sketches": list(document._sketch_cache),
+        "planes": {name: plane.to_dict()
+                   for name, plane in document.planes.items()},
+        "errors": [list(e) for e in report.errors],
+        "warnings": list(report.warnings),
+        "duration": report.duration,
+        "feature_count": report.feature_count,
+    }
+
+
 def _ping() -> Dict[str, Any]:
     return {"pid": os.getpid()}
 
@@ -83,6 +210,7 @@ def _ping() -> Dict[str, Any]:
 OPERATIONS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "build": _build,
     "project": _project,
+    "rebuild": _rebuild,
     "ping": _ping,
 }
 

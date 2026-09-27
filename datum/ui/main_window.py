@@ -31,6 +31,7 @@ from . import dialogs, icons
 from . import doctabs, session, updater
 from .assembly_browser import AssemblyBrowserPanel
 from ..core import rules as core_rules
+from ..core import document as core_document
 from ..core import stepimport, workers
 from .rules_ui import CODE_STARTER, RulesPanel, open_form
 from .assembly_ui import AssemblyController
@@ -84,6 +85,60 @@ RECT_OPTIONS = [
     ("slot_arc_centre", "slot_arc_centre", "Slot", "Center Point Arc"),
     ("polygon", "polygon", "Polygon", "Polygon"),
 ]
+
+
+class _Relay(QtCore.QObject):
+    """Carries "the worker is done" from its thread to the window's."""
+
+    done = QtCore.Signal()
+
+
+class _HoldInput(QtCore.QObject):
+    """While a worker rebuilds: the view navigates, forms slide, the rest waits.
+
+    Mouse buttons, keys and context menus meant for anything else are held
+    back, because they could change the model the worker is building. The
+    view keeps its middle and right buttons and the wheel, which only move
+    the camera; its left button, which selects, waits with the rest.
+    Anything marked datum_live, a dLogic form, keeps all of its input.
+    """
+
+    BLOCKED = (
+        QtCore.QEvent.MouseButtonPress, QtCore.QEvent.MouseButtonRelease,
+        QtCore.QEvent.MouseButtonDblClick, QtCore.QEvent.KeyPress,
+        QtCore.QEvent.KeyRelease, QtCore.QEvent.ShortcutOverride,
+        QtCore.QEvent.Shortcut, QtCore.QEvent.ContextMenu,
+        QtCore.QEvent.Drop, QtCore.QEvent.Close,
+    )
+
+    def __init__(self, viewport) -> None:
+        super().__init__()
+        self.viewport = viewport
+
+    def _live(self, widget) -> bool:
+        while widget is not None:
+            if widget.property("datum_live"):
+                return True
+            widget = widget.parentWidget() if isinstance(
+                widget, QtWidgets.QWidget) else None
+        return False
+
+    def eventFilter(self, obj, event) -> bool:
+        kind = event.type()
+        if kind not in self.BLOCKED:
+            return False
+        if kind == QtCore.QEvent.Close:
+            event.ignore()
+            return True
+        if not isinstance(obj, QtWidgets.QWidget):
+            return False
+        if self._live(obj):
+            return False
+        if obj is self.viewport and kind in (
+                QtCore.QEvent.MouseButtonPress,
+                QtCore.QEvent.MouseButtonRelease):
+            return event.button() == QtCore.Qt.LeftButton
+        return True
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self) -> None:
@@ -180,6 +235,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_docks()
         self._build_material_bar()
         self._build_in_place_return()
+        self._install_remote()
         self._build_status_bar()
         self._build_shortcuts()
 
@@ -1156,6 +1212,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # loading, in the background, so they are ready by the time there
         # is an assembly to build or a rebuild to take off the window
         workers.warm()
+        self._prime(document)
         return entry
 
     def activate(self, entry: Optional[session.OpenDocument],
@@ -3115,6 +3172,105 @@ class MainWindow(QtWidgets.QMainWindow):
             self._rules_running = False
         if results:
             self.rules_panel.refresh()
+
+    # ------------------------------------------------ rebuilds in a worker
+
+    def _install_remote(self) -> None:
+        """Let slow rebuilds happen in a worker while the window stays live."""
+        if workers.ENABLED:
+            core_document.REMOTE = self._remote_rebuild
+
+    def _prime(self, document) -> None:
+        """Have a worker build its own copy of a part, ready for later.
+
+        The first slow rebuild then only builds what changed, instead of the
+        whole part from nothing in a worker that has never seen it.
+        """
+        helpers = workers.pool()
+        if helpers is None or core_document.REMOTE is None \
+                or not isinstance(document, Document):
+            return
+        try:
+            helpers.submit_to(document.remote_key, "rebuild",
+                              **document.remote_request(prime=True))
+        except Exception:
+            pass
+
+    def _remote_rebuild(self, document):
+        """Rebuild in a worker, keeping the window alive until it is done.
+
+        Returns None, to have it built here after all, when no worker is
+        ready or the worker could not do it.
+        """
+        helpers = workers.pool()
+        if helpers is None or helpers.ready == 0:
+            return None
+        request = document.remote_request()
+        future = helpers.submit_to(document.remote_key, "rebuild", **request)
+        try:
+            result = self._wait_responsive(future)
+        except Exception:
+            return None
+        return document.apply_remote(result, request)
+
+    def _wait_responsive(self, future):
+        """Wait for a worker without the window going dead.
+
+        The window keeps painting, the view keeps panning, orbiting and
+        zooming, and a dLogic form keeps taking slider drags. What could
+        change the model underneath the rebuild, a click in the tree, the
+        ribbon, a key, waits until it is done: it is a moment, and the
+        alternative is a rebuild answering a question nobody is asking
+        any more.
+        """
+        if future.done():
+            return future.result()
+        loop = QtCore.QEventLoop(self)
+        relay = _Relay()
+        relay.done.connect(loop.quit, QtCore.Qt.QueuedConnection)
+        future.add_done_callback(lambda _f: relay.done.emit())
+        hold = _HoldInput(self.viewport)
+        app = QtWidgets.QApplication.instance()
+        app.installEventFilter(hold)
+        self.viewport.busy = True
+        # Qt runs a keyboard shortcut before any filter sees the key, so
+        # Ctrl+Z would undo underneath the rebuild; shortcuts are switched
+        # off for the wait instead, and back on after
+        paused = []
+        for shortcut in self.findChildren(QtGui.QShortcut):
+            if shortcut.isEnabled():
+                shortcut.setEnabled(False)
+                paused.append(shortcut)
+        for action in self.findChildren(QtGui.QAction):
+            if action.isEnabled() and not action.shortcut().isEmpty():
+                action.setEnabled(False)
+                paused.append(action)
+        said = self.status_message.text()
+        busy = QtCore.QTimer(self)
+        busy.setSingleShot(True)
+        busy.setInterval(250)
+        cursor = [False]
+
+        def show_busy() -> None:
+            self.status_message.setText("Rebuilding...")
+            QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.BusyCursor)
+            cursor[0] = True
+
+        busy.timeout.connect(show_busy)
+        busy.start()
+        try:
+            if not future.done():
+                loop.exec()
+        finally:
+            busy.stop()
+            app.removeEventFilter(hold)
+            for held in paused:
+                held.setEnabled(True)
+            self.viewport.busy = False
+            if cursor[0]:
+                QtWidgets.QApplication.restoreOverrideCursor()
+                self.status_message.setText(said)
+        return future.result()
 
     def _run_event_rules(self, document, event: str) -> None:
         """Run what an open or a save sets off, and catch the model up."""

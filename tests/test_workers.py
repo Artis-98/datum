@@ -92,9 +92,8 @@ for future in slow:
         outcomes.append(future.result(timeout=60))
     except Exception as exc:                                    # noqa
         outcomes.append(exc)
-lost = [o for o in outcomes if isinstance(o, workers.WorkerLost)]
-check("what it was holding is reported lost, not left hanging",
-      all(isinstance(o, (dict, workers.WorkerLost)) for o in outcomes),
+check("what it was holding is done by another worker instead",
+      all(isinstance(o, dict) and o.get("built") for o in outcomes),
       outcomes)
 again = helpers.submit("ping").result(timeout=90)
 check("and the pool carries on, starting a replacement",

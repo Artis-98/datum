@@ -159,6 +159,38 @@ check("drawing a sketch leaves the body on screen as it was",
 
 
 print()
+print("a body of many pieces is drawn a piece at a time")
+
+from datum.core import fileio  # noqa: E402
+from datum.core.features import ImportFeature  # noqa: E402
+many = os.path.join(tempfile.mkdtemp(prefix="pieces_"), "twelve.brep")
+fileio.write_shape(geometry.box(10, 10, 10).repeat(12, x=30).shape, many)
+win.new_document()
+pump()
+brought = ImportFeature()
+brought.path = many
+brought.operation = "new"
+win.document.add_feature(brought)
+win.rebuild(keep_camera=False)
+pump()
+first = list(win.viewport._model_chunks)
+check("twelve solids, twelve pieces on screen", len(first) == 12,
+      len(first))
+hole = PrimitiveFeature()
+hole.kind = "cylinder"
+hole.a, hole.b, hole.c = "3", "20", "0"
+hole.origin = ("35", "5", "-5")
+hole.operation = "cut"
+win.document.add_feature(hole)
+win.rebuild(keep_camera=True)
+pump()
+after = list(win.viewport._model_chunks)
+kept = sum(1 for a in after if any(a is b for b in first))
+check("a hole through one of them redraws that one and keeps the rest",
+      len(after) == 12 and kept == 11, (len(after), kept))
+
+
+print()
 print("the SpaceMouse looks for new devices without stopping the window")
 
 import time  # noqa: E402

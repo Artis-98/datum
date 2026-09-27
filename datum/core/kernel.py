@@ -9,6 +9,7 @@ algorithm return a null shape that explodes three calls later.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 import os
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -984,6 +985,46 @@ def unify(shape: TopoDS_Shape) -> TopoDS_Shape:
 LOCAL_SOLIDS = 8
 
 
+# Boxes of solids already measured.  A body of three hundred solids is
+# combined with tool after tool, and all but a few of its solids are the
+# same objects every time; measuring them again was a sixth of a cut.
+_BOXES: "OrderedDict[int, Tuple[TopoDS_Shape, Tuple]]" = OrderedDict()
+_BOXES_KEEP = 8192
+
+
+def _box_of(shape: TopoDS_Shape):
+    key = hash(shape)
+    held = _BOXES.get(key)
+    if held is not None and held[0].IsEqual(shape):
+        return held[1]
+    box = bounding_box(shape)
+    _BOXES[key] = (shape, box)
+    while len(_BOXES) > _BOXES_KEEP:
+        _BOXES.popitem(last=False)
+    return box
+
+
+def pieces(shape: Optional[TopoDS_Shape]) -> List[TopoDS_Shape]:
+    """A shape's separate pieces: compounds opened up, down to what is in them."""
+    out: List[TopoDS_Shape] = []
+    if shape is None or shape.IsNull():
+        return out
+    if shape.ShapeType() != TopAbs_COMPOUND:
+        return [shape]
+    pending = [shape]
+    while pending:
+        here = pending.pop(0)
+        children = TopoDS_Iterator(here)
+        while children.More():
+            child = children.Value()
+            if child.ShapeType() == TopAbs_COMPOUND:
+                pending.append(child)
+            else:
+                out.append(child)
+            children.Next()
+    return out
+
+
 def _boxes_meet(a, b, margin: float) -> bool:
     return not (a[3] + margin < b[0] or b[3] + margin < a[0]
                 or a[4] + margin < b[1] or b[4] + margin < a[1]
@@ -1012,7 +1053,7 @@ def combine(base: TopoDS_Shape, tool: TopoDS_Shape, op: str) -> TopoDS_Shape:
     margin = max(1e-3, size * 1e-6)
     near, far = [], []
     for part in parts:
-        (near if _boxes_meet(bounding_box(part), reach, margin)
+        (near if _boxes_meet(_box_of(part), reach, margin)
          else far).append(part)
     if not far:
         return unify(boolean(base, tool, op))

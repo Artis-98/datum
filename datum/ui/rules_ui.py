@@ -1414,6 +1414,9 @@ class FormDialog(QtWidgets.QDialog):
         self.setWindowTitle(title or "dLogic")
         self.setWindowIcon(icons.icon("auto", 24))
         self.setMinimumWidth(380)
+        # its sliders keep moving while the model rebuilds in a worker: the
+        # value they end on is the one built next
+        self.setProperty("datum_live", True)
 
         # what to put back if this is cancelled
         self._before = {name: document.params[name].expression

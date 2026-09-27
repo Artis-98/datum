@@ -11,7 +11,7 @@ What they cost is the reason for the numbers below. A worker is about
 to start, so there are never more of them than the machine has spare
 cores or memory for, they start only when there is work worth starting
 them for, they run below normal priority so the window never waits on
-them, and they go away after a while with nothing to do.
+them, and they go away after twenty minutes with nothing to do.
 
 ``DATUM_NO_WORKERS`` switches all of it off: everything then runs in the
 window's own process, as it always did.
@@ -35,9 +35,11 @@ from .worker import MARK
 ENABLED = not os.environ.get("DATUM_NO_WORKERS")
 
 # a worker with nothing to do for this long is let go, memory and all
-IDLE_SECONDS = 600
+IDLE_SECONDS = 1200
 # how long a worker is given to load before it is written off
 START_SECONDS = 60
+# how many workers a request may try, should the first die under it
+RETRIES = 2
 
 
 def _memory_gb() -> float:
@@ -204,6 +206,9 @@ class Pool:
         self._ids = itertools.count(1)
         self._last_used = time.monotonic()
         self._reaper: Optional[threading.Thread] = None
+        # work that should go back to the same worker, which keeps state
+        # for it: a document's copy, say
+        self._affinity: Dict[str, _Worker] = {}
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -253,18 +258,61 @@ class Pool:
 
     def submit(self, op: str, **args: Any) -> Future:
         """Send one request to the least busy worker."""
+        return self._dispatch(None, op, args, RETRIES)
+
+    @property
+    def ready(self) -> int:
+        """How many workers have loaded and can take work right now."""
+        return sum(1 for w in self._workers if w.alive and w.ready.is_set())
+
+    def submit_to(self, affinity: str, op: str, **args: Any) -> Future:
+        """Send a request to the worker that took this key's last one.
+
+        A worker keeping a document's copy builds only what changed; any
+        other worker would start from nothing. A new key, or one whose
+        worker has gone, goes to whichever is least busy and stays there.
+        """
+        return self._dispatch(affinity, op, args, RETRIES)
+
+    def _dispatch(self, affinity: Optional[str], op: str,
+                  args: Dict[str, Any], attempts: int,
+                  outer: Optional[Future] = None) -> Future:
+        """Send a request, and send it again elsewhere if its worker dies.
+
+        A worker can die between being chosen and answering, and the
+        request dies with it. Everything a worker does can be done again,
+        so the request goes to another one rather than failing, once.
+        """
         self.start()
-        future: Future = Future()
+        outer = outer if outer is not None else Future()
+        attempt: Future = Future()
         with self._lock:
-            live = [w for w in self._workers if w.alive]
-            if not live:
-                future.set_exception(WorkerLost("no worker could start"))
-                return future
-            worker = min(live, key=lambda w: w.load)
+            worker = self._affinity.get(affinity) if affinity else None
+            if worker is None or not worker.alive:
+                live = [w for w in self._workers if w.alive]
+                if not live:
+                    outer.set_exception(WorkerLost("no worker could start"))
+                    return outer
+                worker = min(live, key=lambda w: w.load)
+                if affinity:
+                    self._affinity[affinity] = worker
             ident = next(self._ids)
+
+        def finished(done: Future) -> None:
+            if outer.done():
+                return
+            error = done.exception()
+            if isinstance(error, WorkerLost) and attempts > 1:
+                self._dispatch(affinity, op, args, attempts - 1, outer)
+            elif error is not None:
+                outer.set_exception(error)
+            else:
+                outer.set_result(done.result())
+
+        attempt.add_done_callback(finished)
         self._last_used = time.monotonic()
-        worker.send(ident, op, args, future)
-        return future
+        worker.send(ident, op, args, attempt)
+        return outer
 
     def map(self, op: str, requests: Iterable[Dict[str, Any]],
             timeout: Optional[float] = None) -> List[Any]:

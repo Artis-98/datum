@@ -164,5 +164,68 @@ check("the cache was bumped for it", bodycache.CACHE_VERSION >= 2)
 
 
 print()
+print("a boolean on a body of many solids touches only its neighbourhood")
+
+pieces = [geometry.box(10, 10, 10).move(i * 30) for i in range(12)]
+many = geometry.union(pieces).shape
+before = kernel.explore(many, kernel.TopAbs_SOLID)
+drill = geometry.cylinder(3, 30).move(35, 5, -10).shape
+local = kernel.combine(many, drill, "cut")
+full = kernel.unify(kernel.boolean(many, drill, "cut"))
+check("a hole in one of twelve solids gives what the whole boolean gives",
+      abs(kernel.volume(local) - kernel.volume(full)) < 1e-6
+      and len(kernel.explore(local, kernel.TopAbs_SOLID)) == 12)
+after = kernel.explore(local, kernel.TopAbs_SOLID)
+untouched = sum(1 for b in before if any(b.IsSame(a) for a in after))
+check("  and the eleven it missed are the very same solids", untouched == 11,
+      untouched)
+check("a cut that reaches nothing changes nothing",
+      kernel.combine(many, geometry.box(5, 5, 5).move(0, 500).shape,
+                     "cut").IsSame(many))
+joined = kernel.combine(many, geometry.box(5, 5, 5).move(0, 500).shape,
+                        "join")
+check("a join that reaches nothing adds the tool beside the rest",
+      len(kernel.explore(joined, kernel.TopAbs_SOLID)) == 13)
+holder = geometry.box(40, 40, 40).move(-5, -5, -5).shape
+kept = kernel.combine(many, holder, "intersect")
+whole = kernel.unify(kernel.boolean(many, holder, "intersect"))
+check("an intersection keeps only what the tool held, as the whole one does",
+      abs(kernel.volume(kept) - kernel.volume(whole)) < 1e-6,
+      (kernel.volume(kept), kernel.volume(whole)))
+
+
+print()
+print("nothing edits the shapes it was given")
+
+plate = geometry.box(100, 60, 10).shape
+held = kernel.volume(plate)
+kernel.heal(plate)
+kernel.boolean(plate, geometry.cylinder(5, 10).move(50, 30).shape, "cut")
+check("healing and booleans leave their inputs as they were",
+      abs(kernel.volume(plate) - held) < 1e-9)
+check("the same body is the same body, compound or not",
+      kernel.same_shape(many, many)
+      and kernel.same_shape(kernel.compound(before), kernel.compound(before))
+      and not kernel.same_shape(many, local))
+
+
+print()
+print("an imported file is read once")
+
+from datum.core import fileio                                    # noqa: E402
+
+step = os.path.join(WORK, "posts.step")
+fileio.write_shape(geometry.cylinder(5, 30).repeat(3, x=20).shape, step)
+first = fileio.read_shape(step)
+check("reading it again this session gives the same shape, not a copy",
+      fileio.read_shape(step) is first)
+fileio._READ.clear()
+again = fileio.read_shape(step)
+check("a later session reads the translation back, mesh and all",
+      again is not first and mesh.is_meshed(again)
+      and abs(kernel.volume(again) - kernel.volume(first)) < 1e-6)
+
+
+print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)

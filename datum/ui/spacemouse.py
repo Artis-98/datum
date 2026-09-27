@@ -30,6 +30,7 @@ they cannot fight, and whichever is talking drives the camera.
 from __future__ import annotations
 
 import struct
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -260,6 +261,8 @@ class SpaceMouse(QtCore.QObject):
     moved = QtCore.Signal(float, float, float, float, float, float)
     button_pressed = QtCore.Signal(int)
     connected = QtCore.Signal(str)
+    # a background scan's findings, delivered back on the interface thread
+    _scanned = QtCore.Signal(object)
     disconnected = QtCore.Signal()
 
     def __init__(self, settings: Optional[SpaceMouseSettings] = None,
@@ -288,7 +291,9 @@ class SpaceMouse(QtCore.QObject):
 
         self._rescan = QtCore.QTimer(self)
         self._rescan.setInterval(RESCAN_MS)
-        self._rescan.timeout.connect(self._try_open)
+        self._rescan.timeout.connect(self._rescan_in_background)
+        self._scanned.connect(self._open_entries)
+        self._scanning = False
 
     # ------------------------------------------------------------- lifecycle
 
@@ -327,7 +332,38 @@ class SpaceMouse(QtCore.QObject):
         slot of the receiver, appears as a new interface rather than as
         traffic on the one already open.
         """
-        entries = find_devices()
+        self._open_entries(find_devices())
+
+    def _rescan_in_background(self) -> None:
+        """The regular look for a newly plugged puck, off the drawing thread.
+
+        Listing HID devices takes a quarter of a second on Windows, and it
+        ran every three seconds on the thread that draws the window: a
+        stutter every three seconds, while orbiting, dragging or typing,
+        whether a SpaceMouse was plugged in or not. The listing lets go of
+        Python while it works, so on its own thread it costs the window
+        nothing, and only what it found comes back here to be opened.
+        """
+        if self._scanning:
+            return
+        self._scanning = True
+
+        def work() -> None:
+            try:
+                entries = find_devices()
+            except Exception:
+                entries = []
+            try:
+                self._scanned.emit(entries)
+            except RuntimeError:
+                pass            # the application closed while it looked
+
+        threading.Thread(target=work, name="spacemouse-scan",
+                         daemon=True).start()
+
+    def _open_entries(self, entries) -> None:
+        """Open whatever was found that is not open already."""
+        self._scanning = False
         if not entries:
             return
 

@@ -182,7 +182,7 @@ class BuildContext:
         body = self.body(target) if target else None
         if body is None:
             body = self._touching(tool) or self.live[0]
-        body.shape = kernel.unify(kernel.boolean(body.shape, tool, op))
+        body.shape = kernel.combine(body.shape, tool, op)
 
     def _touching(self, tool: TopoDS_Shape) -> Optional[Body]:
         """The body this tool actually meets, when there is more than one.
@@ -1183,7 +1183,12 @@ class ImportFeature(Feature):
                 self._cache = fileio.read_shape(self.path)
             except Exception as exc:
                 raise FeatureError("%s: %s" % (self.name, exc)) from exc
-        ctx.apply(kernel.copy_shape(self._cache), self.operation, self.id, name=self.body_name)
+        # The body read from the file, as it is, not a copy of it. Copying
+        # 15 000 faces on every rebuild cost most of a second, and worse,
+        # every copy is new geometry nothing has meshed, so the whole
+        # import was meshed again after every command. Nothing downstream
+        # changes a shape in place, so there is nothing to protect it from.
+        ctx.apply(self._cache, self.operation, self.id, name=self.body_name)
 
     def summary(self) -> str:
         import os

@@ -124,6 +124,57 @@ win.viewport.set_shape(None)
 
 
 print()
+print("what did not change is not drawn again")
+
+win.viewport.set_shape(body, keep_camera=True)
+pump()
+drawn_once = win.viewport.model_ais
+win.viewport.set_shape(body, keep_camera=True)
+check("the same body handed over twice keeps the picture it has",
+      win.viewport.model_ais is drawn_once)
+from datum.core import materials  # noqa: E402
+steel = materials.library().appearance_for("Steel, Mild")
+win.viewport.set_shape(body, keep_camera=True, appearance=steel)
+check("a new material recolours it rather than drawing it again",
+      win.viewport.model_ais is drawn_once)
+win.viewport.set_shape(None)
+
+win.new_document()
+pump()
+from datum.core.features import PrimitiveFeature  # noqa: E402
+block = PrimitiveFeature()
+block.kind = "box"
+block.a, block.b, block.c = "40", "30", "20"
+block.operation = "new"
+win.document.add_feature(block)
+win.rebuild(keep_camera=False)
+pump()
+shown = win.viewport.model_ais
+win.start_sketch_on_plane("XY")
+pump()
+win.finish_sketch()
+pump()
+check("drawing a sketch leaves the body on screen as it was",
+      win.viewport.model_ais is shown)
+
+
+print()
+print("the SpaceMouse looks for new devices without stopping the window")
+
+import time  # noqa: E402
+started = time.perf_counter()
+win.spacemouse._rescan_in_background()
+check("a rescan hands the looking to another thread and returns",
+      time.perf_counter() - started < 0.05,
+      "%.3f s" % (time.perf_counter() - started))
+deadline = time.perf_counter() + 5.0
+while win.spacemouse._scanning and time.perf_counter() < deadline:
+    pump(2)
+    time.sleep(0.01)
+check("  and what it found comes back", not win.spacemouse._scanning)
+
+
+print()
 print("the hidden properties panel does no sums")
 
 document = win.document

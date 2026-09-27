@@ -45,7 +45,8 @@ from OCP.TopAbs import (
 from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
 from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
-from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Edge, TopoDS_Face, TopoDS_Shape
+from OCP.TopoDS import (TopoDS, TopoDS_Compound, TopoDS_Edge, TopoDS_Face,
+                        TopoDS_Iterator, TopoDS_Shape)
 from OCP.gp import (
     gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec,
 )
@@ -138,6 +139,30 @@ def vertices(shape: TopoDS_Shape) -> List[TopoDS_Shape]:
     return explore(shape, TopAbs_VERTEX)
 
 
+def same_shape(a: Optional[TopoDS_Shape],
+               b: Optional[TopoDS_Shape]) -> bool:
+    """Whether two shapes are the same geometry, not merely equal-looking.
+
+    A multibody part is a fresh compound every rebuild even when every
+    body in it is the one it was, so a compound is compared by what it
+    holds, one level down.
+    """
+    if a is None or b is None or a.IsNull() or b.IsNull():
+        return False
+    if a.IsEqual(b):
+        return True
+    if (a.ShapeType() != TopAbs_COMPOUND
+            or b.ShapeType() != TopAbs_COMPOUND):
+        return False
+    left, right = TopoDS_Iterator(a), TopoDS_Iterator(b)
+    while left.More() and right.More():
+        if not left.Value().IsEqual(right.Value()):
+            return False
+        left.Next()
+        right.Next()
+    return not left.More() and not right.More()
+
+
 def is_valid(shape: Optional[TopoDS_Shape]) -> bool:
     return shape is not None and not shape.IsNull()
 
@@ -160,6 +185,35 @@ def surface_area(shape: TopoDS_Shape) -> float:
     props = GProp_GProps()
     BRepGProp.SurfaceProperties_s(shape, props)
     return props.Mass()
+
+
+def volume_and_centre(shape: TopoDS_Shape
+                      ) -> Tuple[float, Tuple[float, float, float]]:
+    """Volume and centre of mass from the one integration that gives both.
+
+    Asking for them separately integrates the whole body twice, which on a
+    15 000 face import is two seconds each.
+    """
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties_s(shape, props)
+    p = props.CentreOfMass()
+    return props.Mass(), (p.X(), p.Y(), p.Z())
+
+
+def geometry_properties(shape: TopoDS_Shape) -> Dict[str, Any]:
+    """Everything about a body's size that does not depend on its material."""
+    vol, centre = volume_and_centre(shape)
+    xmin, ymin, zmin, xmax, ymax, zmax = bounding_box(shape)
+    return {
+        "volume_mm3": vol,
+        "area_mm2": surface_area(shape),
+        "centre": centre,
+        "bbox": (xmax - xmin, ymax - ymin, zmax - zmin),
+        "bbox_min": (xmin, ymin, zmin),
+        "bbox_max": (xmax, ymax, zmax),
+        "faces": len(faces(shape)),
+        "edges": len(edges(shape)),
+    }
 
 
 def centre_of_mass(shape: TopoDS_Shape) -> Tuple[float, float, float]:
@@ -210,9 +264,19 @@ def compound(shapes: Sequence[TopoDS_Shape]) -> TopoDS_Compound:
 
 
 def heal(shape: TopoDS_Shape) -> TopoDS_Shape:
-    """Repair small inconsistencies that upstream algorithms can leave."""
+    """Repair small inconsistencies that upstream algorithms can leave.
+
+    On a copy. ShapeFix mends faces where they stand, and the faces of a
+    boolean's result are shared with the shapes that went into it, so
+    healing a cut late in the tree was rewriting the body as it had been
+    several features earlier: on one sample part its volume dropped by
+    an eighth after the fact. Nothing looked back at earlier shapes, so
+    it went unseen until results started being kept. A copy costs a
+    little; a history that edits itself costs correctness.
+    """
     try:
-        fixer = ShapeFix_Shape(shape)
+        work = BRepBuilderAPI_Copy(shape).Shape()
+        fixer = ShapeFix_Shape(work)
         fixer.Perform()
         fixed = fixer.Shape()
         return fixed if is_valid(fixed) else shape
@@ -853,9 +917,20 @@ def boolean(base: TopoDS_Shape, tool: TopoDS_Shape, op: str) -> TopoDS_Shape:
     }
     if op not in builders:
         raise KernelError("unknown boolean operation %r" % op)
-    algo = builders[op](base, tool)
+    algo = builders[op]()
+    arguments = TopTools_ListOfShape()
+    arguments.Append(base)
+    tools = TopTools_ListOfShape()
+    tools.Append(tool)
+    algo.SetArguments(arguments)
+    algo.SetTools(tools)
     algo.SetRunParallel(True)
     algo.SetFuzzyValue(1e-6)
+    # Left to itself a boolean may rework the faces of the shapes it was
+    # given, in place, and those faces are shared: a cut late in the tree
+    # was quietly changing the body as it stood several features earlier.
+    # Nothing used to look back, so nothing noticed. Kept results do.
+    algo.SetNonDestructive(True)
     algo.Build()
     if not algo.IsDone():
         raise KernelError("%s operation failed" % op)
@@ -904,6 +979,66 @@ def unify(shape: TopoDS_Shape) -> TopoDS_Shape:
     return result
 
 
+# A body made of at least this many separate solids is combined with a tool
+# one neighbourhood at a time.  Below it, splitting costs more than it saves.
+LOCAL_SOLIDS = 8
+
+
+def _boxes_meet(a, b, margin: float) -> bool:
+    return not (a[3] + margin < b[0] or b[3] + margin < a[0]
+                or a[4] + margin < b[1] or b[4] + margin < a[1]
+                or a[5] + margin < b[2] or b[5] + margin < a[2])
+
+
+def combine(base: TopoDS_Shape, tool: TopoDS_Shape, op: str) -> TopoDS_Shape:
+    """A boolean and a tidy-up, touching only what the tool can reach.
+
+    An imported model is often one body of hundreds of solids, and a hole
+    drilled through it meets three of them. Handing the whole body to the
+    boolean meant intersecting, repairing, merging faces and measuring the
+    volume of all of them: twenty seconds on a 300 solid Inventor export,
+    for a hole. The solids whose boxes the tool does not reach cannot be
+    changed by it, so they are left exactly as they were, meshes and all,
+    and only the neighbourhood goes through the boolean.
+    """
+    if not is_valid(base) or not is_valid(tool):
+        return unify(boolean(base, tool, op))
+    parts = explore(base, TopAbs_SOLID)
+    if len(parts) < LOCAL_SOLIDS:
+        return unify(boolean(base, tool, op))
+
+    reach = bounding_box(tool)
+    size = max(reach[3] - reach[0], reach[4] - reach[1], reach[5] - reach[2])
+    margin = max(1e-3, size * 1e-6)
+    near, far = [], []
+    for part in parts:
+        (near if _boxes_meet(bounding_box(part), reach, margin)
+         else far).append(part)
+    if not far:
+        return unify(boolean(base, tool, op))
+
+    if not near:
+        # the tool meets nothing: a cut changes nothing, a join adds the
+        # tool beside the rest, and an intersection leaves nothing at all
+        if op == "cut":
+            return base
+        if op == "join":
+            return compound(far + [tool])
+        raise KernelError("intersect removed all material")
+
+    neighbourhood = near[0] if len(near) == 1 else compound(near)
+    try:
+        changed = unify(boolean(neighbourhood, tool, op))
+    except KernelError as exc:
+        if op == "cut" and "removed all material" in str(exc):
+            # the cut took the whole neighbourhood away, not the whole body
+            return compound(far)
+        raise
+    if op == "intersect":
+        return changed
+    return compound(far + explore(changed, TopAbs_SOLID))
+
+
 def fuse_all(shapes: Sequence[TopoDS_Shape]) -> Optional[TopoDS_Shape]:
     """Fuse a list into one shape, merging anything that touches.
 
@@ -928,6 +1063,7 @@ def fuse_all(shapes: Sequence[TopoDS_Shape]) -> Optional[TopoDS_Shape]:
         algo.SetTools(tools)
         algo.SetRunParallel(True)
         algo.SetFuzzyValue(1e-6)
+        algo.SetNonDestructive(True)
         algo.Build()
         if algo.IsDone() and is_valid(algo.Shape()):
             return algo.Shape()

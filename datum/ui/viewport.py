@@ -154,6 +154,10 @@ class Viewport(QtWidgets.QWidget):
         self._cube: Optional[AIS_ViewCube] = None
 
         self._model_ais: Optional[AIS_Shape] = None
+        # what the model on screen was drawn from, so a rebuild that
+        # changed nothing about the solid can leave it there
+        self._model_shape: Optional[TopoDS_Shape] = None
+        self._model_look = None
         # assembly occurrences and CAM parts, each its own selectable body
         self._component_ais: Dict[int, AIS_Shape] = {}
         # the ones that are outlines rather than solids, so the display mode
@@ -392,7 +396,8 @@ class Viewport(QtWidgets.QWidget):
 
     # --------------------------------------------------------- model display
 
-    def apply_appearance(self, ais, appearance=None) -> None:
+    def apply_appearance(self, ais, appearance=None,
+                         restyle: bool = False) -> None:
         """Dress a body in an appearance.
 
         Roughness and metallic are the two knobs worth having.  OCCT's
@@ -430,13 +435,20 @@ class Viewport(QtWidgets.QWidget):
             material.SetAmbientColor(_col((0.26, 0.28, 0.31)))
         material.SetDiffuseColor(base)
         material.SetShininess(shine)
+        transparency = 1.0 - opacity if opacity < 0.999 else 0.0
 
+        if restyle and self.context is not None:
+            # already on screen: change how it looks through the context,
+            # which swaps the colours on the presentation it has rather
+            # than building a new one from fifteen thousand faces
+            ctx = self.context
+            ctx.SetMaterial(ais, material, False)
+            ctx.SetColor(ais, base, False)
+            ctx.SetTransparency(ais, transparency, False)
+            return
         ais.SetMaterial(material)
         ais.SetColor(base)
-        if opacity < 0.999:
-            ais.SetTransparency(1.0 - opacity)
-        else:
-            ais.SetTransparency(0.0)
+        ais.SetTransparency(transparency)
 
     def set_shape(self, shape: Optional[TopoDS_Shape],
                   keep_camera: bool = True, appearance=None) -> None:
@@ -446,9 +458,28 @@ class Viewport(QtWidgets.QWidget):
         ctx = self.context
         assert ctx is not None
 
+        look = self._look_key(appearance)
+        if (self._model_ais is not None and shape is not None
+                and kernel.same_shape(shape, self._model_shape)):
+            # Most commands do not touch the solid: a sketch, a plane, a
+            # rename, a parameter nothing uses. Drawing it again anyway
+            # cost seconds on a big import for a picture that had not
+            # changed, so the one on screen stays, recoloured if the
+            # material is what changed.
+            if look != self._model_look:
+                self.apply_appearance(self._model_ais, appearance,
+                                      restyle=True)
+                self._model_look = look
+            if not keep_camera:
+                self.fit_all()
+            self.redraw()
+            return
+
         if self._model_ais is not None:
             ctx.Remove(self._model_ais, False)
             self._model_ais = None
+        self._model_shape = None
+        self._model_look = None
 
         if shape is not None and not shape.IsNull():
             ais = AIS_Shape(shape)
@@ -469,6 +500,8 @@ class Viewport(QtWidgets.QWidget):
 
             ctx.Display(ais, False)
             self._model_ais = ais
+            self._model_shape = shape
+            self._model_look = look
             self._apply_display_mode()
             self._apply_selection_mode()
 
@@ -479,6 +512,16 @@ class Viewport(QtWidgets.QWidget):
     @property
     def model_ais(self) -> Optional[AIS_Shape]:
         return self._model_ais
+
+    @staticmethod
+    def _look_key(appearance):
+        """What an appearance looks like, as something to compare."""
+        if appearance is None:
+            return None
+        return (getattr(appearance, "colour", None),
+                getattr(appearance, "roughness", None),
+                getattr(appearance, "metallic", None),
+                getattr(appearance, "opacity", None))
 
     # -- assembly components -----------------------------------------------
 

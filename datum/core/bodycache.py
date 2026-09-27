@@ -42,8 +42,9 @@ from . import prefs
 # kernel, or a fix that makes a feature build differently. Old entries
 # then simply stop matching and get pruned in time.  2: bodies are kept
 # with the triangles they are drawn with, so a cached part is not only
-# not rebuilt but not meshed either.
-CACHE_VERSION = 2
+# not rebuilt but not meshed either.  3: repairs no longer edit shared
+# faces in place, and imported files are kept here too, by their bytes.
+CACHE_VERSION = 3
 
 FOLDER = "bodies"
 # how much disk this may use before the oldest of it goes

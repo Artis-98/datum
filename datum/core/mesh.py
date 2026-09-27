@@ -31,6 +31,7 @@ from typing import Iterable, List, Optional, Tuple
 from OCP.BRep import BRep_Builder, BRep_Tool
 from OCP.BRepBndLib import BRepBndLib
 from OCP.BRepMesh import BRepMesh_IncrementalMesh
+from OCP.BRepTools import BRepTools
 from OCP.Bnd import Bnd_Box
 from OCP.IMeshTools import IMeshTools_MeshAlgoType, IMeshTools_Parameters
 from OCP.TopAbs import TopAbs_FACE
@@ -58,6 +59,10 @@ DELABELLA = os.environ.get("DATUM_MESH_ALGO", "").lower() == "delabella"
 # at the finer of the two.  Meshing together is what lets a dozen small
 # parts share the cores instead of taking turns at them.
 GROUP_RATIO = 1.5
+
+# A mesh reporting more than this many times the wanted deviation was made
+# for something else, a coarse STL export say, and is made again.
+COARSE = 4.0
 
 # How many bodies to remember having meshed.  Each one held here is kept
 # alive by being held, so this stays small: enough for an assembly's
@@ -125,31 +130,65 @@ def has_faces(shape: Optional[TopoDS_Shape]) -> bool:
 # that looks fine. So a body this module meshed is taken on its word, and
 # anything else has to show a stored figure at least as fine as wanted.
 
-_MESHED: "OrderedDict[int, List[Tuple[TopoDS_Shape, float]]]" = OrderedDict()
+#
+# Also remembered is how many faces took a mesh.  A body from another CAD
+# system can carry faces no mesher will triangulate: 26 of the 15 000 in
+# one Inventor export, OpenCASCADE's own display meshing failing on exactly
+# the same ones.  They were never drawn and cannot be.  What must not
+# happen is the rest of the body being meshed again on every draw because
+# of them, which is what treating "not every face" as "not meshed" did.
+
+_MESHED: "OrderedDict[int, List[Tuple[TopoDS_Shape, float, int]]]" = \
+    OrderedDict()
 
 
-def _remember(body: TopoDS_Shape, tolerance: float) -> None:
+def _remember(body: TopoDS_Shape, tolerance: float, faces: int) -> None:
     key = hash(body)
     held = [entry for entry in _MESHED.pop(key, [])
             if not entry[0].IsPartner(body)]
-    held.append((body, float(tolerance)))
+    held.append((body, float(tolerance), int(faces)))
     _MESHED[key] = held
     while len(_MESHED) > REMEMBER:
         _MESHED.popitem(last=False)
 
 
-def _remembered(body: TopoDS_Shape, wanted: float) -> bool:
+def _remembered(body: TopoDS_Shape, wanted: float) -> Optional[int]:
+    """How many faces took a mesh, if this body was meshed here finely
+    enough, or None if it was not."""
     key = hash(body)
-    for held, tolerance in _MESHED.get(key, ()):
+    for held, tolerance, faces in _MESHED.get(key, ()):
         if held.IsPartner(body) and tolerance <= wanted * 1.0001:
             _MESHED.move_to_end(key)
-            return True
-    return False
+            return faces
+    return None
+
+
+# Faces the mesher has already failed on.  Retrying them is not free: the
+# 27 in one Inventor export took 0.6 s to fail again, on every rebuild that
+# made a new body around them, and they fail the same way every time.
+_UNMESHABLE: "OrderedDict[int, TopoDS_Shape]" = OrderedDict()
+UNMESHABLE_KEEP = 4096
+
+
+def _gave_up_on(face: TopoDS_Shape) -> bool:
+    held = _UNMESHABLE.get(hash(face))
+    return held is not None and held.IsSame(face)
+
+
+def _give_up_on(faces) -> None:
+    location = TopLoc_Location()
+    for face in faces:
+        triangles = BRep_Tool.Triangulation_s(face, location)
+        if triangles is None or triangles.NbTriangles() == 0:
+            _UNMESHABLE[hash(face)] = face
+    while len(_UNMESHABLE) > UNMESHABLE_KEEP:
+        _UNMESHABLE.popitem(last=False)
 
 
 def forget() -> None:
     """Drop the memory, and the bodies it keeps alive."""
     _MESHED.clear()
+    _UNMESHABLE.clear()
 
 
 def is_meshed(shape: Optional[TopoDS_Shape],
@@ -160,14 +199,28 @@ def is_meshed(shape: Optional[TopoDS_Shape],
     wanted = deflection(shape) if wanted is None else wanted
     body = _unplaced(shape)
     ours = _remembered(body, wanted)
+    if ours is not None:
+        # meshed here: as many faces as took a mesh then still have one,
+        # which is only untrue if somebody has wiped it since
+        return ours > 0 and _meshed_faces(body) >= ours
     location = TopLoc_Location()
     for face in _faces(body):
         triangles = BRep_Tool.Triangulation_s(face, location)
         if triangles is None or triangles.NbTriangles() == 0:
             return False
-        if not ours and triangles.Deflection() > wanted * 1.01:
+        if triangles.Deflection() > wanted * 1.01:
             return False
     return True
+
+
+def _meshed_faces(body: TopoDS_Shape) -> int:
+    location = TopLoc_Location()
+    count = 0
+    for face in _faces(body):
+        triangles = BRep_Tool.Triangulation_s(face, location)
+        if triangles is not None and triangles.NbTriangles() > 0:
+            count += 1
+    return count
 
 
 def _complete(body: TopoDS_Shape) -> bool:
@@ -207,8 +260,10 @@ def mesh(shape: Optional[TopoDS_Shape],
          tolerance: Optional[float] = None) -> bool:
     """Mesh a body for drawing, if it is not already.  True when it is.
 
-    False means some face would not mesh, and the viewport should be left
-    to make its own attempt rather than draw a body with a hole in it.
+    True means everything that will take a mesh has one. A face that will
+    not mesh at all stays unmeshed and undrawn, as it would be whoever
+    tried. False means nothing meshed, and the viewport should make its
+    own attempt.
     """
     if not has_faces(shape):
         return False
@@ -216,14 +271,52 @@ def mesh(shape: Optional[TopoDS_Shape],
     if is_meshed(shape, tolerance):
         return True
     body = _unplaced(shape)
-    _run(body, tolerance)
+    todo, total = _needing_mesh(body, tolerance)
+    if todo and len(todo) < total:
+        # Most of this body is already meshed: a hole drilled through a big
+        # import leaves every face it did not touch as it was. The mesher
+        # handed the whole body walks all of them to find that out, over a
+        # second on 15 000 faces, so it is handed only the new ones.
+        builder = BRep_Builder()
+        few = TopoDS_Compound()
+        builder.MakeCompound(few)
+        for face in todo:
+            builder.Add(few, face)
+        _run(few, tolerance)
+    elif todo:
+        _run(body, tolerance)
     if not _complete(body) and DELABELLA:
         # the face Delabella cannot do, the default gets a second try at
         _run(body, tolerance, False)
-    if not _complete(body):
+    _give_up_on(todo)
+    faces = _meshed_faces(body)
+    if faces == 0:
         return False
-    _remember(body, tolerance)
+    _remember(body, tolerance, faces)
     return True
+
+
+def _needing_mesh(body: TopoDS_Shape, wanted: float):
+    """The faces with no mesh, or one far too coarse to draw, and a count.
+
+    A face whose mesh reports a little over what was wanted is left alone:
+    a curved face often does, however it is meshed (see is_meshed). One
+    many times too coarse was meshed for something else, and is wiped so
+    it is meshed again.
+    """
+    location = TopLoc_Location()
+    todo = []
+    total = 0
+    for face in _faces(body):
+        total += 1
+        triangles = BRep_Tool.Triangulation_s(face, location)
+        if triangles is None or triangles.NbTriangles() == 0:
+            if not _gave_up_on(face):
+                todo.append(face)
+        elif triangles.Deflection() > wanted * COARSE:
+            BRepTools.Clean_s(face)
+            todo.append(face)
+    return todo, total
 
 
 def mesh_all(shapes: Iterable[Optional[TopoDS_Shape]]) -> int:
@@ -273,7 +366,7 @@ def mesh_all(shapes: Iterable[Optional[TopoDS_Shape]]) -> int:
         _run(compound, tolerance)
         for wanted, body in group:
             if _complete(body):
-                _remember(body, tolerance)
+                _remember(body, tolerance, _meshed_faces(body))
             else:
                 mesh(body, wanted)
     return len(todo)

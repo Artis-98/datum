@@ -807,9 +807,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._after_material_set()
         self._material_changed()
         self.status_message.setStyleSheet("")
+        # The new mass, when it costs nothing: measured already, or a body
+        # small enough to measure without anybody noticing. A large import
+        # takes seconds to integrate, and a colour change is not the moment
+        # to freeze for it; Properties shows it on request.
         mass = None
         try:
-            mass = document.mass_properties().get("mass_g")
+            known = getattr(document, "known_volume", lambda: None)()
+            if known is not None:
+                mass = known / 1000.0 * document.density
+            elif document.shape is not None and \
+                    len(kernel.faces(document.shape)) <= 2000:
+                mass = document.mass_properties().get("mass_g")
         except Exception:
             pass
         self.status_message.setText(

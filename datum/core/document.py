@@ -20,14 +20,101 @@ from OCP.TopoDS import TopoDS_Shape
 from . import fileformat, kernel, materials, prefs
 from .rules import RuleSet
 from .features import (
-    FEATURE_TYPES, BuildContext, Feature, FeatureError, SketchFeature,
+    FEATURE_TYPES, Body, BuildContext, CodeFeature, Feature, FeatureError,
+    ImportFeature, SketchFeature,
 )
+from .params import referenced_names
 from .fileformat import FileFormatError, UnsupportedVersionError
 from .params import ParameterTable
 from .sketch import STANDARD_PLANES, Sketch
 
 FILE_VERSION = fileformat.SCHEMA_VERSION
 FILE_EXTENSION = fileformat.EXTENSIONS[fileformat.PART]
+
+# Rebuilds reuse what did not change; DATUM_FULL_REBUILD builds everything
+# every time, for comparing the two or for the day this turns out wrong.
+REUSE_RESULTS = not os.environ.get("DATUM_FULL_REBUILD")
+# results kept per feature: this rebuild's and the one before, which is
+# what makes an undo or a redo straight after an edit free
+KEEP_RESULTS = 2
+
+
+def _fingerprint(*parts: Any) -> str:
+    import hashlib
+
+    digest = hashlib.sha1()
+    for part in parts:
+        digest.update(repr(part).encode("utf-8", "replace"))
+        digest.update(b"\x00")
+    return digest.hexdigest()
+
+
+def _strings(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            yield from _strings(item)
+
+
+def _definition(feature: Feature, scope: Dict[str, float]) -> str:
+    """Everything a feature's build reads, as one string.
+
+    Its own definition, and the value of every parameter it names. A code
+    feature can read any parameter, so it is given all of them. An import
+    reads a file, so the file's size and time are part of it.
+    """
+    data = feature.to_dict()
+    if isinstance(feature, CodeFeature):
+        names = sorted(scope)
+    else:
+        found = set()
+        for text in _strings(data):
+            if len(text) > 200 or not text.strip():
+                continue
+            for name in referenced_names(text):
+                if name in scope:
+                    found.add(name)
+        names = sorted(found)
+    values = [(name, scope.get(name)) for name in names]
+    extra: Any = None
+    if isinstance(feature, ImportFeature) and feature.path:
+        try:
+            stat = os.stat(feature.path)
+            extra = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            extra = "missing"
+    return json.dumps(data, sort_keys=True, default=str) + repr(values) + \
+        repr(extra)
+
+
+class _Built:
+    """What the rebuild held after one feature: enough to carry on from."""
+
+    __slots__ = ("bodies", "sketches", "planes", "tools", "log", "error")
+
+    @classmethod
+    def take(cls, ctx: BuildContext, error: str) -> "_Built":
+        built = cls()
+        # the bodies by name and shape, not the Body objects: a later
+        # feature changes a body in place, and this has to stay as it was
+        built.bodies = [(b.name, b.shape) for b in ctx.bodies]
+        built.sketches = dict(ctx.sketches)
+        built.planes = dict(ctx.planes)
+        built.tools = dict(ctx.tools)
+        built.log = list(ctx.log)
+        built.error = error
+        return built
+
+    def restore(self, ctx: BuildContext) -> None:
+        ctx.bodies = [Body(name, shape) for name, shape in self.bodies]
+        ctx.sketches = dict(self.sketches)
+        ctx.planes = dict(self.planes)
+        ctx.tools = dict(self.tools)
+        ctx.log = list(self.log)
 
 
 @dataclass
@@ -93,6 +180,8 @@ class Document:
         self._undo: List[str] = []
         self._redo: List[str] = []
         self.last_report = RebuildReport()
+        # what each feature built last time, and from what; see rebuild()
+        self._built: Dict[int, List[Tuple[str, "_Built"]]] = {}
         self._sketch_cache: Dict[int, Sketch] = {}
         # set when the document came from an older schema, so the UI can say so
         self.migrated_from: Optional[int] = None
@@ -191,12 +280,38 @@ class Document:
         limit = (len(self.features) if self.rollback_index is None
                  else self.rollback_index)
 
+        # Every feature's result is kept with a fingerprint of what made
+        # it: the feature as defined, the parameters it reads, and the
+        # fingerprint of everything before it. A feature whose fingerprint
+        # matches is not built again, its result is put back. So a sketch
+        # drawn at the end of a long tree costs the sketch, not the tree,
+        # and a hole drilled through a big import is drilled once rather
+        # than after every command. The first feature that did change, and
+        # everything after it, builds as it always has.
+        scope = ctx.scope
+        chain = _fingerprint("start", ctx.code_allowed)
+        reuse = REUSE_RESULTS
+        kept: Dict[int, List[Tuple[str, "_Built"]]] = {}
+
         for i, feature in enumerate(self.features):
             feature.error = ""
             if i >= limit:
                 continue
             if feature.suppressed:
+                chain = _fingerprint(chain, "suppressed", feature.id)
                 continue
+            if reuse:
+                key = _fingerprint(chain, _definition(feature, scope))
+                held = next((b for k, b in self._built.get(feature.id, ())
+                             if k == key), None)
+                if held is not None:
+                    held.restore(ctx)
+                    feature.error = held.error
+                    if held.error:
+                        report.errors.append((feature.id, held.error))
+                    chain = key
+                    kept.setdefault(feature.id, []).append((key, held))
+                    continue
             try:
                 feature.build(ctx)
             except (FeatureError, kernel.KernelError) as exc:
@@ -205,6 +320,25 @@ class Document:
             except Exception as exc:  # a kernel crash must not kill the app
                 feature.error = "%s: %s" % (type(exc).__name__, exc)
                 report.errors.append((feature.id, feature.error))
+            if reuse:
+                # fingerprinted as the feature stands after building: a
+                # sketch solves, a reference refreshes what it last found,
+                # and the next rebuild will see it as it is now
+                key = _fingerprint(chain, _definition(feature, scope))
+                chain = key
+                entries = kept.setdefault(feature.id, [])
+                entries.append((key, _Built.take(ctx, feature.error)))
+
+        if reuse:
+            # this rebuild's results first, then the last one's, so an
+            # undo straight after an edit finds what it is going back to
+            for fid, entries in kept.items():
+                for key, built in self._built.get(fid, ()):
+                    if len(entries) >= KEEP_RESULTS:
+                        break
+                    if all(key != k for k, _b in entries):
+                        entries.append((key, built))
+            self._built = kept
 
         for name, err in [(p.name, p.error) for p in self.params if p.error]:
             report.errors.append((-1, "parameter %s: %s" % (name, err)))
@@ -219,6 +353,10 @@ class Document:
         report.feature_count = min(limit, len(self.features))
         self.last_report = report
         return report
+
+    def forget_results(self) -> None:
+        """Build every feature from scratch next time."""
+        self._built = {}
 
     def all_sketches(self) -> Dict[int, Sketch]:
         return self._sketch_cache
@@ -286,23 +424,29 @@ class Document:
         return lib.appearance_for(self.material)
 
     def mass_properties(self) -> Dict[str, Any]:
+        """Volume, area, mass, centre and box of the part as it stands.
+
+        The geometry is measured once per body and kept until the body
+        changes: a new material changes the mass and nothing else, and
+        measuring a large import again for it cost seconds.
+        """
         if self.shape is None:
             return {}
-        vol = kernel.volume(self.shape)
-        area = kernel.surface_area(self.shape)
-        cx, cy, cz = kernel.centre_of_mass(self.shape)
-        xmin, ymin, zmin, xmax, ymax, zmax = kernel.bounding_box(self.shape)
-        return {
-            "volume_mm3": vol,
-            "area_mm2": area,
-            "mass_g": vol / 1000.0 * self.density,
-            "centre": (cx, cy, cz),
-            "bbox": (xmax - xmin, ymax - ymin, zmax - zmin),
-            "bbox_min": (xmin, ymin, zmin),
-            "bbox_max": (xmax, ymax, zmax),
-            "faces": len(kernel.faces(self.shape)),
-            "edges": len(kernel.edges(self.shape)),
-        }
+        held = getattr(self, "_measured", None)
+        if held is None or not kernel.same_shape(held[0], self.shape):
+            held = (self.shape, kernel.geometry_properties(self.shape))
+            self._measured = held
+        props = dict(held[1])
+        props["mass_g"] = props["volume_mm3"] / 1000.0 * self.density
+        return props
+
+    def known_volume(self) -> Optional[float]:
+        """The volume, if it has been measured for this body already."""
+        held = getattr(self, "_measured", None)
+        if held is None or self.shape is None \
+                or not kernel.same_shape(held[0], self.shape):
+            return None
+        return held[1]["volume_mm3"]
 
     # -- undo / redo --------------------------------------------------------
 

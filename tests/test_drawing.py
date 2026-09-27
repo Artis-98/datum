@@ -177,6 +177,71 @@ if detail.projection is not None:
           detail.projection.width <= 18.0 * 2.0 * 2.0 + 1e-6,
           detail.projection.width)
 
+print("a cut face with a hole and steps in it is hatched as one piece")
+
+# a boss on a plate with a stepped bore right through: cut down the
+# middle, each half of the cut is an L with a notch, and several of its
+# edges run backwards round their wire
+housing = Document()
+for kind, a, b, c, origin, operation in (
+        ("box", 160, 90, 16, (0, 0, 0), "new"),
+        ("cylinder", 40, 56, 0, (80, 45, 16), "join"),
+        ("cylinder", 23.5, 82, 0, (80, 45, -5), "cut"),
+        ("cylinder", 26, 15, 0, (80, 45, 62), "cut")):
+    step = PrimitiveFeature()
+    step.kind = kind
+    step.a, step.b, step.c = str(a), str(b), str(c)
+    step.origin = tuple(str(v) for v in origin)
+    step.operation = operation
+    housing.add_feature(step)
+housing.rebuild()
+HOUSING = housing.save(os.path.join(WORK, "housing.pdat"))
+hdoc, hsheet, front = drawing_of(HOUSING)
+viewgen.Generator().rebuild(hdoc)
+fbox = front.projection.box
+across = hdoc.add_view(hsheet, View(
+    kind=SECTION, parent=front.id, letter="C",
+    cut=[(fbox[0] + fbox[2]) / 2.0, fbox[3] + 5.0,
+         (fbox[0] + fbox[2]) / 2.0, fbox[1] - 5.0],
+    x=front.x + 150.0, y=front.y))
+viewgen.Generator().rebuild(hdoc, force=True)
+loops = across.projection.of_kind(hlr.CUT) if across.projection else []
+
+
+def shoelace(points):
+    return abs(sum(points[i][0] * points[i - 1][1]
+                   - points[i - 1][0] * points[i][1]
+                   for i in range(len(points)))) / 2.0
+
+
+def crosses(points):
+    """Whether an outline runs over itself anywhere."""
+    edges = list(zip(points, points[1:] + points[:1]))
+
+    def side(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    for i, (a, b) in enumerate(edges):
+        for j, (c, d) in enumerate(edges):
+            if abs(i - j) <= 1 or {i, j} == {0, len(edges) - 1}:
+                continue
+            if (side(a, b, c) * side(a, b, d) < -1e-9
+                    and side(c, d, a) * side(c, d, b) < -1e-9):
+                return True
+    return False
+
+
+# plate less the bore, two walls less the counterbore step
+expected = 90 * 16 - 47 * 16 + 2 * (16.5 * 56) - 2 * (2.5 * 10)
+check("the cut comes back as the two halves either side of the bore",
+      len(loops) == 2, len(loops))
+check("  neither outline runs over itself",
+      loops and not any(crosses(l.points) for l in loops))
+check("  and between them they cover exactly the metal the knife went "
+      "through", abs(sum(shoelace(l.points) for l in loops) - expected) < 1.0,
+      (sum(shoelace(l.points) for l in loops), expected))
+
+print()
 print("the faces the cut passed through get hatched")
 cut_loops = section.projection.of_kind(hlr.CUT) if section.projection else []
 check("the cut face came back as a closed loop", len(cut_loops) >= 1,

@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.3</span></div>
+        <span id="live-version">Latest: 0.2.4</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.3/DATUM-0.2.3-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.4/DATUM-0.2.4-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -61,9 +61,62 @@
 
     <div class="release current">
       <div class="head">
+        <span class="ver">0.2.4</span>
+        <span class="when">27 September 2026</span>
+        <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        Every core. DATUM now puts all of your processor to work, the
+        window stays live while it does, and big imported models are many
+        times faster to work with.
+      </p>
+      <ul>
+        <li><strong>The window no longer freezes.</strong> A rebuild that
+          will take a while happens in the background, and meanwhile you
+          can still orbit, pan, zoom and drag dLogic sliders. A hole
+          through a 300 solid Inventor export used to freeze the window
+          for 21 seconds; now for a tenth of a second.</li>
+        <li><strong>Sliders build ahead.</strong> While a dLogic form is
+          open, the spare cores build the values your slider is heading
+          for, so the model follows the drag instead of catching up after
+          it. One step of the stair sample went from half a second to a
+          fifteenth.</li>
+        <li><strong>STEP files open as assemblies</strong>, the way
+          Inventor does: every part and sub assembly as its own file,
+          with its colour, its name and its instance names, each part
+          stored once however often it is used. Or import one as a single
+          part, as before.</li>
+        <li><strong>Big imports stay quick.</strong> Only what changed is
+          rebuilt and only what changed is redrawn. Commands that do not
+          touch the solid, a sketch, a rename, a material, no longer
+          rebuild it at all. A STEP file is read in the background the
+          first time and from a cache after that.</li>
+        <li><strong>Everything on every core:</strong> the parts of an
+          assembly build side by side, drawing views are drawn side by
+          side, and mass properties are worked out a piece at a time and
+          only for the pieces that changed. An assembly of 26 parts
+          builds four times faster, a drawing sheet three times, and the
+          weight of a big import after an edit comes back in a quarter of
+          a second instead of four and a half.</li>
+        <li><strong>Editing a part in an assembly keeps your view.</strong>
+          Stepping into a part no longer throws the camera somewhere
+          else, and coming back out keeps any turn you gave it
+          inside.</li>
+        <li><strong>A new sketch faces you.</strong> Start one on a face
+          and it is drawn from the side you were looking at, not swung
+          round behind the part, and an extrusion from it comes out of the
+          face. Sketches in existing files are untouched.</li>
+        <li><strong>Section hatching is right</strong> on cut faces with
+          notches and steps in them, which used to fill as wedges.</li>
+        <li><strong>Closing a tab frees its memory</strong>, including
+          for very large imports.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
         <span class="ver">0.2.3</span>
         <span class="when">26 September 2026</span>
-        <span class="badge">current</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         dLogic grows up: code that builds geometry, rules that reach the
@@ -285,7 +338,7 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.3/DATUM-0.2.3-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.4/DATUM-0.2.4-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>

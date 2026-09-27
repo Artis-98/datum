@@ -288,9 +288,16 @@ def project(shape: Optional[TopoDS_Shape],
 
 
 def _face_loops(face, frame: gp_Ax2) -> List[List[Tuple[float, float]]]:
-    """A face's wires, projected flat, ready to be filled."""
+    """A face's wires, projected flat, ready to be filled.
+
+    Each edge is walked the way the wire runs through it. A curve is
+    sampled from its first parameter to its last whichever way round the
+    wire uses it, so an edge the wire takes backwards has to be read
+    backwards: read forwards, the outline doubled back on itself at every
+    such edge, and the hatch of an L shaped cut came out as wedges.
+    """
     from OCP.BRepTools import BRepTools_WireExplorer
-    from OCP.TopAbs import TopAbs_WIRE
+    from OCP.TopAbs import TopAbs_REVERSED, TopAbs_WIRE
 
     out: List[List[Tuple[float, float]]] = []
     for wire in kernel.explore(face, TopAbs_WIRE):
@@ -298,7 +305,11 @@ def _face_loops(face, frame: gp_Ax2) -> List[List[Tuple[float, float]]]:
         try:
             walker = BRepTools_WireExplorer(TopoDS.Wire_s(wire))
             while walker.More():
-                for piece in _flatten_3d(walker.Current()):
+                edge = walker.Current()
+                backwards = edge.Orientation() == TopAbs_REVERSED
+                for piece in _flatten_3d(edge):
+                    if backwards:
+                        piece = piece[::-1]
                     for p in piece:
                         here = to_paper(p, frame)
                         if not points or math.dist(points[-1], here) > 1e-9:

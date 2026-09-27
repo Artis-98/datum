@@ -79,6 +79,25 @@ check("the assembly is the same whether its parts were built here or there",
 
 
 print()
+print("a big body measured on every core")
+from datum.core import geometry  # noqa: E402
+
+rows = geometry.box(10, 10, 10).repeat(8, x=30).repeat(5, y=30).shape
+pieces, todo = kernel.unmeasured(rows)
+check("forty blocks, none measured yet", len(pieces) == 40 and len(todo) == 40)
+measured = workers.measure(rows)
+check("the workers measured every one", measured == 40, measured)
+check("  so nothing is left to measure here", not kernel.unmeasured(rows)[1])
+volume, centre = kernel.volume_and_centre(rows)
+check("  and they add up to the right answer",
+      abs(volume - 40000.0) < 1e-6 and abs(centre[0] - (7 * 30 + 10) / 2.0)
+      < 1e-6 and abs(centre[1] - (4 * 30 + 10) / 2.0) < 1e-6,
+      (volume, centre))
+check("a few pieces are measured here, not worth the trip",
+      workers.measure(geometry.box(10, 10, 10).repeat(3, x=30).shape) == 0)
+
+
+print()
 print("a worker that dies loses nothing")
 victim = helpers._workers[0]
 slow = []

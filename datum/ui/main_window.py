@@ -3185,6 +3185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Let slow rebuilds happen in a worker while the window stays live."""
         if workers.ENABLED:
             core_document.REMOTE = self._remote_rebuild
+            core_document.WAIT = self._wait_responsive
 
     def _prime(self, document) -> None:
         """Have a worker build its own copy of a part, ready for later.

@@ -49,6 +49,20 @@ REMOTE_AFTER = 0.3
 UNKNOWN_COST = 0.05
 # how many worker results' shapes a document holds on to, by name
 REMOTE_KEEP = 4
+# Set by the window, as REMOTE is: how to wait for a worker without the
+# window going dead. Left unset, waiting simply blocks.
+WAIT: Optional[Callable[[Any], Any]] = None
+
+
+def measure_everywhere(shape: Optional[TopoDS_Shape]) -> None:
+    """Have the workers measure a big body's pieces, if there are workers."""
+    if shape is None or shape.IsNull():
+        return
+    try:
+        from . import workers
+        workers.measure(shape, WAIT)
+    except Exception:
+        pass
 
 
 def _fingerprint(*parts: Any) -> str:
@@ -816,6 +830,7 @@ class Document:
             return {}
         held = getattr(self, "_measured", None)
         if held is None or not kernel.same_shape(held[0], self.shape):
+            measure_everywhere(self.shape)
             held = (self.shape, kernel.geometry_properties(self.shape))
             self._measured = held
         props = dict(held[1])

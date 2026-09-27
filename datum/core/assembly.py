@@ -714,6 +714,8 @@ class AssemblyDocument:
         """Same shape of answer as a part, so the panel needs no special case."""
         if self.shape is None:
             return {}
+        from .document import measure_everywhere
+        measure_everywhere(self.shape)
         props = kernel.geometry_properties(self.shape)
         props["mass_g"] = props["volume_mm3"] / 1000.0 * self.density
         return props

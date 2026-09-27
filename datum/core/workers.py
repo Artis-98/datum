@@ -400,6 +400,79 @@ def pool() -> Optional[Pool]:
     return _POOL
 
 
+# a body with at least this many pieces not measured yet is measured on
+# every core; fewer, and writing them out costs more than it saves
+MEASURE_MIN = 16
+
+
+def measure(shape, wait=None) -> int:
+    """Measure a big body's pieces on every core, ready to be added up.
+
+    Volume, centre and area add up piece by piece, and a 300 solid import
+    takes four and a half seconds to integrate on one core. The pieces go
+    to the workers in one file, each worker integrates a share, and the
+    answers are remembered here as if worked out here, so adding them up
+    afterwards costs nothing. ``wait`` is how to wait for a worker; by
+    default, simply blocking. Returns how many pieces were measured;
+    anything a worker did not answer for is measured here as before.
+    """
+    helpers = pool()
+    if helpers is None:
+        return 0
+    ready = helpers.ready
+    if ready < 2:
+        return 0
+    from OCP.BinTools import BinTools, BinTools_FormatVersion
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Compound
+    from . import kernel
+    from .worker import _bodies_folder
+
+    parts, todo = kernel.unmeasured(shape)
+    if len(todo) < MEASURE_MIN:
+        return 0
+    # every piece, so the indices are the same there as here; the meshes
+    # stay behind, nobody integrates a mesh
+    whole = TopoDS_Compound()
+    builder = BRep_Builder()
+    builder.MakeCompound(whole)
+    for part in parts:
+        builder.Add(whole, part)
+    import uuid
+    path = os.path.join(_bodies_folder(), uuid.uuid4().hex + ".bin")
+    done = 0
+    try:
+        BinTools.Write_s(whole, path, False, False,
+                         BinTools_FormatVersion.BinTools_FormatVersion_CURRENT)
+        # dealt by size, biggest first to whoever has least, so no core is
+        # left with the three heaviest pieces while the others wait
+        shares: List[List[int]] = [[] for _ in range(ready)]
+        loads = [0] * ready
+        sizes = {i: len(kernel.faces(parts[i])) for i in todo}
+        for index in sorted(todo, key=lambda i: -sizes[i]):
+            lightest = loads.index(min(loads))
+            shares[lightest].append(index)
+            loads[lightest] += sizes[index] + 1
+        futures = [helpers.submit("measure", path=path, indices=share)
+                   for share in shares if share]
+        for future in futures:
+            try:
+                answer = wait(future) if wait else future.result(timeout=600)
+            except Exception:
+                continue
+            for index, volume, moment, area in answer.get("measures", []):
+                kernel.remember_measure(parts[index], "volume",
+                                        (volume, tuple(moment)))
+                kernel.remember_measure(parts[index], "area", (area,))
+                done += 1
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return done
+
+
 def warm(count: Optional[int] = None) -> None:
     """Start workers loading in the background, for work about to come."""
     held = pool()

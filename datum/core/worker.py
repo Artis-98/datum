@@ -232,6 +232,32 @@ def sweep_bodies(age: float = 86400.0) -> None:
         pass
 
 
+def _measure(path: str, indices=()) -> Dict[str, Any]:
+    """Integrate some of the pieces of a body the window wrote out.
+
+    Each comes back as its index, volume, first moment and area, which is
+    what the window adds up; the pieces keep their placement in the file,
+    so the numbers are the ones the window would have got.
+    """
+    from OCP.BinTools import BinTools
+    from OCP.TopoDS import TopoDS_Iterator, TopoDS_Shape
+    from . import kernel
+
+    whole = TopoDS_Shape()
+    BinTools.Read_s(whole, path)
+    parts = []
+    children = TopoDS_Iterator(whole)
+    while children.More():
+        parts.append(children.Value())
+        children.Next()
+    out = []
+    for index in indices:
+        volume, moment = kernel._measure(parts[index], "volume")
+        area = kernel._measure(parts[index], "area")[0]
+        out.append([index, volume, list(moment), area])
+    return {"measures": out}
+
+
 def _forget(keys=()) -> Dict[str, Any]:
     """Let go of the copies kept for these keys: their part has closed."""
     gone = 0
@@ -250,6 +276,7 @@ OPERATIONS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "project": _project,
     "rebuild": _rebuild,
     "forget": _forget,
+    "measure": _measure,
     "ping": _ping,
 }
 

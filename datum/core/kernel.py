@@ -248,11 +248,39 @@ def _measured_pieces(shape: TopoDS_Shape) -> List[TopoDS_Shape]:
     return [shape]
 
 
-def _measure(piece: TopoDS_Shape, what: str):
-    key = hash(piece)
-    for held, kind, answer in _MEASURES.get(key, ()):
+def _measured(piece: TopoDS_Shape, what: str):
+    for held, kind, answer in _MEASURES.get(hash(piece), ()):
         if kind == what and held.IsEqual(piece):
             return answer
+    return None
+
+
+def unmeasured(shape: TopoDS_Shape) -> Tuple[List[TopoDS_Shape], List[int]]:
+    """A body's pieces, and which of them have not been measured yet."""
+    parts = _measured_pieces(shape)
+    return parts, [i for i, part in enumerate(parts)
+                   if _measured(part, "volume") is None
+                   or _measured(part, "area") is None]
+
+
+def remember_measure(piece: TopoDS_Shape, what: str, answer) -> None:
+    """Take a measurement made elsewhere, a worker say, as made here."""
+    if _measured(piece, what) is None:
+        _keep_measure(piece, what, tuple(answer))
+
+
+def _keep_measure(piece: TopoDS_Shape, what: str, answer) -> None:
+    key = hash(piece)
+    _MEASURES.setdefault(key, []).append((piece, what, answer))
+    _MEASURES.move_to_end(key)
+    while len(_MEASURES) > _MEASURES_KEEP:
+        _MEASURES.popitem(last=False)
+
+
+def _measure(piece: TopoDS_Shape, what: str):
+    known = _measured(piece, what)
+    if known is not None:
+        return known
     props = GProp_GProps()
     if what == "volume":
         BRepGProp.VolumeProperties_s(piece, props)
@@ -262,10 +290,7 @@ def _measure(piece: TopoDS_Shape, what: str):
     else:
         BRepGProp.SurfaceProperties_s(piece, props)
         answer = (props.Mass(),)
-    _MEASURES.setdefault(key, []).append((piece, what, answer))
-    _MEASURES.move_to_end(key)
-    while len(_MEASURES) > _MEASURES_KEEP:
-        _MEASURES.popitem(last=False)
+    _keep_measure(piece, what, answer)
     return answer
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -157,6 +158,12 @@ class Viewport(QtWidgets.QWidget):
         self._model_ais: Optional[AIS_Shape] = None
         # or, for a body of many pieces, one per piece
         self._model_chunks: List[AIS_Shape] = []
+        # bodies on screen still to be made pickable; see ARM_NOW
+        self._arming: Tuple[List[AIS_Shape], Tuple[int, ...]] = ([], ())
+        self._arm_timer = QtCore.QTimer(self)
+        self._arm_timer.setSingleShot(True)
+        self._arm_timer.setInterval(0)
+        self._arm_timer.timeout.connect(self._arm_some)
         # set while a rebuild runs in a worker: the view still pans,
         # orbits and zooms, but a click does not select or open a menu
         self.busy = False
@@ -503,11 +510,11 @@ class Viewport(QtWidgets.QWidget):
             if pieces is not None:
                 for piece in pieces:
                     ais = self._model_piece(piece, appearance, meshed)
-                    ctx.Display(ais, False)
+                    self._show(ais)
                     self._model_chunks.append(ais)
             else:
                 ais = self._model_piece(shape, appearance, meshed)
-                ctx.Display(ais, False)
+                self._show(ais)
                 self._model_ais = ais
             self._model_shape = shape
             self._model_look = look
@@ -517,6 +524,22 @@ class Viewport(QtWidgets.QWidget):
         if not keep_camera:
             self.fit_all()
         self.redraw()
+
+    def _show(self, ais, mode: Optional[int] = None) -> None:
+        """Put a body on screen, drawn as it will be seen, nothing selectable.
+
+        Left to the context, a body is drawn shaded and made pickable as a
+        whole, and then drawn again and made pickable again once the right
+        display and selection modes are applied. Working out what can be
+        picked is most of the cost of showing an assembly, so it is done
+        once, by whatever applies the selection mode afterwards.
+        """
+        if mode is None:
+            mode = 0 if self.display_mode == "wireframe" else 1
+        # known to the selector first, or making it pickable later finds
+        # nothing to make pickable
+        self.context.Load(ais, -1)
+        self.context.Display(ais, mode, -1, False)
 
     def _model_piece(self, shape: TopoDS_Shape, appearance,
                      meshed: bool) -> AIS_Shape:
@@ -561,6 +584,7 @@ class Viewport(QtWidgets.QWidget):
                 order.append(piece)
                 fresh.append(piece)
         for bucket in held.values():
+            self._forget_arming(bucket)
             for gone in bucket:
                 ctx.Remove(gone, False)
         # only the new pieces need triangles, made to the whole body's
@@ -574,7 +598,7 @@ class Viewport(QtWidgets.QWidget):
                 chunks.append(entry)
                 continue
             ais = self._model_piece(entry, appearance, meshed)
-            ctx.Display(ais, False)
+            self._show(ais)
             chunks.append(ais)
         self._model_chunks = chunks
         self._model_shape = shape
@@ -584,6 +608,7 @@ class Viewport(QtWidgets.QWidget):
 
     def _clear_model(self) -> None:
         ctx = self.context
+        self._forget_arming(self._model_pieces())
         if self._model_ais is not None:
             ctx.Remove(self._model_ais, False)
             self._model_ais = None
@@ -679,8 +704,7 @@ class Viewport(QtWidgets.QWidget):
                 drawer.SetLineAspect(aspect)
                 drawer.SetWireAspect(aspect)
                 drawer.SetSeenLineAspect(aspect)
-                ctx.Display(ais, False)
-                ctx.SetDisplayMode(ais, 0, False)
+                self._show(ais, 0)
                 self._component_ais[int(item["id"])] = ais
                 self._component_wires.add(int(item["id"]))
                 continue
@@ -710,9 +734,7 @@ class Viewport(QtWidgets.QWidget):
             if mesh.is_meshed(shape):
                 drawer.SetAutoTriangulation(False)
 
-            ctx.Display(ais, False)
-            ctx.SetDisplayMode(ais, 0 if self.display_mode == "wireframe"
-                               else 1, False)
+            self._show(ais)
             if transparency:
                 # through the context and after the object is displayed:
                 # set on the shape beforehand it is quietly dropped when
@@ -758,6 +780,7 @@ class Viewport(QtWidgets.QWidget):
     def clear_components(self) -> None:
         if not self._ready:
             return
+        self._forget_arming(self._component_ais.values())
         for ais in self._component_ais.values():
             self.context.Remove(ais, False)
         self._component_ais = {}
@@ -896,6 +919,7 @@ class Viewport(QtWidgets.QWidget):
         """Select everything the dragged box asks for."""
         from OCP.Graphic3d import Graphic3d_Vec2i
 
+        self._finish_arming()
         crossing = end.x() < start.x()
         selector = self.context.MainSelector()
         try:
@@ -934,6 +958,7 @@ class Viewport(QtWidgets.QWidget):
         """Which occurrence is under a screen point, without selecting it."""
         if not self._ready or not self._component_ais:
             return None
+        self._finish_arming()
         self.context.MoveTo(int(x), int(y), self.view, False)
         if not self.context.HasDetected():
             return None
@@ -987,6 +1012,13 @@ class Viewport(QtWidgets.QWidget):
         self.selection_mode = mode
         self._apply_selection_mode()
 
+    # Making a body pickable works out every face and edge it could be
+    # picked by, which for an assembly of a hundred and more parts is a
+    # good part of a second before anything is on screen. Past this many
+    # bodies it is done once the model is drawn, a few at a time between
+    # events, and anything that picks finishes it first.
+    ARM_NOW = 24
+
     def _apply_selection_mode(self) -> None:
         if not self._ready:
             return
@@ -996,12 +1028,47 @@ class Viewport(QtWidgets.QWidget):
         locked = {id(self._component_ais[oid])
                   for oid in self._component_locked
                   if oid in self._component_ais}
+        pending = []
         for ais in self._bodies():
             ctx.Deactivate(ais)
-            if id(ais) in locked:
-                continue
+            if id(ais) not in locked and modes:
+                pending.append(ais)
+        self._arming = (pending, tuple(modes))
+        if len(pending) <= self.ARM_NOW:
+            self._finish_arming()
+        else:
+            self._arm_timer.start()
+
+    def _arm_some(self) -> None:
+        """Make a few more bodies pickable, for as long as a frame lasts."""
+        pending, modes = self._arming
+        if not self._ready:
+            return
+        deadline = time.perf_counter() + 0.03
+        while pending and time.perf_counter() < deadline:
+            ais = pending.pop(0)
             for index in modes:
-                ctx.Activate(ais, index, True)
+                self.context.Activate(ais, index, True)
+        if pending:
+            self._arm_timer.start()
+
+    def _finish_arming(self) -> None:
+        """Everything pickable now, before anything is picked."""
+        self._arm_timer.stop()
+        pending, modes = self._arming
+        self._arming = ([], ())
+        if not self._ready:
+            return
+        for ais in pending:
+            for index in modes:
+                self.context.Activate(ais, index, True)
+
+    def _forget_arming(self, gone) -> None:
+        """Bodies taken off screen are not waiting to be made pickable."""
+        pending, modes = self._arming
+        if pending:
+            ids = {id(a) for a in gone}
+            self._arming = ([a for a in pending if id(a) not in ids], modes)
 
     def clear_selection(self) -> None:
         if self._ready:
@@ -2070,6 +2137,8 @@ class Viewport(QtWidgets.QWidget):
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         if not self._ready:
             return
+        if event.button() == QtCore.Qt.LeftButton:
+            self._finish_arming()
         self.setFocus()
         self.finish_animation()      # touching the mouse takes over the camera
         pos = event.position().toPoint()
@@ -2219,6 +2288,8 @@ class Viewport(QtWidgets.QWidget):
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         if not self._ready:
             return
+        if event.button() == QtCore.Qt.LeftButton:
+            self._finish_arming()
         pos = event.position().toPoint()
         moved = self._moved_enough(pos)
 

@@ -212,9 +212,16 @@ _UNMESHABLE: "OrderedDict[int, TopoDS_Shape]" = OrderedDict()
 UNMESHABLE_KEEP = 4096
 
 
+def _face_key(face: TopoDS_Shape) -> int:
+    # by the face itself, wherever it has been put: its triangles belong to
+    # the face, not the placement, so a part placed in a sub-assembly fails
+    # to mesh exactly as it did on its own, and is not tried again
+    return hash(face.Located(TopLoc_Location()))
+
+
 def _gave_up_on(face: TopoDS_Shape) -> bool:
-    held = _UNMESHABLE.get(hash(face))
-    return held is not None and held.IsSame(face)
+    held = _UNMESHABLE.get(_face_key(face))
+    return held is not None and held.IsPartner(face)
 
 
 def _give_up_on(faces) -> None:
@@ -222,7 +229,7 @@ def _give_up_on(faces) -> None:
     for face in faces:
         triangles = BRep_Tool.Triangulation_s(face, location)
         if triangles is None or triangles.NbTriangles() == 0:
-            _UNMESHABLE[hash(face)] = face
+            _UNMESHABLE[_face_key(face)] = face
     while len(_UNMESHABLE) > UNMESHABLE_KEEP:
         _UNMESHABLE.popitem(last=False)
 
@@ -246,7 +253,7 @@ def accept_stored(shape: Optional[TopoDS_Shape]) -> None:
         if triangles is not None and triangles.NbTriangles() > 0:
             meshed += 1
         else:
-            _UNMESHABLE[hash(face)] = face
+            _UNMESHABLE[_face_key(face)] = face
     while len(_UNMESHABLE) > UNMESHABLE_KEEP:
         _UNMESHABLE.popitem(last=False)
     if meshed:

@@ -191,6 +191,38 @@ check("a hole through one of them redraws that one and keeps the rest",
 
 
 print()
+print("a big assembly is drawn first and made pickable after")
+win.new_document()
+pump()
+win.viewport.set_shape(None)
+blocks = [{"id": i + 1,
+           "shape": geometry.box(10, 10, 10).move(i * 15, 0, 0).shape}
+          for i in range(40)]
+win.viewport.set_components(blocks, keep_camera=False)
+waiting = len(win.viewport._arming[0])
+check("forty parts on screen, most still to be made pickable",
+      waiting > win.viewport.ARM_NOW, waiting)
+x, y = win.viewport.project((20 * 15 + 5, 5, 5))
+check("pointing at one finds it all the same",
+      win.viewport.component_under(x, y) == 21,
+      win.viewport.component_under(x, y))
+check("  having made everything pickable first",
+      not win.viewport._arming[0])
+win.viewport.set_components(blocks, keep_camera=True)
+for _ in range(200):
+    if not win.viewport._arming[0]:
+        break
+    app.processEvents()
+check("left alone, the rest are made pickable between events",
+      not win.viewport._arming[0])
+x, y = win.viewport.project((35 * 15 + 5, 5, 5))
+check("  and picked like any other", win.viewport.component_under(x, y) == 36)
+win.viewport.clear_components()
+check("taken off screen, nothing is left waiting",
+      not win.viewport._arming[0])
+
+
+print()
 print("the SpaceMouse looks for new devices without stopping the window")
 
 import time  # noqa: E402

@@ -48,12 +48,41 @@ def _build(path: str, trusted=()) -> Dict[str, Any]:
             "seconds": round(time.perf_counter() - started, 3)}
 
 
+_LIBRARY = None
+
+
+def _project(path: str, direction, up, hidden: bool = True,
+             trusted=()) -> Dict[str, Any]:
+    """One drawing view: the model at ``path``, seen along ``direction``.
+
+    The library is kept between requests, so the second view of the same
+    model does not load it again. The lines go back at full precision:
+    a view drawn here must be the view that would have been drawn there.
+    """
+    global _LIBRARY
+    from . import hlr, rules
+    from .parts import PartLibrary
+
+    for place in trusted or ():
+        rules.trust_path(place)
+    if _LIBRARY is None:
+        _LIBRARY = PartLibrary()
+    shape = _LIBRARY.shape(path)
+    projection = hlr.project(shape, tuple(direction), tuple(up),
+                             hidden=hidden)
+    return {"box": list(projection.box), "centre": list(projection.centre),
+            "error": projection.error, "hatch": projection.hatch,
+            "lines": [{"k": line.kind, "p": [list(p) for p in line.points]}
+                      for line in projection.lines]}
+
+
 def _ping() -> Dict[str, Any]:
     return {"pid": os.getpid()}
 
 
 OPERATIONS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "build": _build,
+    "project": _project,
     "ping": _ping,
 }
 

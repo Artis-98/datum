@@ -284,6 +284,7 @@ class Generator:
         base = base_dir if base_dir is not None else doc.base_dir
 
         models: Dict[int, Tuple[Optional[TopoDS_Shape], object, str]] = {}
+        self._pending = self._hand_out(doc, base, force)
         for sheet in doc.sheets:
             # parents first, so a child can read what its parent resolved to
             for view in self._in_order(sheet):
@@ -291,6 +292,7 @@ class Generator:
             self._reanchor(doc, sheet, models, report)
             self._recount(doc, sheet, base, models, report)
 
+        self._pending = {}
         report.duration = time.perf_counter() - started
         report.ok = not report.missing and not report.errors
         doc.last_report = report
@@ -571,10 +573,89 @@ class Generator:
         doc.hashes[key] = stamp
         report.generated += 1
 
+    def _hand_out(self, doc: DrawingDocument, base: str,
+                  force: bool) -> Dict:
+        """Send every plain view that needs drawing to the workers at once.
+
+        Hidden line removal is the slow part of a drawing, a third of a
+        second a view on the excavator, and every plain view of a sheet is
+        independent of the others: each is the model seen from one way.
+        So they are all worked out together, one per worker, while the
+        sheet is put together here. Sections and details depend on the
+        view they are cut from, so they stay here, after.
+        """
+        from . import rules, workers
+
+        helpers = workers.pool()
+        if helpers is None:
+            return {}
+        jobs = []
+        for sheet in doc.sheets:
+            for view in self._in_order(sheet):
+                if view.kind in (SECTION, DETAIL):
+                    continue
+                if view.projection is not None and not force:
+                    continue
+                origin = doc.view_model(sheet, view)
+                if origin is None or not origin.ref.path:
+                    continue
+                path = origin.ref.resolve(base) if base else (
+                    origin.ref.path if os.path.isabs(origin.ref.path)
+                    else None)
+                if not path or not os.path.exists(path):
+                    continue
+                try:
+                    direction, up = self._plain_direction(doc, sheet, view)
+                except Exception:
+                    continue
+                jobs.append(((id(sheet), view.id), {
+                    "path": os.path.abspath(path),
+                    "direction": list(direction), "up": list(up),
+                    "hidden": doc.view_display(sheet, view) == WITH_HIDDEN}))
+        # one view is quicker drawn here than posted anywhere, and workers
+        # not yet running cost more to start than a few views take
+        if len(jobs) < 2 or (helpers.running == 0 and len(jobs) < 4):
+            return {}
+        trusted = sorted(rules.trusted_paths())
+        return {key: helpers.submit("project", trusted=trusted, **args)
+                for key, args in jobs}
+
+    def _plain_direction(self, doc: DrawingDocument, sheet: Sheet,
+                         view: View):
+        """Which way a view that is not a section or a detail looks."""
+        if view.kind == BASE:
+            return orientation_of(view)
+        if view.kind == PROJECTED:
+            parent = sheet.view(view.parent)
+            if parent is None:
+                raise ValueError("its parent view is gone")
+            pd, pu = self._resolved_orientation(doc, sheet, parent)
+            dx, dy = view.x - parent.x, view.y - parent.y
+            if abs(dx) > 1e-6 and abs(dy) > 1e-6:
+                return hlr.ORIENTATIONS["iso"]
+            return projected_orientation(pd, pu, dx, dy, doc.angle)
+        if view.kind == AUXILIARY:
+            parent = sheet.view(view.parent)
+            if parent is None:
+                raise ValueError("its parent view is gone")
+            pd, pu = self._resolved_orientation(doc, sheet, parent)
+            return auxiliary_orientation(pd, pu, view.radius)
+        return orientation_of(view)
+
     def _project(self, doc: DrawingDocument, sheet: Sheet, view: View,
                  shape: TopoDS_Shape) -> hlr.Projection:
         show_hidden = doc.view_display(sheet, view) == WITH_HIDDEN
         scale = doc.view_scale(sheet, view)
+
+        if view.kind not in (SECTION, DETAIL):
+            handed = getattr(self, "_pending", {}).pop(
+                (id(sheet), view.id), None)
+            if handed is not None:
+                try:
+                    return _scaled(hlr.Projection.from_dict(
+                        handed.result(timeout=600)), scale)
+                except Exception:
+                    pass        # drawn here instead, as it always was
 
         if view.kind == BASE:
             direction, up = orientation_of(view)

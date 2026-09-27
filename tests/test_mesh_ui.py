@@ -223,6 +223,27 @@ check("taken off screen, nothing is left waiting",
 
 
 print()
+print("closing a document lets go of what was worked out about its shapes")
+from datum.core import kernel  # noqa: E402
+win.new_document()
+pump()
+brought = ImportFeature()
+brought.path = many
+brought.operation = "new"
+win.document.add_feature(brought)
+win.rebuild(keep_camera=False)
+pump()
+win.document.mass_properties()
+check("measuring a body of many pieces remembers them",
+      len(kernel._MEASURES) >= 12 and len(mesh._BOXES) >= 12)
+win.document.modified = False
+win.close_entry(win.session.active)
+pump()
+check("  and closing its tab forgets them, and the meshes they hold",
+      not kernel._MEASURES and not kernel._BOXES and not mesh._BOXES)
+
+
+print()
 print("the SpaceMouse looks for new devices without stopping the window")
 
 import time  # noqa: E402

@@ -33,6 +33,7 @@ from .assembly_browser import AssemblyBrowserPanel
 from ..core import rules as core_rules
 from ..core import document as core_document
 from ..core import ahead as core_ahead
+from ..core import mesh as mesh_core
 from ..core import stepimport, workers
 from .rules_ui import CODE_STARTER, RulesPanel, open_form
 from .assembly_ui import AssemblyController
@@ -1681,6 +1682,11 @@ class MainWindow(QtWidgets.QMainWindow):
         key = getattr(entry.document, "remote_key", None)
         if helpers is not None and key:
             helpers.release([key])
+        # and what was remembered about its shapes here, which would keep a
+        # big import in memory long after its tab had gone
+        kernel.forget()
+        mesh_core.forget()
+        fileio.forget()
 
         # anything that placed it has to fall back to the file on disk
         for other in dependents:

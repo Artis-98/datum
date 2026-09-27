@@ -264,6 +264,7 @@ def forget() -> None:
     """Drop the memory, and the bodies it keeps alive."""
     _MESHED.clear()
     _UNMESHABLE.clear()
+    _BOXES.clear()
 
 
 def is_meshed(shape: Optional[TopoDS_Shape],

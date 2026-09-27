@@ -45,6 +45,11 @@ def _key(path: str):
             stat.st_mtime_ns)
 
 
+def forget() -> None:
+    """Let go of the files read this session; the disk cache still has them."""
+    _READ.clear()
+
+
 def remember(path: str, shape: TopoDS_Shape) -> None:
     """This file reads as this shape: it was just written from it."""
     try:

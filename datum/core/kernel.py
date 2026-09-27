@@ -240,6 +240,17 @@ _MEASURES: "OrderedDict[int, list]" = OrderedDict()
 _MEASURES_KEEP = 8192
 
 
+def forget() -> None:
+    """Let go of every piece measured or boxed, and whatever it keeps alive.
+
+    A piece holds its mesh, so these would otherwise keep a closed import's
+    three hundred solids in memory until eight thousand others pushed them
+    out. They are worked out again when asked for.
+    """
+    _BOXES.clear()
+    _MEASURES.clear()
+
+
 def _measured_pieces(shape: TopoDS_Shape) -> List[TopoDS_Shape]:
     if shape.ShapeType() == TopAbs_COMPOUND:
         found = pieces(shape)

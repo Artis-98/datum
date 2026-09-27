@@ -15,7 +15,6 @@ different, and the key does not match, so the part is built the usual way.
 
 from __future__ import annotations
 
-import copy
 import hashlib
 import json
 import os
@@ -168,7 +167,10 @@ class BuildAhead:
     @staticmethod
     def _variant(base: Dict[str, Any],
                  changes: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        data = copy.deepcopy(base["data"])
+        # only the parameters differ; the features, which can be big, are
+        # shared with the part as it stands
+        data = dict(base["data"])
+        data["parameters"] = [dict(p) for p in data.get("parameters", [])]
         found = 0
         for param in data.get("parameters", []):
             name = param.get("name")

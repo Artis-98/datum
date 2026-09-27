@@ -993,7 +993,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
     def _on_viewport_ready(self) -> None:
-        self.rebuild(keep_camera=False)
+        # Opening the first document is what brings the viewer up, and the
+        # open goes on to rebuild and draw it anyway. Doing it here as well
+        # drew a whole assembly twice.
+        if not self._activating:
+            self.rebuild(keep_camera=False)
         self._start_spacemouse()
 
     # ---------------------------------------------------------- SpaceMouse
@@ -1170,7 +1174,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.rules_panel.set_document(entry.document)
 
         self._set_workspace(entry.doc_type)
-        self.show_model()
+        self._activating = True
+        try:
+            self.show_model()
+        finally:
+            self._activating = False
 
         if entry.is_part:
             self.browser.set_document(self.document)
@@ -2703,6 +2711,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._browse_docs = {}      # path -> a document we only read
         # guards the one rebuild a rule is allowed to cause
         self._rules_running = False
+        self._activating = False
         self._ghosts = []           # what to draw around whatever is open
         self._in_place_panels = []
         for title in (TAB_MODEL, TAB_ASSEMBLE):

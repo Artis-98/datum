@@ -40,8 +40,10 @@ from . import prefs
 
 # Bumped when anything that changes the shape of a build changes: a new
 # kernel, or a fix that makes a feature build differently. Old entries
-# then simply stop matching and get pruned in time.
-CACHE_VERSION = 1
+# then simply stop matching and get pruned in time.  2: bodies are kept
+# with the triangles they are drawn with, so a cached part is not only
+# not rebuilt but not meshed either.
+CACHE_VERSION = 2
 
 FOLDER = "bodies"
 # how much disk this may use before the oldest of it goes

@@ -71,10 +71,15 @@ def _within_box(point, shape: TopoDS_Shape):
     hundred and fifty; its absolute position is not, and that is why
     matching on absolute position breaks the moment a part is resized.
     """
-    try:
-        x0, y0, z0, x1, y1, z1 = kernel.bounding_box(shape)
-    except Exception:
-        return None
+    if isinstance(shape, tuple):
+        # already measured: resolving asks this once per candidate, and
+        # measuring the whole part once per candidate was most of the cost
+        x0, y0, z0, x1, y1, z1 = shape
+    else:
+        try:
+            x0, y0, z0, x1, y1, z1 = kernel.bounding_box(shape)
+        except Exception:
+            return None
     size = (x1 - x0, y1 - y0, z1 - z0)
     out = []
     for i in range(3):
@@ -142,9 +147,11 @@ class ShapeRef:
 
     # -- matching -----------------------------------------------------------
 
-    def _score(self, candidate: TopoDS_Shape, cand_index: int) -> float:
+    def _score(self, candidate: TopoDS_Shape, cand_index: int,
+               centre=None) -> float:
         """Lower is better.  ``inf`` means "definitely not this one"."""
-        centre = kernel.shape_centre(candidate)
+        if centre is None:
+            centre = kernel.shape_centre(candidate)
         dist = math.dist(centre, self.centre)
 
         if self.kind == "vertex":
@@ -190,18 +197,30 @@ class ShapeRef:
         return score
 
     def _pool(self, shape: TopoDS_Shape):
+        shared = getattr(self, "_shared", None)
+        if shared is not None:
+            return shared.pool(shape, self.kind)[0]
         if self.kind == "edge":
             return kernel.edges(shape)
         if self.kind == "vertex":
             return kernel.vertices(shape)
         return kernel.faces(shape)
 
+    def _centre_of(self, shape: TopoDS_Shape, index: int, candidate):
+        shared = getattr(self, "_shared", None)
+        if shared is not None:
+            return shared.centre(shape, self.kind, index)
+        return kernel.shape_centre(candidate)
+
     def resolve(self, shape: TopoDS_Shape) -> Optional[TopoDS_Shape]:
         """Find this reference's sub-shape in ``shape`` after a rebuild."""
         # _score is called per candidate and needs the whole shape to work
         # out where each one sits inside it; handing it over here keeps the
         # signature everything else uses unchanged
-        self._parent_box = shape
+        try:
+            self._parent_box = tuple(kernel.bounding_box(shape))
+        except Exception:
+            self._parent_box = None
         pool = self._pool(shape)
         if not pool:
             self.resolved = False
@@ -209,7 +228,7 @@ class ShapeRef:
 
         best, best_score = None, math.inf
         for i, cand in enumerate(pool):
-            s = self._score(cand, i)
+            s = self._score(cand, i, self._centre_of(shape, i, cand))
             if s < best_score:
                 best, best_score = cand, s
 
@@ -250,6 +269,34 @@ class ShapeRef:
                     self.geom = fp["geom"]
                     break
         return found
+
+
+class _Shared:
+    """Sub-shapes and their centres, worked out once for many references.
+
+    Lives for one resolve_all and no longer, so there is no question of
+    it going stale: the shape it describes cannot change while it exists.
+    """
+
+    def __init__(self) -> None:
+        self._pools: Dict[Tuple[int, str], Tuple[Any, list, list]] = {}
+
+    def pool(self, shape: TopoDS_Shape, kind: str):
+        key = (id(shape), kind)
+        entry = self._pools.get(key)
+        if entry is None or entry[0] is not shape:
+            items = (kernel.edges(shape) if kind == "edge"
+                     else kernel.vertices(shape) if kind == "vertex"
+                     else kernel.faces(shape))
+            entry = (shape, items, [None] * len(items))
+            self._pools[key] = entry
+        return entry[1], entry[2]
+
+    def centre(self, shape: TopoDS_Shape, kind: str, index: int):
+        items, centres = self.pool(shape, kind)
+        if centres[index] is None:
+            centres[index] = kernel.shape_centre(items[index])
+        return centres[index]
 
 
 class RefSet:
@@ -302,8 +349,15 @@ class RefSet:
         """Returns (found sub-shapes, references that could not be rebound)."""
         found: List[TopoDS_Shape] = []
         lost: List[ShapeRef] = []
+        # every reference looks through the same edges or faces of the same
+        # shape, so they are listed and measured once for all of them
+        shared = _Shared()
         for ref in self.refs:
-            sub = ref.rebind(shape)
+            ref._shared = shared
+            try:
+                sub = ref.rebind(shape)
+            finally:
+                ref._shared = None
             if sub is None:
                 lost.append(ref)
             else:

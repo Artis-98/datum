@@ -252,6 +252,28 @@ class PropertiesPanel(QtWidgets.QWidget):
         layout.addWidget(self.table, 1)
 
     def update_from(self, doc: Document) -> None:
+        """Show this document's numbers, or remember to when it is seen.
+
+        Every rebuild calls this, and working out volume, area and centre
+        of mass is not free on a heavy body: on a 48 part assembly it was
+        most of what a rebuild cost, for a panel that is hidden until
+        somebody asks for it. So while it is hidden it only notes which
+        document it should describe, and does the sums when it is shown.
+        """
+        self._pending = doc
+        if not self.isVisible():
+            self._stale = True
+            return
+        self._stale = False
+        self._fill(doc)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if getattr(self, "_stale", False):
+            self._stale = False
+            self._fill(getattr(self, "_pending", None))
+
+    def _fill(self, doc) -> None:
         if doc is None:
             self.material_label.setText("")
             self.table.setRowCount(0)

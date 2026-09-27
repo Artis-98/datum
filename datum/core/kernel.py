@@ -42,9 +42,9 @@ from OCP.TopAbs import (
     TopAbs_EDGE, TopAbs_FACE, TopAbs_ShapeEnum, TopAbs_SOLID, TopAbs_VERTEX,
     TopAbs_WIRE, TopAbs_COMPOUND,
 )
-from OCP.TopExp import TopExp_Explorer
+from OCP.TopExp import TopExp, TopExp_Explorer
 from OCP.ShapeUpgrade import ShapeUpgrade_UnifySameDomain
-from OCP.TopTools import TopTools_ListOfShape
+from OCP.TopTools import TopTools_IndexedMapOfShape, TopTools_ListOfShape
 from OCP.TopoDS import TopoDS, TopoDS_Compound, TopoDS_Edge, TopoDS_Face, TopoDS_Shape
 from OCP.gp import (
     gp_Ax1, gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pln, gp_Pnt, gp_Trsf, gp_Vec,
@@ -75,6 +75,11 @@ def _enable_parallel_booleans() -> None:
 
 
 _enable_parallel_booleans()
+
+# and meshing, which is most of what drawing a body costs; see mesh.py
+from . import mesh as _mesh                                   # noqa: E402
+
+_mesh.enable_parallel_default()
 
 
 class KernelError(RuntimeError):
@@ -107,17 +112,18 @@ def plane_gp(plane: SketchPlane) -> gp_Pln:
 
 
 def explore(shape: TopoDS_Shape, kind: TopAbs_ShapeEnum) -> List[TopoDS_Shape]:
-    """All sub-shapes of ``kind``, de-duplicated, in deterministic order."""
-    out: List[TopoDS_Shape] = []
-    seen: List[TopoDS_Shape] = []
-    exp = TopExp_Explorer(shape, kind)
-    while exp.More():
-        cur = exp.Current()
-        if not any(cur.IsSame(s) for s in seen):
-            seen.append(cur)
-            out.append(cur)
-        exp.Next()
-    return out
+    """All sub-shapes of ``kind``, de-duplicated, in deterministic order.
+
+    OpenCASCADE's indexed map, not a list searched for each new one. The
+    list compared every edge with every edge before it, which on an
+    assembly of 48 components was eighteen million comparisons and seven
+    seconds of every open. The map hashes instead, and gives the same
+    shapes in the same order, first met first, by the same test of
+    sameness, which matters because naming hangs off this order.
+    """
+    found = TopTools_IndexedMapOfShape()
+    TopExp.MapShapes_s(shape, kind, found)
+    return [found.FindKey(i) for i in range(1, found.Extent() + 1)]
 
 
 def faces(shape: TopoDS_Shape) -> List[TopoDS_Face]:

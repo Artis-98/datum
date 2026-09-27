@@ -126,7 +126,7 @@ class PartLibrary:
             sub.rebuild(depth=depth + 1)
             return sub.shape
         if manifest.type == PART:
-            from . import bodycache
+            from . import bodycache, mesh
             from .document import Document
 
             # The finished body, if this exact file has been built before.
@@ -145,6 +145,9 @@ class PartLibrary:
 
             # load builds it; building it again was half of every cold open
             part = Document.load(path)
+            # meshed now, on every core, so the triangles are kept with the
+            # body and the next open neither builds nor meshes it
+            mesh.mesh(part.shape)
             if key and part.last_report.ok and bodycache.cacheable(part):
                 bodycache.store(key, part.shape)
                 bodycache.housekeep()

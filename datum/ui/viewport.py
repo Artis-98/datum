@@ -52,6 +52,7 @@ from OCP.V3d import (
 from OCP.WNT import WNT_Window
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Lin, gp_Pln, gp_Pnt, gp_Vec
 
+from ..core import mesh
 from ..core import kernel
 from ..core.sketch import Sketch, SketchPlane
 from .theme import C
@@ -461,8 +462,10 @@ class Viewport(QtWidgets.QWidget):
             drawer.SetLineAspect(boundary)
             drawer.SetWireAspect(boundary)
             drawer.SetIsoOnTriangulation(False)
-            drawer.SetDeviationCoefficient(2.0e-4)
-            drawer.SetDeviationAngle(0.14)
+            drawer.SetDeviationCoefficient(mesh.DEVIATION)
+            drawer.SetDeviationAngle(mesh.ANGLE)
+            if mesh.mesh(shape):
+                drawer.SetAutoTriangulation(False)
 
             ctx.Display(ais, False)
             self._model_ais = ais
@@ -510,6 +513,11 @@ class Viewport(QtWidgets.QWidget):
         if not self._ready:
             return
         ctx = self.context
+        # Every part meshed once, however many times it is placed, and the
+        # small ones together so they share the cores. Left to itself the
+        # viewport meshes each copy on one core, wiping the copy before.
+        mesh.mesh_all(item.get("shape") for item in items
+                      if not item.get("wire"))
 
         for item in items:
             shape = item.get("shape")
@@ -556,8 +564,10 @@ class Viewport(QtWidgets.QWidget):
             drawer.SetLineAspect(boundary)
             drawer.SetWireAspect(boundary)
             drawer.SetIsoOnTriangulation(False)
-            drawer.SetDeviationCoefficient(2.0e-4)
-            drawer.SetDeviationAngle(0.14)
+            drawer.SetDeviationCoefficient(mesh.DEVIATION)
+            drawer.SetDeviationAngle(mesh.ANGLE)
+            if mesh.is_meshed(shape):
+                drawer.SetAutoTriangulation(False)
 
             ctx.Display(ais, False)
             ctx.SetDisplayMode(ais, 0 if self.display_mode == "wireframe"

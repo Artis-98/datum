@@ -85,6 +85,49 @@ def _unpack(result: Dict[str, Any]) -> List[TopoDS_Shape]:
     return out
 
 
+def shape_names(document: "Document") -> Dict[int, list]:
+    """Every shape a rebuild made, named for what made it.
+
+    The name is the fingerprint of the tree up to the first feature that
+    held the shape, with the body and the piece it is. Anything building
+    the same tree, a worker or the window, arrives at the same names, so a
+    piece the window already has is never sent to it again, whichever
+    core built it, and what is on screen of it stays drawn.
+    """
+    named: Dict[int, list] = {}
+    limit = (len(document.features) if document.rollback_index is None
+             else document.rollback_index)
+    for feature in document.features[:limit]:
+        entries = document._built.get(feature.id)
+        if not entries:
+            continue
+        # this rebuild's result comes first, the one kept from before after
+        chain, built = entries[0]
+        for body, shape in built.bodies:
+            if shape is None or shape.IsNull():
+                continue
+            add_name(named, shape, _fingerprint(chain, body))
+            parts = kernel.pieces(shape)
+            if len(parts) > 1:
+                for index, part in enumerate(parts):
+                    add_name(named, part, _fingerprint(chain, body, index))
+    return named
+
+
+def add_name(named: Dict[int, list], shape: TopoDS_Shape, name: str) -> None:
+    """Name a shape, unless it has a name already: the first one stands."""
+    bucket = named.setdefault(hash(shape), [])
+    if not any(held.IsEqual(shape) for held, _n in bucket):
+        bucket.append((shape, name))
+
+
+def name_of(named: Dict[int, list], shape: TopoDS_Shape) -> Optional[str]:
+    for held, name in named.get(hash(shape), ()):
+        if held.IsEqual(shape):
+            return name
+    return None
+
+
 def _strings(value: Any):
     if isinstance(value, str):
         yield value
@@ -238,6 +281,7 @@ class Document:
         self.ahead = None
         self._chain: Optional[str] = None
         self._applied_chain: Optional[str] = None
+        self._named_for: Optional[str] = None
         self._rebuilding = False
         self._again = False
         self._sketch_cache: Dict[int, Sketch] = {}
@@ -583,6 +627,15 @@ class Document:
     def remote_request(self, prime: bool = False) -> Dict[str, Any]:
         """Everything a worker needs to rebuild this document as it is."""
         from .rules import document_trusted
+        if self._chain is not None and self._named_for != self._chain:
+            # Built here last. What it holds is named the way a worker
+            # names it, so the worker sends back only what is new: the
+            # first cut through a big import sent all three hundred
+            # solids, redrawn from scratch, to change three of them.
+            named = shape_names(self)
+            self._keep_remote({name: shape for bucket in named.values()
+                               for shape, name in bucket})
+            self._named_for = self._chain
         return {"key": self.remote_key, "path": self.path or "",
                 "data": self.to_dict(), "trusted": document_trusted(self),
                 "rollback": self.rollback_index,

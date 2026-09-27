@@ -143,13 +143,14 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
         features.append(state)
 
     from . import kernel
+    from .document import add_name, name_of, shape_names
 
     have = set(have or ())
-    named = _names(document)
+    named = shape_names(document)
     # a shape no feature can be named for keeps the name this copy made
     # up for it last time, so it is not sent again either
     for key_, shape_ in sent.items():
-        _name(named, shape_, key_)
+        add_name(named, shape_, key_)
     kept: Dict[str, Any] = {}
     # Everything the window has not got goes into one file, in order.
     # Three hundred small files cost three and a half seconds to read,
@@ -159,7 +160,7 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
 
     def send(shape_) -> Dict[str, Any]:
         """One shape: named if the window has it, else packed for it."""
-        name = _named(named, shape_) or uuid.uuid4().hex
+        name = name_of(named, shape_) or uuid.uuid4().hex
         kept[name] = shape_
         if name in have:
             return {"key": name}
@@ -204,53 +205,6 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
         "feature_count": report.feature_count,
         "chain": document._chain,
     }
-
-
-def _names(document) -> Dict[int, list]:
-    """Every shape a rebuild made, named for what made it.
-
-    The name is the fingerprint of the tree up to the first feature that
-    held the shape, with the body and the piece it is. Any worker building
-    the same tree arrives at the same names, so a piece the window already
-    has from one worker is not sent again by another, and stays drawn: a
-    hole slid along a big import sends the solids it cuts and not the ones
-    it leaves alone, whichever core happened to build it.
-    """
-    from . import kernel
-    from .document import _fingerprint
-
-    named: Dict[int, list] = {}
-    limit = (len(document.features) if document.rollback_index is None
-             else document.rollback_index)
-    for feature in document.features[:limit]:
-        entries = document._built.get(feature.id)
-        if not entries:
-            continue
-        # this rebuild's result comes first, the one kept from before after
-        chain, built = entries[0]
-        for body, shape in built.bodies:
-            if shape is None or shape.IsNull():
-                continue
-            _name(named, shape, _fingerprint(chain, body))
-            parts = kernel.pieces(shape)
-            if len(parts) > 1:
-                for index, part in enumerate(parts):
-                    _name(named, part, _fingerprint(chain, body, index))
-    return named
-
-
-def _name(named: Dict[int, list], shape, name: str) -> None:
-    """Name a shape, unless it has a name already: the first one stands."""
-    bucket = named.setdefault(hash(shape), [])
-    if not any(held.IsEqual(shape) for held, _n in bucket):
-        bucket.append((shape, name))
-
-
-def _named(named: Dict[int, list], shape):
-    for held, name in named.get(hash(shape), ()):
-        if held.IsEqual(shape):
-            return name
-    return None
 
 
 def sweep_bodies(age: float = 86400.0) -> None:

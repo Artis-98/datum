@@ -22,7 +22,7 @@ os.environ["DATUM_WORKERS"] = "3"
 
 from datum.core import ahead as ahead_module                 # noqa: E402
 from datum.core import document as core_document             # noqa: E402
-from datum.core import fileio, geometry, kernel, worker, workers  # noqa
+from datum.core import fileio, geometry, kernel, workers  # noqa
 from datum.core.document import Document                     # noqa: E402
 from datum.core.features import ImportFeature, PrimitiveFeature  # noqa
 
@@ -76,7 +76,7 @@ def volume(doc):
 
 
 def names_of(doc):
-    named = worker._names(doc)
+    named = core_document.shape_names(doc)
     return {name for bucket in named.values() for _s, name in bucket}
 
 
@@ -90,9 +90,10 @@ check("two builds of the same part name their shapes alike",
       (len(names_of(a)), len(names_of(b))))
 b.params.set_expression("r", "4")
 b.rebuild()
-named_a, named_b = worker._names(a), worker._names(b)
-pieces_a = {worker._named(named_a, p) for p in kernel.pieces(a.shape)}
-pieces_b = {worker._named(named_b, p) for p in kernel.pieces(b.shape)}
+named_a = core_document.shape_names(a)
+named_b = core_document.shape_names(b)
+pieces_a = {core_document.name_of(named_a, p) for p in kernel.pieces(a.shape)}
+pieces_b = {core_document.name_of(named_b, p) for p in kernel.pieces(b.shape)}
 check("a bigger hole renames the block it cuts and no other",
       len(pieces_a & pieces_b) == 11 and None not in pieces_b,
       len(pieces_a & pieces_b))
@@ -112,6 +113,23 @@ print("built ahead in workers")
 helpers = workers.pool()
 helpers.start()
 check("workers are ready", helpers.wait_ready(timeout=120) == 3)
+
+own = make()
+own.rebuild()
+before = kernel.pieces(own.shape)
+own.params.set_expression("r", "4")
+request = own.remote_request()
+result = helpers.submit_to(own.remote_key, "rebuild",
+                           **request).result(timeout=120)
+packed = [p for body in result["bodies"] for p in body.get("pieces", [])
+          if "pack" in p]
+check("built here, then in a worker: only the block it cuts comes back",
+      len(packed) == 1, len(packed))
+own.apply_remote(result, request)
+after = kernel.pieces(own.shape)
+check("  the rest are the very blocks the window built itself",
+      sum(1 for p in after if any(p.IsEqual(q) for q in before)) == 11)
+check("  and the model is right", volume(own) == local(own))
 
 went = []
 

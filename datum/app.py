@@ -69,19 +69,6 @@ def selftest(report_path: str = "") -> int:
         from .core.features import PrimitiveFeature
         note("ok  imported the kernel (OpenCASCADE loaded)")
 
-        from .core import workers
-        if workers.ENABLED:
-            helpers = workers.Pool(size=1)
-            try:
-                helpers.start()
-                if not helpers.wait_ready(timeout=90):
-                    raise RuntimeError("a worker process did not start")
-                answer = helpers.submit("ping").result(timeout=30)
-                note("ok  a worker process answered (pid %s)"
-                     % answer.get("pid"))
-            finally:
-                helpers.shutdown()
-
         document = Document()
         for kind, a, b, c, operation in (("box", 40, 30, 10, "new"),
                                          ("cylinder", 5, 40, 0, "cut")):
@@ -93,8 +80,36 @@ def selftest(report_path: str = "") -> int:
         if document.shape is None or document.shape.IsNull():
             note("FAIL  the kernel built nothing")
             return 1
-        note("ok  built a solid, volume %.1f mm3"
-             % kernel.volume(document.shape))
+        volume = kernel.volume(document.shape)
+        note("ok  built a solid, volume %.1f mm3" % volume)
+
+        # The workers are this same program started again with --worker,
+        # so a build that bundles everything the window needs can still
+        # leave out something only a worker imports. One is started, and
+        # the same solid is built in it and brought back.
+        from .core import workers
+        if workers.ENABLED:
+            helpers = workers.Pool(size=1)
+            try:
+                helpers.start()
+                if not helpers.wait_ready(timeout=90):
+                    raise RuntimeError("a worker process did not start")
+                answer = helpers.submit("ping").result(timeout=30)
+                note("ok  a worker process answered (pid %s)"
+                     % answer.get("pid"))
+                there = Document()
+                there.load_dict(document.to_dict())
+                request = there.remote_request()
+                result = helpers.submit_to(there.remote_key, "rebuild",
+                                           **request).result(timeout=120)
+                there.apply_remote(result, request)
+                if there.shape is None or abs(
+                        kernel.volume(there.shape) - volume) > 1e-6:
+                    note("FAIL  a worker built something else")
+                    return 1
+                note("ok  a worker built the same solid and sent it back")
+            finally:
+                helpers.shutdown()
 
         projection = hlr.project(document.shape, *hlr.ORIENTATIONS["front"])
         if not projection.ok or not projection.lines:

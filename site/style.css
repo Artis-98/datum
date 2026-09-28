@@ -23,6 +23,7 @@
   --ink: #14171c;
 
   --amber: #e0a355;
+  --yellow: #e8c547;
   --green: #69c26b;
 
   --radius: 10px;
@@ -414,10 +415,10 @@ h3 {
   border-radius: 999px;
   padding: 2px 9px;
 }
-.release.next::before { background: var(--amber); }
+.release.next::before { background: var(--yellow); }
 .release .badge.planned {
-  color: var(--amber);
-  border-color: rgba(224, 163, 85, 0.4);
+  color: var(--yellow);
+  border-color: rgba(232, 197, 71, 0.45);
 }
 .release ul { margin: 0; padding-left: 20px; color: var(--dim); }
 .release li { margin-bottom: 6px; }

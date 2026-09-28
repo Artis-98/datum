@@ -33,6 +33,7 @@
     </a>
     <a class="link" href="#what">What it is</a>
     <a class="link" href="#tour">Tour</a>
+    <a class="link" href="#upcoming">Coming next</a>
     <a class="link" href="changelog.html">Changelog</a>
     <a class="link" href="https://github.com/Artis-98/datum">Source</a>
     <a class="link" href="#contact">Contact</a>
@@ -343,6 +344,19 @@
   </div>
 </section>
 
+<!-- ----------------------------------------------------------- upcoming -->
+<section id="upcoming" class="rule" hidden>
+  <div class="wrap">
+    <h2>Coming next</h2>
+    <p class="section-lede">
+      Asked for by the people using DATUM, and next in line. This list is
+      read live from my own task board, so it is always what I am actually
+      working towards. Missing something? <a href="#contact">Tell me</a>.
+    </p>
+    <ol class="upcoming-list" id="upcoming-list"></ol>
+  </div>
+</section>
+
 <!-- ----------------------------------------------------------- download -->
 <section id="download" class="rule">
   <div class="wrap">
@@ -497,6 +511,36 @@
       }
     })
     .catch(function () { /* the page already says something true */ });
+})();
+</script>
+<script>
+/* What is coming next, read live from the admin board: the requests
+ * flagged urgent and not done yet (api.iiteg.com/datum-upcoming.php).
+ * The section stays hidden until the list arrives, so if the board
+ * cannot be reached the page simply does not mention it. */
+(function () {
+  var list = document.getElementById("upcoming-list");
+  if (!list) { return; }
+  fetch("https://api.iiteg.com/datum-upcoming.php", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (data) {
+      var items = (data && data.upcoming) || [];
+      if (!items.length) { return; }
+      items.forEach(function (item) {
+        var li = document.createElement("li");
+        li.textContent = item.title;
+        if (item.status === "in_progress" || item.status === "review") {
+          var tag = document.createElement("span");
+          tag.className = "doing";
+          tag.textContent = "in progress";
+          li.appendChild(tag);
+        }
+        list.appendChild(li);
+      });
+      var box = document.getElementById("upcoming");
+      if (box) { box.hidden = false; }
+    })
+    .catch(function () { /* nothing shown is better than something wrong */ });
 })();
 </script>
 </body>

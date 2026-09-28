@@ -414,6 +414,11 @@ h3 {
   border-radius: 999px;
   padding: 2px 9px;
 }
+.release.next::before { background: var(--amber); }
+.release .badge.planned {
+  color: var(--amber);
+  border-color: rgba(224, 163, 85, 0.4);
+}
 .release ul { margin: 0; padding-left: 20px; color: var(--dim); }
 .release li { margin-bottom: 6px; }
 .release li strong { color: var(--text); font-weight: 600; }
@@ -494,4 +499,53 @@ footer {
   .brand { font-size: 16px; letter-spacing: 0.12em; }
   .btn { width: 100%; }
   .cta-row { flex-direction: column; align-items: stretch; }
+}
+
+/* -------------------------------------------------------------- upcoming */
+
+/* a section waiting for its data stays out of the way, whatever display
+ * its class would otherwise give it */
+[hidden] { display: none !important; }
+
+.upcoming-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 10px 18px;
+  counter-reset: upcoming;
+}
+.upcoming-list li {
+  counter-increment: upcoming;
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 16px 12px 50px;
+  color: var(--text);
+  line-height: 1.45;
+}
+.upcoming-list li::before {
+  content: counter(upcoming);
+  position: absolute;
+  left: 16px;
+  top: 12px;
+  width: 22px;
+  text-align: right;
+  color: var(--silver-deep);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.upcoming-list .doing {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--amber);
+  border: 1px solid rgba(224, 163, 85, 0.4);
+  border-radius: 999px;
+  padding: 1px 8px;
+  vertical-align: 1px;
 }

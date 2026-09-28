@@ -28,6 +28,7 @@
     </a>
     <a class="link" href="./#what">What it is</a>
     <a class="link" href="./#tour">Tour</a>
+    <a class="link" href="#upcoming">Coming next</a>
     <a class="link here" href="changelog.html">Changelog</a>
     <a class="link" href="https://github.com/Artis-98/datum">Source</a>
     <a class="link" href="./#contact">Contact</a>
@@ -58,6 +59,17 @@
     <!-- Newest first.  Add a new block above this comment for each
          release, and keep the wording about what somebody can now DO,
          not about which function was renamed. -->
+
+    <div class="release next" id="upcoming" hidden>
+      <div class="head">
+        <span class="ver">Coming next</span>
+        <span class="badge planned">planned</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 14px">
+        Asked for by the people using DATUM, read live from my task board.
+      </p>
+      <ol class="upcoming-list" id="upcoming-list"></ol>
+    </div>
 
     <div class="release current">
       <div class="head">
@@ -400,6 +412,36 @@
       }
     })
     .catch(function () {});
+})();
+</script>
+<script>
+/* What is coming next, read live from the admin board: the requests
+ * flagged urgent and not done yet (api.iiteg.com/datum-upcoming.php).
+ * The section stays hidden until the list arrives, so if the board
+ * cannot be reached the page simply does not mention it. */
+(function () {
+  var list = document.getElementById("upcoming-list");
+  if (!list) { return; }
+  fetch("https://api.iiteg.com/datum-upcoming.php", { cache: "no-store" })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+    .then(function (data) {
+      var items = (data && data.upcoming) || [];
+      if (!items.length) { return; }
+      items.forEach(function (item) {
+        var li = document.createElement("li");
+        li.textContent = item.title;
+        if (item.status === "in_progress" || item.status === "review") {
+          var tag = document.createElement("span");
+          tag.className = "doing";
+          tag.textContent = "in progress";
+          li.appendChild(tag);
+        }
+        list.appendChild(li);
+      });
+      var box = document.getElementById("upcoming");
+      if (box) { box.hidden = false; }
+    })
+    .catch(function () { /* nothing shown is better than something wrong */ });
 })();
 </script>
 </body>

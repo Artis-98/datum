@@ -13,6 +13,7 @@ import ast
 import math
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 # --------------------------------------------------------------------------
@@ -143,6 +144,25 @@ def referenced_names(expression: str) -> List[str]:
     return out
 
 
+@lru_cache(maxsize=8192)
+def _compiled(text: str) -> Tuple[Any, str]:
+    """An expression parsed, checked and compiled once, however often used.
+
+    The sketcher works the whole part's parameters out on every mouse move
+    of a drag, and parsing is most of what that costs.  The answer depends
+    on the text alone, so it is kept: (code, "") or (None, the problem).
+    """
+    try:
+        tree = ast.parse(_strip_units(text), mode="eval")
+    except SyntaxError:
+        return None, "cannot parse %r" % text
+    try:
+        _check(tree)
+    except ExpressionError as exc:
+        return None, str(exc)
+    return compile(tree, "<expr>", "eval"), ""
+
+
 def evaluate(expression: Any, scope: Optional[Dict[str, float]] = None) -> float:
     """Evaluate an expression string to a float in document units."""
     if isinstance(expression, (int, float)):
@@ -152,11 +172,9 @@ def evaluate(expression: Any, scope: Optional[Dict[str, float]] = None) -> float
     if not text:
         raise ExpressionError("empty expression")
 
-    try:
-        tree = ast.parse(_strip_units(text), mode="eval")
-    except SyntaxError as exc:
-        raise ExpressionError("cannot parse %r" % text) from exc
-    _check(tree)
+    code, problem = _compiled(text)
+    if code is None:
+        raise ExpressionError(problem)
 
     names: Dict[str, Any] = dict(CONSTANTS)
     if scope:
@@ -165,7 +183,7 @@ def evaluate(expression: Any, scope: Optional[Dict[str, float]] = None) -> float
 
     try:
         value = eval(  # noqa: S307 - AST is whitelisted above
-            compile(tree, "<expr>", "eval"), {"__builtins__": {}}, names
+            code, {"__builtins__": {}}, names
         )
     except NameError as exc:
         raise ExpressionError(str(exc).replace("name", "parameter")) from exc
@@ -220,6 +238,17 @@ class ParameterTable:
 
     def __init__(self) -> None:
         self._params: Dict[str, Parameter] = {}
+        # A part works its user parameters out together with its model
+        # parameters, since either may be written in terms of the other.
+        # It hands its own way of doing that in here; held weakly, so the
+        # table does not keep a closed document alive.
+        self._resolver: Optional[Callable[[], Any]] = None
+
+    def bind(self, resolver: Callable[[], None]) -> None:
+        """Have a document evaluate this table along with its own names."""
+        import weakref
+
+        self._resolver = weakref.WeakMethod(resolver)
 
     # -- container behaviour ------------------------------------------------
 
@@ -297,6 +326,10 @@ class ParameterTable:
 
     def evaluate_all(self) -> None:
         """Resolve every parameter, detecting cycles and unknown references."""
+        resolver = self._resolver() if self._resolver is not None else None
+        if resolver is not None:
+            resolver()
+            return
         order, cyclic = self._topological_order()
         scope: Dict[str, float] = {}
 

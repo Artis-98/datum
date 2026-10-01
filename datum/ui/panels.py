@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -11,22 +11,34 @@ from ..core.params import ExpressionError
 from . import icons
 from .theme import MONO_STACK, C
 
-COLUMNS = ("Name", "Expression", "Value", "Unit", "Comment")
+COLUMNS = ("Name", "Used by", "Unit", "Expression", "Value", "Comment")
+NAME, USED, UNIT, EXPRESSION, VALUE, COMMENT = range(len(COLUMNS))
+
+HEADER, MODEL, USER = "header", "model", "user"
 
 
 class ParametersDialog(QtWidgets.QDialog):
-    """Edit the document's named parameters."""
+    """Every parameter of the document, the way Inventor lays them out.
+
+    Model parameters first: each sketch dimension and each value a feature
+    was given, named d1, d2 and so on across the part.  Then the user
+    parameters somebody added by name.  Both halves can be renamed and
+    rewritten in place, and a change lands where the value lives, on the
+    sketch or the feature, so the table and the model never disagree.
+    """
 
     changed = QtCore.Signal()
 
-    def __init__(self, doc: Document, parent=None) -> None:
+    def __init__(self, doc, parent=None) -> None:
         super().__init__(parent)
         self.doc = doc
         self._loading = False
+        # what each table row stands for: (kind, name)
+        self._rows: List[Tuple[str, str]] = []
 
         self.setWindowTitle("Parameters")
         self.setWindowIcon(icons.icon("params", 24))
-        self.resize(660, 420)
+        self.resize(820, 480)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
@@ -35,13 +47,16 @@ class ParametersDialog(QtWidgets.QDialog):
         bar = QtWidgets.QHBoxLayout()
         self.add_btn = QtWidgets.QPushButton("Add")
         self.add_btn.setIcon(icons.icon("new", 15))
+        self.add_btn.setToolTip("Add a user parameter")
         self.del_btn = QtWidgets.QPushButton("Delete")
         self.del_btn.setIcon(icons.icon("delete", 15))
+        self.del_btn.setToolTip("Delete the selected user parameter")
         bar.addWidget(self.add_btn)
         bar.addWidget(self.del_btn)
         bar.addStretch(1)
         hint = QtWidgets.QLabel(
-            "Expressions may reference other parameters, e.g. width / 2 - wall")
+            "Any parameter can be written in terms of another, "
+            "e.g. width / 2 - wall or d3 * 2")
         hint.setProperty("hint", True)
         bar.addWidget(hint)
         root.addLayout(bar)
@@ -51,15 +66,16 @@ class ParametersDialog(QtWidgets.QDialog):
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
-        header.setSectionResizeMode(4, QtWidgets.QHeaderView.Stretch)
+        for col in (NAME, USED, UNIT, VALUE):
+            header.setSectionResizeMode(
+                col, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(EXPRESSION, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(COMMENT, QtWidgets.QHeaderView.Stretch)
         root.addWidget(self.table, 1)
 
         self.message = QtWidgets.QLabel("")
         self.message.setProperty("hint", True)
+        self.message.setWordWrap(True)
         root.addWidget(self.message)
 
         buttons = QtWidgets.QHBoxLayout()
@@ -73,59 +89,158 @@ class ParametersDialog(QtWidgets.QDialog):
         self.del_btn.clicked.connect(self._delete)
         close.clicked.connect(self.accept)
         self.table.itemChanged.connect(self._item_changed)
+        self.table.currentCellChanged.connect(
+            lambda *_a: self._sync_buttons())
 
         self.reload()
 
     # ----------------------------------------------------------------------
 
+    @property
+    def _has_model(self) -> bool:
+        return hasattr(self.doc, "model_parameters")
+
+    def _model(self) -> List[Any]:
+        return self.doc.model_parameters() if self._has_model else []
+
+    def _taken(self) -> set:
+        if self._has_model:
+            from ..core.modelparams import taken_names
+            return taken_names(self.doc)
+        return set(self.doc.params.names())
+
+    def _consumers(self, name: str) -> List[str]:
+        if not self._has_model:
+            return []
+        from ..core.modelparams import consumers
+        return consumers(self.doc, name)
+
     def reload(self) -> None:
         self._loading = True
         self.table.setRowCount(0)
+        self._rows = []
         errors = []
-        for param in self.doc.params:
-            row = self.table.rowCount()
-            self.table.insertRow(row)
 
-            name = QtWidgets.QTableWidgetItem(param.name)
-            expression = QtWidgets.QTableWidgetItem(param.expression)
-            value = QtWidgets.QTableWidgetItem(
-                "-" if param.error else "%.6g" % param.value)
-            value.setFlags(value.flags() & ~QtCore.Qt.ItemIsEditable)
-            unit = QtWidgets.QTableWidgetItem(param.unit)
-            comment = QtWidgets.QTableWidgetItem(param.comment)
+        model = self._model()
+        if self._has_model:
+            self._add_header("Model Parameters", len(model))
+            for m in model:
+                used = [m.owner] + [f for f in self._consumers(m.name)
+                                    if f != m.owner]
+                self._add_row(MODEL, m.name, ", ".join(used), m.unit,
+                              m.expression, m.value, m.error, m.comment,
+                              reference=m.reference, label=m.label)
+                if m.error:
+                    errors.append("%s: %s" % (m.name, m.error))
 
+        self.doc.params.evaluate_all()
+        users = list(self.doc.params)
+        if self._has_model:
+            self._add_header("User Parameters", len(users))
+        for param in users:
+            self._add_row(USER, param.name,
+                          ", ".join(self._consumers(param.name)), param.unit,
+                          param.expression, param.value, param.error,
+                          param.comment)
             if param.error:
-                for item in (name, expression, value):
-                    item.setForeground(QtGui.QBrush(QtGui.QColor(C.error)))
-                expression.setToolTip(param.error)
                 errors.append("%s: %s" % (param.name, param.error))
-            else:
-                value.setForeground(QtGui.QBrush(QtGui.QColor(C.ok)))
-
-            for col, item in enumerate((name, expression, value, unit, comment)):
-                self.table.setItem(row, col, item)
 
         self.message.setText("; ".join(errors))
         self.message.setStyleSheet("color: %s;" % (C.error if errors
                                                    else C.text_dim))
         self._loading = False
+        self._sync_buttons()
+
+    def _add_header(self, title: str, count: int) -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        item = QtWidgets.QTableWidgetItem("%s  (%d)" % (title, count))
+        font = item.font()
+        font.setBold(True)
+        item.setFont(font)
+        item.setFlags(QtCore.Qt.ItemIsEnabled)
+        item.setForeground(QtGui.QBrush(QtGui.QColor(C.text_dim)))
+        self.table.setItem(row, 0, item)
+        self.table.setSpan(row, 0, 1, len(COLUMNS))
+        self._rows.append((HEADER, title))
+
+    def _add_row(self, kind: str, name: str, used: str, unit: str,
+                 expression: str, value: float, error: str, comment: str,
+                 reference: bool = False, label: str = "") -> None:
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+        items = [QtWidgets.QTableWidgetItem(text) for text in (
+            name, used, unit,
+            "(measured)" if reference else expression,
+            "-" if error else "%.6g" % value, comment)]
+        locked = QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+        # what is worked out is never typed into, and a model parameter's
+        # unit is the dimension's own
+        for col in (USED, VALUE):
+            items[col].setFlags(locked)
+        if kind == MODEL:
+            items[UNIT].setFlags(locked)
+            items[USED].setToolTip("%s, %s" % (used.split(", ")[0], label))
+        if reference:
+            items[EXPRESSION].setFlags(locked)
+            items[EXPRESSION].setToolTip(
+                "A driven dimension: it measures the sketch, so it is read "
+                "here and set nowhere")
+            for item in items:
+                f = item.font()
+                f.setItalic(True)
+                item.setFont(f)
+        if error:
+            for col in (NAME, EXPRESSION, VALUE):
+                items[col].setForeground(QtGui.QBrush(QtGui.QColor(C.error)))
+            items[EXPRESSION].setToolTip(error)
+        else:
+            items[VALUE].setForeground(QtGui.QBrush(QtGui.QColor(C.ok)))
+        for col, item in enumerate(items):
+            self.table.setItem(row, col, item)
+        self._rows.append((kind, name))
+
+    def row_of(self, name: str) -> int:
+        """The table row a parameter is on, or -1."""
+        for row, (kind, held) in enumerate(self._rows):
+            if kind != HEADER and held == name:
+                return row
+        return -1
+
+    def _selected(self) -> Tuple[str, str]:
+        row = self.table.currentRow()
+        if 0 <= row < len(self._rows):
+            return self._rows[row]
+        return (HEADER, "")
+
+    def _sync_buttons(self) -> None:
+        kind, _name = self._selected()
+        self.del_btn.setEnabled(kind == USER)
 
     def _add(self) -> None:
-        base = "d"
-        i = 1
-        while "%s%d" % (base, i) in self.doc.params:
-            i += 1
-        self.doc.params.add("%s%d" % (base, i), "10")
+        if self._has_model:
+            from ..core.modelparams import fresh_name
+            name = fresh_name(self._taken())
+        else:
+            i = 1
+            while "d%d" % i in self.doc.params:
+                i += 1
+            name = "d%d" % i
+        self.doc.params.add(name, "10")
         self.reload()
         self.changed.emit()
-        self.table.setCurrentCell(self.table.rowCount() - 1, 0)
+        self.table.setCurrentCell(self.row_of(name), NAME)
 
     def _delete(self) -> None:
-        row = self.table.currentRow()
-        if row < 0:
+        kind, name = self._selected()
+        if kind != USER:
             return
-        name = self.table.item(row, 0).text()
-        dependents = self.doc.params.dependents(name)
+        if self._has_model:
+            from ..core.modelparams import users_of
+            dependents = users_of(self.doc, name) + [
+                f for f in self._consumers(name)]
+        else:
+            dependents = self.doc.params.dependents(name)
         if dependents:
             answer = QtWidgets.QMessageBox.question(
                 self, "Delete parameter",
@@ -141,24 +256,37 @@ class ParametersDialog(QtWidgets.QDialog):
         if self._loading:
             return
         row, col = item.row(), item.column()
-        names = self.doc.params.names()
-        if row >= len(names):
+        if not 0 <= row < len(self._rows):
             return
-        name = names[row]
-        param = self.doc.params.get(name)
-        if param is None:
+        kind, name = self._rows[row]
+        if kind == HEADER:
             return
+        text = item.text()
         try:
-            if col == 0:
-                self.doc.params.rename(name, item.text().strip())
-            elif col == 1:
-                self.doc.params.set_expression(name, item.text())
-            elif col == 3:
-                param.unit = item.text().strip() or "mm"
-            elif col == 4:
-                param.comment = item.text()
+            if col == NAME:
+                if self._has_model:
+                    self.doc.rename_parameter(name, text.strip())
+                else:
+                    self.doc.params.rename(name, text.strip())
+            elif col == EXPRESSION:
+                if kind == USER:
+                    self.doc.params.set_expression(name, text)
+                else:
+                    self.doc.set_parameter(name, text)
+            elif col == UNIT and kind == USER:
+                self.doc.params[name].unit = text.strip() or "mm"
+            elif col == COMMENT:
+                if kind == USER:
+                    self.doc.params[name].comment = text
+                else:
+                    from ..core.modelparams import find
+                    found = find(self.doc, name)
+                    if found is not None:
+                        found.set_comment(text)
         except ExpressionError as exc:
             QtWidgets.QMessageBox.warning(self, "Parameter", str(exc))
+        if hasattr(self.doc, "modified"):
+            self.doc.modified = True
         self.reload()
         self.changed.emit()
 

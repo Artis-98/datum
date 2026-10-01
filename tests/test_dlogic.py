@@ -195,10 +195,17 @@ check("  and the change is recorded", got.changed == ["Base.%s" % name],
       got.changed)
 check("  and lands on the sketch",
       doc.features[0].sketch.constraints[cid].expression == "25.0")
-twice = rules.run(rules.Rule(name="Both", source="dims.%s = 3" % name), doc)
-check("a name two sketches share is refused, naming them",
-      not twice.ok and "Base" in twice.error and "Top" in twice.error,
-      twice.error)
+# Dimension names run across the whole part now, so the second sketch's
+# first dimension is not a second d1 and dims.d1 means one thing
+top_name = next(c.name for c in other.sketch.constraints.values() if c.name)
+check("two sketches never share a dimension name", top_name != name,
+      (name, top_name))
+both = rules.run(rules.Rule(name="Both", source=source(
+    "dims.%s = 3" % name, "dims.%s = 4" % top_name)), doc)
+check("  so dims reaches either sketch's by its name alone",
+      both.ok and doc.features[0].sketch.constraints[cid].expression == "3.0"
+      and any(c.expression == "4.0" for c in other.sketch.constraints.values()),
+      both.error)
 
 got = rules.run(rules.Rule(name="Props", source=source(
     "props.PartNumber = 'A-%d' % params.width",

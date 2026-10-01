@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
-from . import fileformat, kernel, materials, prefs
+from . import fileformat, kernel, materials, modelparams, prefs
 from .rules import RuleSet
 from .features import (
     FEATURE_TYPES, STANDARD_AXES, Body, BuildContext, CodeFeature, Feature,
@@ -242,7 +242,12 @@ class Document:
     """One part file."""
 
     def __init__(self) -> None:
+        # the last parameter scope worked out, and from what; see
+        # modelparams.evaluate_document
+        self._param_cache: Dict[str, Any] = {}
         self.params = ParameterTable()
+        # user parameters are worked out together with the model ones
+        self.params.bind(self._resolve_parameters)
         self.features: List[Feature] = []
         self.shape: Optional[TopoDS_Shape] = None
         # a part may hold more than one solid; ``shape`` is all of them
@@ -338,8 +343,47 @@ class Document:
             self.features.append(feature)
         else:
             self.features.insert(index, feature)
+        modelparams.assign_names(self)
         self.modified = True
         return feature
+
+    # -- parameters ---------------------------------------------------------
+
+    def _resolve_parameters(self) -> Dict[str, float]:
+        """Work out every parameter, user and model, in one go.
+
+        The user parameters' values and errors are written back onto them,
+        so the table and the rules read the same answer the rebuild uses.
+        """
+        scope, errors, _model = modelparams.evaluate_document(
+            self, self._param_cache)
+        for param in self.params:
+            param.error = errors.get(param.name, "")
+            param.value = 0.0 if param.error else scope.get(param.name, 0.0)
+        return scope
+
+    def parameter_scope(self) -> Dict[str, float]:
+        """Every parameter's value by name: what an expression can read."""
+        return self._resolve_parameters()
+
+    def model_parameters(self) -> List["modelparams.ModelParam"]:
+        """Every dimension and feature value, named and worked out."""
+        return modelparams.evaluate_document(self, self._param_cache)[2]
+
+    def parameter_view(self) -> "modelparams.ParameterView":
+        return modelparams.ParameterView(self)
+
+    def set_parameter(self, name: str, expression: str) -> None:
+        """Write an expression into any parameter, user or model."""
+        modelparams.set_expression(self, name, expression)
+        # the user parameters' values and errors may read it
+        self.params.evaluate_all()
+        self.modified = True
+
+    def rename_parameter(self, old: str, new: str) -> None:
+        modelparams.rename(self, old, new)
+        self.params.evaluate_all()
+        self.modified = True
 
     def remove_feature(self, feature_id: int) -> None:
         self.features = [f for f in self.features if f.id != feature_id]
@@ -401,6 +445,9 @@ class Document:
         if self._rebuilding:
             self._again = True
             return self.last_report
+        # every dimension and every feature value gets its own name before
+        # anything reads one, however the feature arrived
+        modelparams.assign_names(self)
         while True:
             walked = None
             if self._applied_chain is not None and REUSE_RESULTS:
@@ -459,8 +506,7 @@ class Document:
     def _walk(self) -> Tuple[Optional[str], float]:
         """The fingerprint of the whole tree as it stands, and the estimate."""
         try:
-            self.params.evaluate_all()
-            scope = self.params.scope()
+            scope = self.parameter_scope()
         except Exception:
             return None, 0.0
         from .rules import document_trusted
@@ -507,19 +553,10 @@ class Document:
         what each took last time it was built.
         """
         try:
-            self.params.evaluate_all()
-            scope = self.params.scope()
+            scope = self.parameter_scope()
         except Exception:
             return 0.0
-        moved = set(names)
-        grew = True
-        while grew:
-            grew = False
-            for param in self.params:
-                if param.name not in moved and moved.intersection(
-                        referenced_names(param.expression)):
-                    moved.add(param.name)
-                    grew = True
+        moved = modelparams.dependents(self, names)
         limit = (len(self.features) if self.rollback_index is None
                  else self.rollback_index)
         cost = 0.0
@@ -547,10 +584,9 @@ class Document:
 
     def _rebuild_here(self) -> RebuildReport:
         start = time.perf_counter()
-        self.params.evaluate_all()
         self._built_now = []
 
-        ctx = BuildContext(self.params.scope())
+        ctx = BuildContext(self.parameter_scope())
         # code features run only on a document somebody has trusted, and
         # the file itself has no say in that
         from .rules import document_trusted
@@ -632,6 +668,8 @@ class Document:
 
         for name, err in [(p.name, p.error) for p in self.params if p.error]:
             report.errors.append((-1, "parameter %s: %s" % (name, err)))
+        # a model parameter in error is already on its feature's own
+        # failure, or held at its last good value; the table shows it
 
         self.bodies = list(ctx.bodies)
         self.shape = ctx.shape
@@ -950,6 +988,11 @@ class Document:
                 continue
         highest = max([f.id for f in self.features] + [0])
         self._next_id = max(self._next_id, highest + 1)
+        # a part saved when every sketch counted from d1 is given names
+        # that run across the whole part, and the parameters worked out
+        # again now that the features they may read are here
+        modelparams.assign_names(self)
+        self.params.evaluate_all()
 
     def save(self, path: Optional[str] = None,
              thumbnail: Optional[bytes] = None) -> str:

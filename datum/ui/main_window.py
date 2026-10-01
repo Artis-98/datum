@@ -1387,8 +1387,11 @@ class MainWindow(QtWidgets.QMainWindow):
         # ``prompt`` is kept for callers written when only one document could
         # be open at a time; a new document now opens beside the others, so
         # there is nothing to discard.
+        # A new part starts with no parameters at all.  It used to come with
+        # an example d1 = 50, which the first sketch dimension, also d1,
+        # then disagreed with in the table.  Every dimension is a parameter
+        # of its own now, so the table fills itself as the part is drawn.
         document = Document()
-        document.params.add("d1", "50", comment="example parameter")
         self._adopt(document, fileformat.PART)
         self.status_message.setText(
             "New part. Start a sketch on a plane, or drop in a primitive.")
@@ -1926,12 +1929,6 @@ class MainWindow(QtWidgets.QMainWindow):
             if answer == QtWidgets.QMessageBox.Yes:
                 return self.import_as_assembly(path, folder)
         self.new_document(prompt=False)
-        # a new part comes with an example parameter to show where they
-        # live; a part that is an imported body has no use for it
-        try:
-            self.document.params.remove("d1")
-        except Exception:
-            pass
         feature = ImportFeature()
         feature.path = path
         feature.name = stepimport._stem(path)
@@ -2784,7 +2781,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.document.shape, keep_camera=True,
             appearance=self.document.material_appearance)
 
-        self.editor.begin(feature.sketch, self.document.params)
+        self.editor.begin(feature.sketch, self.document.parameter_view())
         self._draw_visible_planes()      # clears them while sketching
         # swing round to the plane rather than snapping, so it stays obvious
         # which way the model turned
@@ -2914,7 +2911,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """Every closed region in the document's sketches."""
         from ..core.features import BuildContext, collect_regions
 
-        ctx = BuildContext(self.document.params.scope())
+        ctx = BuildContext(self.document.parameter_scope())
         ctx.sketches = dict(self.document.all_sketches())
         return collect_regions(ctx)
 

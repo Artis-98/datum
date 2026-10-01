@@ -206,7 +206,10 @@ class FeatureDialog(QtWidgets.QDialog):
     # -- helpers ------------------------------------------------------------
 
     def expression(self, value: str, unit: str = "mm") -> ExpressionEdit:
-        w = ExpressionEdit(value, self.doc.params, unit)
+        # every parameter of the part, dimensions and feature values too
+        view = (self.doc.parameter_view()
+                if hasattr(self.doc, "parameter_view") else self.doc.params)
+        w = ExpressionEdit(value, view, unit)
         self.bind(w)
         return w
 

@@ -129,8 +129,15 @@ or directly:
 - STEP / IGES / BREP import as a base body
 
 **Model**
-- Named parameters with expressions, units (`mm`, `in`, `deg`, …), dependency
-  ordering and circular-reference detection
+- **Parameters the way Inventor keeps them.** Model parameters are made by
+  modelling: every sketch dimension, and every value a feature is given,
+  an extrude's distance, a fillet's radius, a plane's offset, a pattern's
+  spacing, each with a name of its own, d1, d2 and so on across the whole
+  part. User parameters are the ones added by name. Both sit in one table
+  (`Ctrl+P`), any of them can be written in terms of any other, and an edit
+  in the table changes the dimension or the feature itself. Units (`mm`,
+  `in`, `deg`, …), dependency ordering and circular-reference detection
+  across the lot. Rules reach them all: `params.d7 = 30`
 - Full feature tree: reorder, suppress, roll back, edit anything at any time.
   A sketch consumed by a feature nests underneath it and goes out of sight,
   as in Inventor, until **Show Sketch** brings it back; **Share Sketch** keeps
@@ -497,10 +504,14 @@ still make sense when it gets there.
 ## Dimensions
 
 Every dimension gets a name of its own, d1, d2, d3, in the order they are
-placed. One can then be written in terms of another: type an expression like
-`(10 - 2 + d2) / 2` into any dimension box, or click an existing dimension
-in the viewport while the box is open and its name is written in for you.
-Document parameters work in the same box. A dimension cannot be written in
+placed, and the numbering runs across the whole part, so a second sketch's
+first dimension is not a second d1. One can then be written in terms of
+another: type an expression like `(10 - 2 + d2) / 2` into any dimension box,
+or click an existing dimension in the viewport while the box is open and its
+name is written in for you. Every other parameter of the part works in the
+same box, another sketch's dimensions and feature values included. A part
+saved when each sketch counted from d1 is renamed as it opens, and each
+sketch's expressions follow its own dimensions. A dimension cannot be written in
 terms of itself, and one that refers to something no longer there keeps its
 last good value rather than collapsing the sketch to zero.
 

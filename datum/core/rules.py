@@ -22,7 +22,8 @@ There are two kinds of script, and they do different jobs:
 
 What a rule sees:
 
-    params       parameters: params.width, params.width = 120
+    params       parameters: params.width, params.width = 120; every
+                 dimension and feature value too, params.d7 = 30
     dims         every named sketch dimension: dims.d1, dims.d1 = 40
     sketches     sketches by name, when two share a dimension name
     features     the feature tree by name, for suppressing
@@ -330,7 +331,8 @@ class Parameters:
         table = object.__getattribute__(self, "_table")
         text = value if isinstance(value, str) else repr(float(value))
         if name in table:
-            if table[name].expression == text:
+            current = table[name].expression
+            if current == text or _same_number(current, text):
                 return
             table.set_expression(name, text)
         else:
@@ -365,6 +367,22 @@ class Parameters:
 
     def expression(self, name: str) -> str:
         return object.__getattribute__(self, "_table")[name].expression
+
+
+def _same_number(a: str, b: str) -> bool:
+    """Whether two expressions are the same plain number, 30 and 30.0."""
+    try:
+        return abs(float(a) - float(b)) < 1e-12
+    except (TypeError, ValueError):
+        return False
+
+
+def _table_for(document):
+    """What ``params`` reaches: a part's model parameters as well."""
+    if hasattr(document, "model_parameters"):
+        from .modelparams import UnifiedTable
+        return UnifiedTable(document)
+    return document.params
 
 
 class Features:
@@ -411,10 +429,11 @@ class Features:
 class _Dims:
     """Named dimensions, from one sketch or from all of them.
 
-    A sketch dimension is d1, d2 and so on, per sketch, which means two
-    sketches can both have a d1. Asked for from ``dims`` such a name is
-    refused, with the sketches that share it named, rather than quietly
-    changing whichever was found first.
+    Dimension names run across the whole part, so ``dims.d7`` is one
+    dimension wherever it is.  A part from before that, where two sketches
+    each had a d1, is renamed as it opens; should two still share a name,
+    asking for it from ``dims`` is refused, with both sketches named,
+    rather than quietly changing whichever was found first.
     """
 
     def __init__(self, sketches: List[Tuple[str, Any]],
@@ -677,7 +696,7 @@ SAFE_BUILTINS = {k: v for k, v in SAFE_BUILTINS.items() if v is not None}
 def environment(document) -> Dict[str, Any]:
     """The names a rule is given, and nothing else by default."""
     changes: List[str] = []
-    params = Parameters(document.params, changes)
+    params = Parameters(_table_for(document), changes)
     sketches = Sketches(document, changes)
     lines: List[str] = []
 

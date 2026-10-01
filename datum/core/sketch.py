@@ -14,7 +14,9 @@ from __future__ import annotations
 import itertools
 import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import (
+    Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple,
+)
 
 import numpy as np
 
@@ -234,9 +236,11 @@ class Constraint:
     name: str = ""
     driving: bool = True
     label_offset: Tuple[float, float] = (0.0, 0.0)
+    # what the Parameters table says about it
+    comment: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "id": self.id,
             "kind": self.kind,
             "points": list(self.points),
@@ -247,6 +251,9 @@ class Constraint:
             "driving": self.driving,
             "label_offset": list(self.label_offset),
         }
+        if self.comment:
+            out["comment"] = self.comment
+        return out
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Constraint":
@@ -260,6 +267,7 @@ class Constraint:
             name=str(d.get("name", "")),
             driving=bool(d.get("driving", True)),
             label_offset=tuple(d.get("label_offset", (0.0, 0.0))),
+            comment=str(d.get("comment", "")),
         )
 
     @property
@@ -290,6 +298,11 @@ class Sketch:
         # variables the solver says can still move, filled in by solve()
         self.free_points: set = set()
         self.free_radii: set = set()
+        # Names already in use elsewhere in the part, asked for when a new
+        # dimension is named: d-numbers run across the whole part, so the
+        # second sketch's first dimension is not a second d1.  Set by
+        # whatever is editing the sketch; never saved.
+        self.name_pool: Optional[Callable[[], Iterable[str]]] = None
 
     # -- ids ----------------------------------------------------------------
 
@@ -600,8 +613,13 @@ class Sketch:
         return cid
 
     def next_dimension_name(self) -> str:
-        """The next free d1, d2, ... in this sketch."""
+        """The next free d1, d2, ... in this sketch, and in its part."""
         taken = {c.name for c in self.constraints.values() if c.name}
+        if self.name_pool is not None:
+            try:
+                taken.update(self.name_pool())
+            except Exception:
+                pass
         i = 1
         while "d%d" % i in taken:
             i += 1

@@ -262,6 +262,10 @@ class Feature:
     error: str = ""
     type_name: str = "feature"
     icon: str = "feature"
+    # field -> the model parameter name it goes by, d7 and so on, and any
+    # comment written against it in the Parameters table; see modelparams
+    param_names: Dict[str, str] = field(default_factory=dict)
+    param_comments: Dict[str, str] = field(default_factory=dict)
 
     # -- interface ----------------------------------------------------------
 
@@ -300,6 +304,10 @@ class Feature:
             "type": self.type_name,
             "suppressed": self.suppressed,
         }
+        if self.param_names:
+            d["param_names"] = dict(self.param_names)
+        if self.param_comments:
+            d["param_comments"] = dict(self.param_comments)
         d.update(self.field_dict())
         return d
 
@@ -312,6 +320,10 @@ class Feature:
         feat.id = int(data.get("id", 0))
         feat.name = data.get("name", cls.type_name)
         feat.suppressed = bool(data.get("suppressed", False))
+        feat.param_names = {str(k): str(v) for k, v in
+                            (data.get("param_names") or {}).items() if v}
+        feat.param_comments = {str(k): str(v) for k, v in
+                               (data.get("param_comments") or {}).items()}
         feat.load_fields(data)
         return feat
 

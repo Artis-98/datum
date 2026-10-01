@@ -238,9 +238,16 @@ class SketchEditor(QtCore.QObject):
 
     # ------------------------------------------------------------- lifecycle
 
-    def begin(self, sketch: Sketch, params: ParameterTable) -> None:
+    def begin(self, sketch: Sketch, params) -> None:
+        """Start editing a sketch.
+
+        ``params`` is what the part offers by way of parameters: anything
+        with a ``scope()``, and, for a part, the names already taken, so a
+        new dimension here is not a second d1.
+        """
         self.sketch = sketch
         self.params = params
+        sketch.name_pool = getattr(params, "taken", None)
         self._undo_stack = []
         self._redo_stack = []
         # every sketch is anchored to its plane origin, however it was made
@@ -265,6 +272,8 @@ class SketchEditor(QtCore.QObject):
         self.render()
 
     def end(self) -> None:
+        if self.sketch is not None:
+            self.sketch.name_pool = None
         self.sketch = None
         self._pending = []
         self._dim_target = None

@@ -2224,8 +2224,8 @@ class SketchEditor(QtCore.QObject):
     # -- constraint requirements, so a tool can wait for the right picks ----
 
     NEEDS = {
-        "horizontal": ("one or more lines", 1, 0),
-        "vertical": ("one or more lines", 1, 0),
+        "horizontal": ("a line, or two points", 1, 0),
+        "vertical": ("a line, or two points", 1, 0),
         "parallel": ("two lines", 2, 0),
         "collinear": ("two lines", 2, 0),
         "perpendicular": ("two lines", 2, 0),
@@ -2268,7 +2268,12 @@ class SketchEditor(QtCore.QObject):
         if kind == "ground":
             return bool(entities or points)
         if kind in ("horizontal", "vertical"):
-            return entities >= 1
+            # a line, or two points to level with each other.  Lines picked
+            # alongside points win: a line is what it would mean in Inventor
+            return (any(self.sketch.entities[e].kind == "line"
+                        for e in self.selected_entities
+                        if e in self.sketch.entities)
+                    or points >= 2)
         if kind == "coincident":
             # Inventor's Coincident does two jobs, and people reach for it
             # expecting both: two points merge, and a point against a curve
@@ -2305,12 +2310,17 @@ class SketchEditor(QtCore.QObject):
 
         try:
             if kind in ("horizontal", "vertical"):
-                if not ents:
-                    self._complain("Select one or more lines first.")
-                    return
-                for e in ents:
-                    if s.entities[e].kind == "line":
+                lines = [e for e in ents if s.entities[e].kind == "line"]
+                if lines:
+                    for e in lines:
                         s.add_constraint(kind, entities=[e])
+                elif len(pts) >= 2:
+                    # every point levelled with the first one picked
+                    for p in pts[1:]:
+                        s.add_constraint(kind, points=[pts[0], p])
+                else:
+                    self._complain("Select a line, or two points.")
+                    return
             elif kind in ("parallel", "collinear", "perpendicular", "equal",
                           "tangent", "concentric"):
                 if len(ents) < 2:

@@ -739,12 +739,16 @@ class Sketch:
                         (ax, ay) = P(x, e1.points[0])
                         (bx, by) = P(x, e2.points[0])
                         out += [ax - bx, ay - by]
-                    elif kind == "horizontal":
-                        (ax, ay), (bx, by) = line_pts(x, c.entities[0])
-                        out.append(ay - by)
-                    elif kind == "vertical":
-                        (ax, ay), (bx, by) = line_pts(x, c.entities[0])
-                        out.append(ax - bx)
+                    elif kind in ("horizontal", "vertical"):
+                        # on a line, or between two points: the two points
+                        # level with each other, or one above the other
+                        if c.entities:
+                            (ax, ay), (bx, by) = line_pts(x, c.entities[0])
+                        else:
+                            (ax, ay) = P(x, c.points[0])
+                            (bx, by) = P(x, c.points[1])
+                        out.append(ay - by if kind == "horizontal"
+                                   else ax - bx)
                     elif kind == "parallel":
                         (a, b) = line_pts(x, c.entities[0])
                         (p, q) = line_pts(x, c.entities[1])

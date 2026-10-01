@@ -315,6 +315,12 @@ compensation itself.
 | Fit all | `Home` |
 | Home view | `F6` |
 | Select | Left-click, `Ctrl` to add |
+| Cancel | `Esc`, wherever the keyboard focus is |
+
+**Preferences → Display → Orbit** picks between the free orbit and a
+**turntable**: it spins about Z and tilts, Z always stays up the screen, and
+the tilt stops at looking straight down or straight up instead of going
+over the top. A SpaceMouse follows the same choice and drops its roll.
 
 A 3Dconnexion SpaceMouse is picked up automatically, either straight off its
 HID interface or through 3DxWare when that has the device — see

@@ -35,6 +35,13 @@ COLOUR_KEYS = (
 )
 
 
+# how the view orbits under the mouse: freely about any axis, or as a
+# turntable that spins about Z and keeps Z pointing up the screen
+ORBIT_FREE = "free"
+ORBIT_TURNTABLE = "turntable"
+ORBITS = (ORBIT_FREE, ORBIT_TURNTABLE)
+
+
 def config_dir() -> str:
     """Where this machine keeps the user's own DATUM files.
 
@@ -67,11 +74,13 @@ class Preferences:
     # folders whose documents may run their dLogic without asking.  Kept
     # here, on this machine, because a file must never vouch for itself.
     trusted_folders: List[str] = field(default_factory=list)
+    orbit: str = ORBIT_FREE
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "initials": self.initials,
                 "company": self.company, "colours": dict(self.colours),
-                "trusted_folders": list(self.trusted_folders)}
+                "trusted_folders": list(self.trusted_folders),
+                "orbit": self.orbit}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Preferences":
@@ -83,7 +92,9 @@ class Preferences:
             colours={str(k): str(v) for k, v in colours.items()
                      if k in COLOUR_KEYS and _is_colour(v)},
             trusted_folders=[str(f) for f in
-                             data.get("trusted_folders", []) or [] if f])
+                             data.get("trusted_folders", []) or [] if f],
+            orbit=(str(data.get("orbit")) if data.get("orbit") in ORBITS
+                   else ORBIT_FREE))
 
     def stamp(self, properties: Dict[str, str],
               key: str = "Designer") -> Dict[str, str]:

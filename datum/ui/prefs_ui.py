@@ -152,6 +152,16 @@ class PreferencesDialog(QtWidgets.QDialog):
             button.picked.connect(lambda _c: self.apply())
             self.colour_buttons[key] = button
             form.addRow(label, button)
+        self.orbit_combo = QtWidgets.QComboBox()
+        self.orbit_combo.addItem("Free", core_prefs.ORBIT_FREE)
+        self.orbit_combo.addItem("Turntable, Z always up",
+                                 core_prefs.ORBIT_TURNTABLE)
+        self.orbit_combo.setToolTip(
+            "Free turns about any axis. Turntable spins about Z and tilts, "
+            "and never lays the model on its side.")
+        self.orbit_combo.setCurrentIndex(
+            max(0, self.orbit_combo.findData(self.prefs.orbit)))
+        form.addRow("Orbit", self.orbit_combo)
         outer.addLayout(form)
 
         outer.addStretch(1)
@@ -174,6 +184,8 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.prefs.name = self.name_edit.text().strip()
         self.prefs.initials = self.initials_edit.text().strip()
         self.prefs.company = self.company_edit.text().strip()
+        self.prefs.orbit = (self.orbit_combo.currentData()
+                            or core_prefs.ORBIT_FREE)
         # only what differs from the shipped palette is written, so a
         # retuned default reaches everybody who never touched it
         self.prefs.colours = {

@@ -104,6 +104,29 @@ def _lerp3(a, b, t: float) -> Tuple[float, float, float]:
             a[2] + (b[2] - a[2]) * t)
 
 
+def _unit3(v) -> Tuple[float, float, float]:
+    length = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) or 1.0
+    return (v[0] / length, v[1] / length, v[2] / length)
+
+
+def _cross3(a, b) -> Tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _rotate_about(point, pivot, axis, angle: float
+                  ) -> Tuple[float, float, float]:
+    """A point turned by ``angle`` radians about an axis through a pivot."""
+    k = _unit3(axis)
+    v = [point[i] - pivot[i] for i in range(3)]
+    c, s = math.cos(angle), math.sin(angle)
+    kv = _cross3(k, v)
+    dot = k[0] * v[0] + k[1] * v[1] + k[2] * v[2]
+    return tuple(pivot[i] + v[i] * c + kv[i] * s + k[i] * dot * (1.0 - c)
+                 for i in range(3))
+
+
 def _col(value) -> Quantity_Color:
     if isinstance(value, str):
         c = QtGui.QColor(value)
@@ -2117,8 +2140,16 @@ class Viewport(QtWidgets.QWidget):
                 self.view.SetZoom(factor, True)
                 moved = True
 
-        # orbit - tilt and twist, about the middle of the model
-        if max(abs(rx), abs(ry), abs(rz)) > 1e-6:
+        # orbit - tilt and twist, about the middle of the model.  On the
+        # turntable the twist spins about Z and the tilt pitches, and the
+        # roll that would lay the model on its side is dropped
+        if self.turntable_wanted() and max(abs(rx), abs(rz)) > 1e-6:
+            self.level_camera()
+            self.turntable(rz * rotate_speed * 7.0,
+                           rx * rotate_speed * 7.0)
+            moved = True
+        elif (not self.turntable_wanted()
+              and max(abs(rx), abs(ry), abs(rz)) > 1e-6):
             centre = self._orbit_centre()
             self.view.Rotate(
                 -rx * rotate_speed * 0.055,
@@ -2135,6 +2166,80 @@ class Viewport(QtWidgets.QWidget):
                 pass
             self.refresh_grid()
             self.redraw()
+
+    # ------------------------------------------------------------ turntable
+
+    # degrees of turn per pixel of mouse travel, close to what the free
+    # orbit gives on a window this size
+    TURNTABLE_RATE = 0.4
+
+    @staticmethod
+    def turntable_wanted() -> bool:
+        """Whether the user has asked for the turntable orbit."""
+        from ..core import prefs
+        return prefs.prefs().orbit == prefs.ORBIT_TURNTABLE
+
+    def level_camera(self) -> None:
+        """Stand the view up straight: Z points up the screen.
+
+        A turntable spins about Z, which only reads as a turntable if Z is
+        drawn upright.  Looking straight down or straight up there is no
+        upright to find, so the view is left as it is.
+        """
+        state = self.camera_state()
+        if state is None:
+            return
+        eye, centre, up, scale, _ortho = state
+        d = _unit3([centre[i] - eye[i] for i in range(3)])
+        along = d[2]
+        if abs(along) > 0.999:
+            return
+        level = _unit3([-along * d[0], -along * d[1], 1.0 - along * d[2]])
+        self._set_camera(eye, centre, level, scale)
+
+    def turntable(self, dx: float, dy: float) -> None:
+        """Spin about the vertical, tilt about the screen's horizontal.
+
+        Z stays up whatever the mouse does, and the tilt stops at looking
+        straight down or straight up rather than going over the top, which
+        is where the free orbit leaves a model on its side.
+        """
+        state = self.camera_state()
+        if state is None:
+            return
+        eye, centre, up, scale, _ortho = state
+        pivot = self._orbit_centre()
+        rate = math.radians(self.TURNTABLE_RATE)
+
+        # spin about Z through the pivot
+        yaw = -dx * rate
+        eye = _rotate_about(eye, pivot, (0.0, 0.0, 1.0), yaw)
+        centre = _rotate_about(centre, pivot, (0.0, 0.0, 1.0), yaw)
+        up = _rotate_about(up, (0.0, 0.0, 0.0), (0.0, 0.0, 1.0), yaw)
+
+        # tilt about the camera's own right-hand axis, clamped at the poles
+        d = _unit3([centre[i] - eye[i] for i in range(3)])
+        right = _unit3(_cross3(d, up))
+        elevation = math.asin(max(-1.0, min(1.0, -d[2])))
+        wanted = max(-math.pi / 2.0, min(math.pi / 2.0,
+                                         elevation + dy * rate))
+        pitch = wanted - elevation
+        if abs(pitch) > 1e-12 and any(abs(c) > 1e-9 for c in right):
+            eye = _rotate_about(eye, pivot, right, -pitch)
+            centre = _rotate_about(centre, pivot, right, -pitch)
+            up = _rotate_about(up, (0.0, 0.0, 0.0), right, -pitch)
+        self._set_camera(eye, centre, up, scale)
+
+    _turntable_drag = False
+
+    def _start_orbit(self, pos: QtCore.QPoint) -> None:
+        """Begin a mouse orbit, free or turntable as the user prefers."""
+        self._turntable_drag = self.turntable_wanted()
+        if self._turntable_drag:
+            self.level_camera()
+            self.redraw()
+        else:
+            self.view.StartRotation(pos.x(), pos.y())
 
     def _orbit_centre(self) -> Tuple[float, float, float]:
         """Rotate about the model, falling back to the view target."""
@@ -2191,10 +2296,10 @@ class Viewport(QtWidgets.QWidget):
         if event.button() == QtCore.Qt.MiddleButton:
             self._navigating = True
             if mods & QtCore.Qt.ShiftModifier:
-                self.view.StartRotation(pos.x(), pos.y())
+                self._start_orbit(pos)
         elif event.button() == QtCore.Qt.RightButton:
             self._navigating = True
-            self.view.StartRotation(pos.x(), pos.y())
+            self._start_orbit(pos)
         elif event.button() == QtCore.Qt.LeftButton:
             if self.plane_mode:
                 if self.cube_click(pos.x(), pos.y()):
@@ -2261,7 +2366,12 @@ class Viewport(QtWidgets.QWidget):
             if self._button == QtCore.Qt.RightButton or (
                     self._button == QtCore.Qt.MiddleButton
                     and mods & QtCore.Qt.ShiftModifier):
-                self.view.Rotation(pos.x(), pos.y())
+                if self._turntable_drag:
+                    self.turntable(dx, dy)
+                    self.refresh_grid()
+                    self.redraw()
+                else:
+                    self.view.Rotation(pos.x(), pos.y())
             else:
                 self.view.Pan(dx, -dy)
             self._last_pos = pos

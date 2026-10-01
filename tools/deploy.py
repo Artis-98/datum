@@ -370,7 +370,12 @@ def do_site() -> int:
     failed = 0
     try:
         say("connected to %s as %s, TLS on" % (where["host"], where["user"]))
-        sent, skipped, failed = upload_set(link, pairs)
+        # Every file, every time. Skipping files already the right size
+        # is for resuming a big payload; the site is a few hundred kB of
+        # text, where a version bump from 0.2.4 to 0.2.5 changes nothing
+        # but digits and so nothing about the size, and the front page
+        # was quietly left advertising the old version.
+        sent, skipped, failed = upload_set(link, pairs, force=True)
         say("done: %d sent, %d already there, %d failed"
             % (sent, skipped, failed))
     finally:

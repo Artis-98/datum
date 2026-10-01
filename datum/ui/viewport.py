@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -51,8 +52,7 @@ from OCP.V3d import (
     V3d_AmbientLight, V3d_DirectionalLight, V3d_TypeOfOrientation, V3d_View,
     V3d_Viewer,
 )
-#from OCP.WNT import WNT_Window
-import sys
+# the window OpenCASCADE draws into is a different class on each system
 if sys.platform == "win32":
     from OCP.WNT import WNT_Window as _NativeWindow
 elif sys.platform == "darwin":
@@ -2619,7 +2619,12 @@ class Viewport(QtWidgets.QWidget):
         self.view.Redraw()
         return bool(self.view.Dump(path))
         
-    def shutdown(self):
+    def shutdown(self) -> None:
+        """Let go of the 3D view before Qt takes its window away.
+
+        Called once, as the application quits. On macOS the view outliving
+        its window was a crash on every exit (PR #1, from Dan Wakefield).
+        """
         if getattr(self, "_shut_down", False):
             return
         self._shut_down = True
@@ -2627,5 +2632,4 @@ class Viewport(QtWidgets.QWidget):
             self.view.Remove()          # detach the OCCT view from its window
         except Exception:
             pass
-        # keep the wrapper alive (see _KEEPALIVE); just drop our own handle to it
         self._window = None

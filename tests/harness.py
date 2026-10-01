@@ -172,6 +172,13 @@ def install() -> None:
     os.environ.setdefault("DATUM_NO_WORKERS", "1")
     os.environ.setdefault("DATUM_DOCUMENTS",
                           tempfile.mkdtemp(prefix="datum_documents_"))
+    # and out of the real configuration: preferences, trusted folders, the
+    # body cache, and beside them the deploy login and the release key.
+    # Read from the real folder, a test inherited whatever the person had
+    # chosen, and default units of inches turned six suites' millimetres
+    # into failures.
+    os.environ.setdefault("DATUM_CONFIG_DIR",
+                          tempfile.mkdtemp(prefix="datum_config_"))
 
     box = QtWidgets.QMessageBox
     for kind in KINDS:

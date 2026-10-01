@@ -118,8 +118,10 @@ or directly:
 - Named parameters with expressions, units (`mm`, `in`, `deg`, …), dependency
   ordering and circular-reference detection
 - Full feature tree: reorder, suppress, roll back, edit anything at any time.
-  A sketch consumed by a feature nests underneath it; **Share Sketch** keeps a
-  second row at the top level so other features can use it too
+  A sketch consumed by a feature nests underneath it and goes out of sight,
+  as in Inventor, until **Show Sketch** brings it back; **Share Sketch** keeps
+  a second row at the top level so other features can use it too, and keeps
+  it shown
 - Drag the **End of Part** marker to roll the model back to any point
 - Undo / redo across the whole document
 - Live mass properties: volume, area, mass by material, centre of mass,

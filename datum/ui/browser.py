@@ -63,6 +63,9 @@ class ModelBrowser(QtWidgets.QTreeWidget):
 
         self._doc: Optional[Document] = None
         self._hidden_sketches: set = set()
+        # consumed sketches start hidden, the way Inventor tucks a sketch
+        # away under the feature that used it; these were shown again
+        self._shown_sketches: set = set()
         self._expanded_state: Dict[str, bool] = {}
 
     # ------------------------------------------------------------- building
@@ -177,7 +180,8 @@ class ModelBrowser(QtWidgets.QTreeWidget):
                 item.setForeground(0, QtGui.QBrush(QtGui.QColor(C.text_dim)))
 
             if (isinstance(feature, SketchFeature)
-                    and feature.id in self._hidden_sketches):
+                    and feature.id in self._hidden_sketches
+                    and consumers.get(feature.id) is None):
                 item.setText(0, item.text(0) + "  (hidden)")
             return item
 
@@ -249,13 +253,15 @@ class ModelBrowser(QtWidgets.QTreeWidget):
                 out.append((index, feature))
         return out
 
-    def is_shared(self, feature: Feature) -> bool:
+    def is_shared(self, feature: Feature,
+                  doc: Optional[Document] = None) -> bool:
         """A sketch is shared when flagged, or when two features want it."""
-        if not isinstance(feature, SketchFeature) or self._doc is None:
+        doc = doc or self._doc
+        if not isinstance(feature, SketchFeature) or doc is None:
             return False
         if feature.shared:
             return True
-        users = sum(1 for f in self._doc.features
+        users = sum(1 for f in doc.features
                     if not isinstance(f, SketchFeature)
                     and feature.id in f.depends_on())
         return users > 1
@@ -291,14 +297,30 @@ class ModelBrowser(QtWidgets.QTreeWidget):
         if ids:
             self.feature_selected.emit(ids[0])
 
-    def is_sketch_hidden(self, feature_id: int) -> bool:
-        return feature_id in self._hidden_sketches
+    def is_sketch_hidden(self, feature_id: int,
+                         doc: Optional[Document] = None) -> bool:
+        """Hidden by hand, or used by a feature and not shown again.
+
+        A shared sketch stays visible: sharing is how you say a sketch is
+        still wanted on its own.
+        """
+        if feature_id in self._hidden_sketches:
+            return True
+        if feature_id in self._shown_sketches:
+            return False
+        doc = doc or self._doc
+        if doc is None or feature_id not in self._consumers(doc):
+            return False
+        feature = doc.feature(feature_id)
+        return not self.is_shared(feature, doc)
 
     def toggle_sketch_visibility(self, feature_id: int) -> None:
-        if feature_id in self._hidden_sketches:
+        if self.is_sketch_hidden(feature_id):
             self._hidden_sketches.discard(feature_id)
+            self._shown_sketches.add(feature_id)
         else:
             self._hidden_sketches.add(feature_id)
+            self._shown_sketches.discard(feature_id)
         self.refresh()
         self.visibility_toggled.emit(feature_id)
 
@@ -361,7 +383,8 @@ class ModelBrowser(QtWidgets.QTreeWidget):
             if isinstance(feature, SketchFeature):
                 vis = menu.addAction(
                     icons.icon("sketch", 16),
-                    "Show Sketch" if fid in self._hidden_sketches else "Hide Sketch")
+                    "Show Sketch" if self.is_sketch_hidden(fid)
+                    else "Hide Sketch")
                 vis.triggered.connect(lambda: self.toggle_sketch_visibility(fid))
 
                 consumed = fid in self._consumers(self._doc)

@@ -2185,7 +2185,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self.viewport.clear_overlay()
         for feature in self.document.sketch_features():
-            if self.browser.is_sketch_hidden(feature.id):
+            if self.browser.is_sketch_hidden(feature.id, self.document):
                 continue
             if feature.suppressed:
                 continue

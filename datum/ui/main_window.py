@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import copy
 import os
+import sys
 from typing import Any, Callable, Dict, List, Optional  # noqa: F401
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -757,6 +758,7 @@ class MainWindow(QtWidgets.QMainWindow):
         item("export", "Export...", "", self.export_geometry)
         menu.addSeparator()
         item("params", "Parameters...", "Ctrl+P", self.edit_parameters)
+        item("edit", "dProperties...", "", self.show_properties)
         item("open", "Projects...", "", self.choose_project)
         item("edit", "Preferences...", "", self.edit_preferences)
         item("rollback", "Check for Updates...", "",
@@ -1152,6 +1154,9 @@ class MainWindow(QtWidgets.QMainWindow):
         b.delete_below_requested.connect(self.delete_features_below)
         b.model_state_requested.connect(self.model_state_action)
         b.visibility_toggled.connect(lambda _fid: self._draw_visible_sketches())
+        b.properties_requested.connect(self.show_properties)
+        b.open_location_requested.connect(
+            lambda: self.open_file_location(self.document.path))
 
         self.viewport.selection_changed.connect(self._on_viewport_selection)
         self.viewport.escape_pressed.connect(self._on_escape)
@@ -1565,7 +1570,8 @@ class MainWindow(QtWidgets.QMainWindow):
         """Grey the entries that need a document, when there is not one."""
         has = not self.on_start_page and self.session.active is not None
         needs_document = ("Save", "Save As...", "Import...", "Export...",
-                          "Parameters...", "Save as Template...")
+                          "Parameters...", "dProperties...",
+                          "Save as Template...")
         for action in self.file_menu.actions():
             label = action.text().split("\t")[0]
             if label in needs_document:
@@ -2894,6 +2900,9 @@ class MainWindow(QtWidgets.QMainWindow):
             self.document.shape, keep_camera=True,
             appearance=self.document.material_appearance)
 
+        # where the camera was, to go back to when the sketch is finished
+        # rather than to a fixed view the person never chose
+        self._camera_before_sketch = self.viewport.camera_state()
         self.editor.begin(feature.sketch, self.document.parameter_view())
         self._draw_visible_planes()      # clears them while sketching
         # swing round to the plane rather than snapping, so it stays obvious
@@ -2921,7 +2930,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_message.setStyleSheet("")
         self.status_message.setText("Sketch finished.")
         self.rebuild()
-        self.viewport.set_view("iso")
+        before = getattr(self, "_camera_before_sketch", None)
+        self._camera_before_sketch = None
+        if before is not None:
+            # swung back the way it swung in, so it is clear where you are
+            self.viewport.animate_to(
+                lambda: self.viewport.restore_camera(before))
+        else:
+            self.viewport.set_view("iso")
         self._sync_tool_buttons()
 
     def build_sketch_menu(self, menu: QtWidgets.QMenu) -> QtWidgets.QMenu:
@@ -3021,11 +3037,40 @@ class MainWindow(QtWidgets.QMainWindow):
         return len(dialog.feature.profiles)
 
     def available_regions(self) -> List[Dict[str, Any]]:
-        """Every closed region in the document's sketches."""
+        """The closed regions on offer to the feature being made.
+
+        Those of the sketches in sight, and of whichever sketches that
+        feature already uses. Opening an Extrude used to put every sketch
+        in the part back on screen, the ones tucked away under the
+        features that used them included, so a tidy view became a pile of
+        old outlines; what was hidden now stays hidden. The feature's own
+        sketches are always there, or editing it could not show its
+        profile.
+        """
         from ..core.features import BuildContext, collect_regions
 
+        own = set()
+        dialog = self._profile_dialog or self._active_dialog
+        feature = getattr(dialog, "feature", None)
+        profiles = getattr(feature, "profiles", None)
+        if profiles is not None:
+            own.update(profiles.sketch_ids())
+        if getattr(feature, "sketch_id", 0):
+            own.add(feature.sketch_id)
+
+        def in_sight(sketch_id: int) -> bool:
+            if sketch_id in own:
+                return True
+            sketch_feature = self.document.feature(sketch_id)
+            if sketch_feature is not None and sketch_feature.suppressed:
+                return False
+            return not self.browser.is_sketch_hidden(sketch_id,
+                                                     self.document)
+
         ctx = BuildContext(self.document.parameter_scope())
-        ctx.sketches = dict(self.document.all_sketches())
+        ctx.sketches = {sid: sketch for sid, sketch
+                        in self.document.all_sketches().items()
+                        if in_sight(sid)}
         return collect_regions(ctx)
 
     def refresh_profile_overlay(self) -> None:
@@ -3127,6 +3172,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.properties.update_from(self.active_document)
         self.properties_window.show()
         self.properties_window.raise_()
+
+    def open_file_location(self, path: str) -> None:
+        """Show a document's file in Explorer, selected."""
+        if not path or not os.path.exists(path):
+            self.status_message.setStyleSheet("")
+            self.status_message.setText(
+                "It has no file yet: save it first.")
+            return
+        self._reveal(os.path.normpath(os.path.abspath(path)))
+
+    def _reveal(self, path: str) -> None:
+        if sys.platform == "win32":
+            import subprocess
+            subprocess.Popen(["explorer", "/select,", path])
+        else:
+            QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(os.path.dirname(path)))
 
     def _title_changed(self) -> None:
         """A document property was edited, so the tab is out of date."""

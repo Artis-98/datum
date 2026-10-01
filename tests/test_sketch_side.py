@@ -67,6 +67,9 @@ def outward(face):
 def sketch_from_outside(face):
     """Look at a face square-on from outside the part, and sketch on it."""
     out = outward(face)
+    # the swing back from the last sketch, done, as any view command does
+    # before it turns the camera
+    win.viewport.finish_animation()
     win.viewport.view.SetProj(*out)
     win.viewport.fit_all()
     pump()

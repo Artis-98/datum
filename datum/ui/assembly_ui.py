@@ -602,6 +602,8 @@ class AssemblyController(QtCore.QObject):
         b.suppress_toggled.connect(self.toggle_suppress)
         b.isolate_requested.connect(self.isolate)
         b.replace_requested.connect(self.replace_component)
+        b.properties_requested.connect(self.component_properties)
+        b.open_location_requested.connect(self.component_location)
         b.constraint_activated.connect(self.edit_constraint)
         b.constraint_selected.connect(self._constraint_selected)
         b.constraint_delete_requested.connect(self.delete_constraint)
@@ -1008,6 +1010,33 @@ class AssemblyController(QtCore.QObject):
         doc.push_undo()
         occurrence.suppressed = not occurrence.suppressed
         self.rebuild()
+
+    def _component_file(self, occurrence_id: int) -> str:
+        doc = self.document
+        occurrence = doc.occurrence(occurrence_id) if doc else None
+        if occurrence is None:
+            return ""
+        return doc.component_path(occurrence) or ""
+
+    def component_properties(self, occurrence_id: int) -> None:
+        """dProperties of the assembly (0), or of the file a component places.
+
+        A component's properties belong to its own file, so that file is
+        opened in its tab, where they can be edited and saved, with the
+        properties window up.
+        """
+        if not occurrence_id:
+            self.host.show_properties()
+            return
+        path = self._component_file(occurrence_id)
+        if path and self.host.open_path(path):
+            self.host.show_properties()
+
+    def component_location(self, occurrence_id: int) -> None:
+        doc = self.document
+        path = (getattr(doc, "path", "") if not occurrence_id
+                else self._component_file(occurrence_id))
+        self.host.open_file_location(path)
 
     def open_component(self, occurrence_id: int) -> None:
         """Edit the file a component places.

@@ -38,6 +38,9 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
     suppress_toggled = QtCore.Signal(int)
     isolate_requested = QtCore.Signal(int)
     replace_requested = QtCore.Signal(int)
+    # 0 for the assembly itself, else the component's occurrence id
+    properties_requested = QtCore.Signal(int)
+    open_location_requested = QtCore.Signal(int)
 
     constraint_selected = QtCore.Signal(int)
     constraint_activated = QtCore.Signal(int)        # double-click -> edit
@@ -368,6 +371,16 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
             replace.triggered.connect(
                 lambda: self.replace_requested.emit(oid))
 
+            from .browser import add_file_actions
+
+            class _Placed:
+                path = self._doc.component_path(occurrence) or ""
+
+            add_file_actions(
+                menu, _Placed,
+                lambda: self.properties_requested.emit(oid),
+                lambda: self.open_location_requested.emit(oid))
+
             menu.addSeparator()
             ground = menu.addAction("Grounded")
             ground.setCheckable(True)
@@ -425,6 +438,14 @@ class AssemblyBrowser(QtWidgets.QTreeWidget):
                 lambda: self.plane_visibility_toggled.emit(key))
 
         else:
+            if kind == "root":
+                from .browser import add_file_actions
+
+                add_file_actions(
+                    menu, self._doc,
+                    lambda: self.properties_requested.emit(0),
+                    lambda: self.open_location_requested.emit(0))
+                menu.addSeparator()
             place = menu.addAction(icons.icon("import", 16),
                                    "Place Component...")
             place.triggered.connect(self.place_requested.emit)

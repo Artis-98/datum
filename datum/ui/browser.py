@@ -21,6 +21,25 @@ ROLE_VISIBLE = QtCore.Qt.UserRole + 5
 ORIGIN_PLANES = (("XY Plane", "XY"), ("XZ Plane", "XZ"), ("YZ Plane", "YZ"))
 
 
+def add_file_actions(menu: QtWidgets.QMenu, doc, properties, location
+                     ) -> None:
+    """dProperties and Open File Location, for a document or a component.
+
+    The same two entries wherever a file is right-clicked in a tree: the
+    part at the top of its own tree, an assembly at the top of its, and
+    each component an assembly places.
+    """
+    props = menu.addAction(icons.icon("edit", 16), "dProperties...")
+    props.setToolTip("Title, part number, material and your own properties")
+    props.triggered.connect(lambda: properties())
+    path = getattr(doc, "path", "") or ""
+    where = menu.addAction(icons.icon("open", 16), "Open File Location")
+    where.setEnabled(bool(path))
+    where.setToolTip("Show the file in Explorer" if path
+                     else "It has no file yet: save it first")
+    where.triggered.connect(lambda: location())
+
+
 class ModelBrowser(QtWidgets.QTreeWidget):
     """Feature tree with the usual right-click verbs."""
 
@@ -40,6 +59,9 @@ class ModelBrowser(QtWidgets.QTreeWidget):
     # model states: (what to do, the state's name, a new name when renaming)
     model_state_requested = QtCore.Signal(str, str, str)
     visibility_toggled = QtCore.Signal(int)
+    # the part itself, from its node at the top of the tree
+    properties_requested = QtCore.Signal()
+    open_location_requested = QtCore.Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -377,9 +399,18 @@ class ModelBrowser(QtWidgets.QTreeWidget):
         folder.setExpanded(len(states) > 1)
 
     def _menu(self, pos: QtCore.QPoint) -> None:
-        item = self.itemAt(pos)
+        menu = self.menu_for(self.itemAt(pos))
+        if menu is not None:
+            menu.exec(self.viewport().mapToGlobal(pos))
+
+    def menu_for(self, item) -> Optional[QtWidgets.QMenu]:
+        """The right-click menu for a tree item, or None if it has none.
+
+        Built apart from showing it, so what somebody gets can be read
+        back without putting a menu on screen.
+        """
         if item is None or self._doc is None:
-            return
+            return None
         kind = item.data(0, ROLE_KIND)
         menu = QtWidgets.QMenu(self)
 
@@ -407,8 +438,7 @@ class ModelBrowser(QtWidgets.QTreeWidget):
                 new = menu.addAction("New Model State")
                 new.triggered.connect(lambda: self.model_state_requested.emit(
                     "new", "", ""))
-            menu.exec(self.viewport().mapToGlobal(pos))
-            return
+            return menu
 
         if kind == "plane":
             key = str(item.data(0, ROLE_ID))
@@ -421,7 +451,7 @@ class ModelBrowser(QtWidgets.QTreeWidget):
             fid = int(item.data(0, ROLE_ID))
             feature = self._doc.feature(fid)
             if feature is None:
-                return
+                return None
 
             from ..core.features import WorkPlaneFeature
 
@@ -494,10 +524,14 @@ class ModelBrowser(QtWidgets.QTreeWidget):
             drop.setEnabled(rolled is not None
                             and rolled < len(self._doc.features))
             drop.triggered.connect(self.delete_below_requested.emit)
+        elif kind == "root":
+            add_file_actions(menu, self._doc,
+                             self.properties_requested.emit,
+                             self.open_location_requested.emit)
         else:
-            return
+            return None
 
-        menu.exec(self.viewport().mapToGlobal(pos))
+        return menu
 
     def _add_visibility_action(self, menu: QtWidgets.QMenu, name: str) -> None:
         """A checkable Visible entry - the tick shows the current state."""

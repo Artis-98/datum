@@ -293,18 +293,69 @@ class FeatureDialog(QtWidgets.QDialog):
         self.operation = SegmentedControl(OP_OPTIONS)
         self.bind(self.operation)
         self.form.add("Boolean", self.operation)
+        self.solids_row()
+        self.operation.changed.connect(lambda _k: self._sync_solids())
+
+    def solids_row(self) -> None:
+        """Which solids it works on, when the part has more than one.
+
+        Nothing ticked means the one its material meets, which is right
+        nearly every time; tick the ones meant when it is not, a cut
+        through two solids at once, or a join that fuses several.
+        """
+        names = (self.doc.bodies_before(self.feature.id)
+                 if hasattr(self.doc, "bodies_before") else [])
+        names += [n for n in self.feature.solids if n not in names]
+        self.solids = None
+        if len(names) < 2:
+            return
+        self.solids = QtWidgets.QListWidget()
+        self.solids.setMaximumHeight(92)
+        self.solids.setToolTip(
+            "The solids this works on. None ticked: the one it meets. A "
+            "join fuses the new material and every ticked solid into one.")
+        for name in names:
+            item = QtWidgets.QListWidgetItem(icons.icon("box", 15), name)
+            item.setData(QtCore.Qt.UserRole, name)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.Checked if name in self.feature.solids
+                               else QtCore.Qt.Unchecked)
+            self.solids.addItem(item)
+        self.solids.itemChanged.connect(lambda _i: self.preview())
+        self.form.add("Solids", self.solids)
+
+    def _sync_solids(self) -> None:
+        if getattr(self, "solids", None) is None:
+            return
+        operation = (self.operation.value()
+                     if getattr(self, "operation", None) is not None
+                     else NEW_BODY)
+        self.form.set_visible(self.solids, operation != NEW_BODY)
+
+    def picked_solids(self) -> List[str]:
+        if getattr(self, "solids", None) is None:
+            return list(self.feature.solids)
+        out = []
+        for i in range(self.solids.count()):
+            item = self.solids.item(i)
+            if item.checkState() == QtCore.Qt.Checked:
+                out.append(str(item.data(QtCore.Qt.UserRole)))
+        return out
 
     def load_boolean(self) -> None:
         if getattr(self, "operation", None) is not None:
             self.operation.set_value(self.feature.operation)
         elif getattr(self, "body_name", None) is not None:
             self.body_name.setText(self.feature.body_name or "Solid1")
+        self._sync_solids()
 
     def store_boolean(self) -> None:
         if getattr(self, "operation", None) is not None:
             self.feature.operation = self.operation.value()
         elif getattr(self, "body_name", None) is not None:
             self.feature.body_name = self.body_name.text().strip()
+        self.feature.solids = (self.picked_solids()
+                               if self.feature.operation != NEW_BODY else [])
 
     def sketch_combo(self, current: int) -> QtWidgets.QComboBox:
         combo = QtWidgets.QComboBox()
@@ -845,8 +896,40 @@ class PatternDialog(FeatureDialog):
         self.bind(self.mode)
         self.form.add("Type", self.mode)
 
+        self.of = QtWidgets.QComboBox()
+        self.of.addItem(icons.icon("feature", 15), "Features", "features")
+        self.of.addItem(icons.icon("box", 15), "Solid bodies", "bodies")
+        self.of.setToolTip(
+            "Pattern the features that made something, or whole solid "
+            "bodies, everything done to them included")
+        self.bind(self.of)
+        self.form.add("Pattern", self.of)
+
         self.parents = self.feature_picker(None, self.feature.parents)
         self.form.add("Features", self.parents)
+
+        self.bodies = QtWidgets.QListWidget()
+        self.bodies.setMaximumHeight(110)
+        names = (self.doc.bodies_before(self.feature.id)
+                 if hasattr(self.doc, "bodies_before") else [])
+        names += [n for n in self.feature.bodies if n not in names]
+        for name in names:
+            item = QtWidgets.QListWidgetItem(icons.icon("box", 15), name)
+            item.setData(QtCore.Qt.UserRole, name)
+            item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+            item.setCheckState(QtCore.Qt.Checked if name in self.feature.bodies
+                               else QtCore.Qt.Unchecked)
+            self.bodies.addItem(item)
+        self.bodies.itemChanged.connect(lambda _i: self.preview())
+        self.form.add("Solids", self.bodies)
+
+        self.copies = QtWidgets.QComboBox()
+        self.copies.addItem("Join to the solid", JOIN)
+        self.copies.addItem("A new solid each", NEW_BODY)
+        self.bind(self.copies)
+        self.form.add("Copies", self.copies)
+
+        self.of.currentIndexChanged.connect(lambda _i: self._sync_of())
 
         self.form.add_separator()
 
@@ -897,9 +980,19 @@ class PatternDialog(FeatureDialog):
         self.full.setEnabled(not rect)
         self.angle.setEnabled(not rect and not self.full.isChecked())
 
+    def _sync_of(self):
+        bodies = self.of.currentData() == "bodies"
+        self.form.set_visible(self.parents, not bodies)
+        self.form.set_visible(self.bodies, bodies)
+        self.form.set_visible(self.copies, bodies)
+
     def load(self):
         pos = self.mode.findData(self.feature.mode)
         self.mode.setCurrentIndex(max(0, pos))
+        self.of.setCurrentIndex(max(0, self.of.findData(self.feature.of)))
+        self.copies.setCurrentIndex(
+            max(0, self.copies.findData(self.feature.copies)))
+        self._sync_of()
         self.count1.set_text(self.feature.count1)
         self.spacing1.set_text(self.feature.spacing1)
         self.count2.set_text(self.feature.count2)
@@ -915,6 +1008,12 @@ class PatternDialog(FeatureDialog):
 
     def store(self):
         self.feature.mode = self.mode.currentData()
+        self.feature.of = self.of.currentData() or "features"
+        self.feature.copies = self.copies.currentData() or JOIN
+        self.feature.bodies = [
+            str(self.bodies.item(i).data(QtCore.Qt.UserRole))
+            for i in range(self.bodies.count())
+            if self.bodies.item(i).checkState() == QtCore.Qt.Checked]
         self.feature.parents = self.picked_features(self.parents)
         self.feature.count1 = self.count1.text()
         self.feature.spacing1 = self.spacing1.text()

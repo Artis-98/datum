@@ -518,7 +518,8 @@ def rewrite(doc: Any, mapping: Dict[str, str]) -> None:
             if isinstance(value, str):
                 setattr(feature, attr, _substitute(value, mapping))
         origin = getattr(feature, "origin", None)
-        if feature.type_name == "primitive" and isinstance(origin, tuple):
+        if feature.type_name == "primitive" and isinstance(origin,
+                                                           (tuple, list)):
             feature.origin = tuple(_substitute(str(v), mapping)
                                    for v in origin)
 

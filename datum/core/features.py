@@ -196,12 +196,19 @@ class BuildContext:
         return None
 
     def apply(self, tool: TopoDS_Shape, op: str, feature_id: int,
-              target: str = "", name: str = "") -> None:
+              target: str = "", name: str = "",
+              targets: Sequence[str] = ()) -> None:
         """Combine a tool solid into the part according to ``op``.
 
         The very first solid in an empty part becomes a body whatever the
         operation says: there is nothing to join to, cut from or intersect
         with, so asking the question would be theatre.
+
+        ``targets`` are the solids the feature was told to work on, when
+        it was: each one is cut, or intersected, and a join fuses the new
+        material and every one of them into the first, the way Inventor's
+        Solids selection does.  Without them, the solid the new material
+        actually meets is the one that changes.
         """
         self.tools[feature_id] = (tool, op)
 
@@ -213,10 +220,36 @@ class BuildContext:
             self.bodies.append(Body(name or self.next_name(), tool))
             return
 
+        if targets:
+            self._apply_to(tool, op, list(targets))
+            return
+
         body = self.body(target) if target else None
         if body is None:
             body = self._touching(tool) or self.live[0]
         body.shape = kernel.combine(body.shape, tool, op)
+
+    def _apply_to(self, tool: TopoDS_Shape, op: str,
+                  targets: List[str]) -> None:
+        chosen = []
+        for name in targets:
+            body = self.body(name)
+            if body is None or not body.valid:
+                raise FeatureError("the solid %s it works on no longer "
+                                   "exists" % name)
+            if body not in chosen:
+                chosen.append(body)
+        if op == JOIN:
+            first = chosen[0]
+            merged = kernel.combine(first.shape, tool, JOIN)
+            for other in chosen[1:]:
+                merged = kernel.combine(merged, other.shape, JOIN)
+            first.shape = merged
+            # the others are part of the first now
+            self.bodies = [b for b in self.bodies if b not in chosen[1:]]
+            return
+        for body in chosen:
+            body.shape = kernel.combine(body.shape, tool, op)
 
     def _touching(self, tool: TopoDS_Shape) -> Optional[Body]:
         """The body this tool actually meets, when there is more than one.
@@ -234,6 +267,16 @@ class BuildContext:
             except Exception:
                 continue
         return None
+
+
+def _copy_name(ctx: BuildContext, name: str, n: int) -> str:
+    """Solid1 (2), Solid1 (3): a copy named for what it is a copy of."""
+    taken = {b.name for b in ctx.bodies}
+    candidate = "%s (%d)" % (name, n)
+    while candidate in taken:
+        n += 1
+        candidate = "%s (%d)" % (name, n)
+    return candidate
 
 
 def _overlaps(a: TopoDS_Shape, b: TopoDS_Shape) -> bool:
@@ -266,6 +309,9 @@ class Feature:
     # comment written against it in the Parameters table; see modelparams
     param_names: Dict[str, str] = field(default_factory=dict)
     param_comments: Dict[str, str] = field(default_factory=dict)
+    # the solids a joining, cutting or intersecting feature works on, by
+    # name; empty means the one its material meets.  See BuildContext.apply
+    solids: List[str] = field(default_factory=list)
 
     # -- interface ----------------------------------------------------------
 
@@ -308,6 +354,8 @@ class Feature:
             d["param_names"] = dict(self.param_names)
         if self.param_comments:
             d["param_comments"] = dict(self.param_comments)
+        if self.solids:
+            d["solids"] = list(self.solids)
         d.update(self.field_dict())
         return d
 
@@ -324,6 +372,7 @@ class Feature:
                             (data.get("param_names") or {}).items() if v}
         feat.param_comments = {str(k): str(v) for k, v in
                                (data.get("param_comments") or {}).items()}
+        feat.solids = [str(n) for n in (data.get("solids") or []) if n]
         feat.load_fields(data)
         return feat
 
@@ -802,7 +851,8 @@ class ExtrudeFeature(Feature):
             else:
                 tool = kernel.extrude(profile, normal, d * sign, taper)
 
-        ctx.apply(tool, self.operation, self.id, name=self.body_name)
+        ctx.apply(tool, self.operation, self.id, name=self.body_name,
+                  targets=self.solids)
 
     def _to_plane(self, ctx: BuildContext, profile: TopoDS_Shape,
                   normal: Sequence[float]) -> TopoDS_Shape:
@@ -1117,7 +1167,8 @@ class RevolveFeature(Feature):
         except KernelError as exc:
             raise FeatureError("%s: %s (does the profile cross the axis?)"
                                % (self.name, exc)) from exc
-        ctx.apply(tool, self.operation, self.id, name=self.body_name)
+        ctx.apply(tool, self.operation, self.id, name=self.body_name,
+                  targets=self.solids)
 
     def _axis(self, sketch: Sketch) -> Tuple[Sequence[float], Sequence[float]]:
         plane = sketch.plane
@@ -1197,7 +1248,8 @@ class SweepFeature(Feature):
             tool = kernel.sweep(profile, path)
         except KernelError as exc:
             raise FeatureError("%s: %s" % (self.name, exc)) from exc
-        ctx.apply(tool, self.operation, self.id, name=self.body_name)
+        ctx.apply(tool, self.operation, self.id, name=self.body_name,
+                  targets=self.solids)
 
     def summary(self) -> str:
         return "%s: along a path, %s" % (self.name, self.output_summary())
@@ -1246,7 +1298,8 @@ class LoftFeature(Feature):
             tool = kernel.loft(profiles, self.closed, self.ruled)
         except KernelError as exc:
             raise FeatureError("%s: %s" % (self.name, exc)) from exc
-        ctx.apply(tool, self.operation, self.id, name=self.body_name)
+        ctx.apply(tool, self.operation, self.id, name=self.body_name,
+                  targets=self.solids)
 
     def summary(self) -> str:
         return "%s: %d sections, %s" % (self.name, len(self.sections),
@@ -1342,7 +1395,7 @@ class HoleFeature(Feature):
 
         # separate holes do not touch, so a compound is fine here
         combined = kernel.compound(tools) if len(tools) > 1 else tools[0]
-        ctx.apply(combined, "cut", self.id)
+        ctx.apply(combined, "cut", self.id, targets=self.solids)
 
     def summary(self) -> str:
         depth = "through" if self.through else self.depth
@@ -1404,7 +1457,8 @@ class PrimitiveFeature(Feature):
         else:
             raise FeatureError("%s: unknown primitive %r" % (self.name, self.kind))
 
-        ctx.apply(tool, self.operation, self.id, name=self.body_name)
+        ctx.apply(tool, self.operation, self.id, name=self.body_name,
+                  targets=self.solids)
 
     def summary(self) -> str:
         return "%s: %s (%s, %s, %s)" % (self.name, self.kind, self.a, self.b,
@@ -1454,7 +1508,8 @@ class ImportFeature(Feature):
         # every copy is new geometry nothing has meshed, so the whole
         # import was meshed again after every command. Nothing downstream
         # changes a shape in place, so there is nothing to protect it from.
-        ctx.apply(self._cache, self.operation, self.id, name=self.body_name)
+        ctx.apply(self._cache, self.operation, self.id,
+                  name=self.body_name, targets=self.solids)
 
     def resolved(self, base_dir: str = "") -> str:
         """The file, found beside the part when its path is relative.
@@ -1679,12 +1734,21 @@ class PatternFeature(Feature):
     axis: str = "Z"
     angle: str = "360"
     full_circle: bool = True
+    # what is patterned: earlier features (Inventor's default), or whole
+    # solid bodies, by name; and whether the copies of a body join it or
+    # each become a body of their own
+    of: str = "features"            # features / bodies
+    bodies: List[str] = field(default_factory=list)
+    copies: str = JOIN              # join / new
 
     def depends_on(self) -> List[int]:
-        return list(self.parents)
+        return list(self.parents) if self.of == "features" else []
 
     def build(self, ctx: BuildContext) -> None:
         ctx.require_shape(self.name)
+        if self.of == "bodies":
+            self._pattern_bodies(ctx)
+            return
         sources = [(fid, ctx.tools[fid]) for fid in self.parents if fid in ctx.tools]
         if not sources:
             raise FeatureError("%s: select one or more features to pattern"
@@ -1700,6 +1764,39 @@ class PatternFeature(Feature):
                 moved = transform(tool)
                 ctx.shape = kernel.boolean(ctx.shape, moved,
                                            op if op != "new" else "join")
+
+    def _pattern_bodies(self, ctx: BuildContext) -> None:
+        """Copies of whole solids, joined to each or made bodies of their own.
+
+        A body is everything that has been done to it so far, fillets and
+        all, which is the point: patterning the features that made it
+        would replay each one, and some of them, a fillet on an edge that
+        only the original has, cannot be replayed.
+        """
+        if not self.bodies:
+            raise FeatureError("%s: select one or more solid bodies to "
+                               "pattern" % self.name)
+        sources = []
+        for name in self.bodies:
+            body = ctx.body(name)
+            if body is None or not body.valid:
+                raise FeatureError("%s: the solid %s no longer exists"
+                                   % (self.name, name))
+            sources.append(body)
+        placements = (self._rect_placements(ctx) if self.mode == "rectangular"
+                      else self._circ_placements(ctx))
+        for body in sources:
+            original = body.shape
+            copies = [transform(original) for transform in placements[1:]]
+            if self.copies == NEW_BODY:
+                for n, copy in enumerate(copies, start=2):
+                    ctx.bodies.append(Body(_copy_name(ctx, body.name, n),
+                                           copy))
+                continue
+            merged = original
+            for copy in copies:
+                merged = kernel.combine(merged, copy, JOIN)
+            body.shape = merged
 
     def _axis(self, ctx: BuildContext, name: str) -> WorkAxis:
         """An origin axis or a work axis, by name.
@@ -1745,9 +1842,13 @@ class PatternFeature(Feature):
         return out
 
     def summary(self) -> str:
+        what = (" of %s" % ", ".join(self.bodies)
+                if self.of == "bodies" and self.bodies else "")
         if self.mode == "rectangular":
-            return "%s: %s x %s rectangular" % (self.name, self.count1, self.count2)
-        return "%s: %s circular about %s" % (self.name, self.count1, self.axis)
+            return "%s: %s x %s rectangular%s" % (self.name, self.count1,
+                                                 self.count2, what)
+        return "%s: %s circular about %s%s" % (self.name, self.count1,
+                                               self.axis, what)
 
     def field_dict(self) -> Dict[str, Any]:
         return {
@@ -1756,6 +1857,8 @@ class PatternFeature(Feature):
             "count2": self.count2, "spacing2": self.spacing2, "dir2": self.dir2,
             "axis": self.axis, "angle": self.angle,
             "full_circle": self.full_circle,
+            "of": self.of, "bodies": list(self.bodies),
+            "copies": self.copies,
         }
 
     def load_fields(self, data: Dict[str, Any]) -> None:
@@ -1770,6 +1873,9 @@ class PatternFeature(Feature):
         self.axis = data.get("axis", "Z")
         self.angle = str(data.get("angle", "360"))
         self.full_circle = bool(data.get("full_circle", True))
+        self.of = "bodies" if data.get("of") == "bodies" else "features"
+        self.bodies = [str(n) for n in (data.get("bodies") or []) if n]
+        self.copies = NEW_BODY if data.get("copies") == NEW_BODY else JOIN
 
 
 @dataclass
@@ -1849,7 +1955,8 @@ class CodeFeature(Feature):
             raise FeatureError("%s built nothing: call result(solid), or "
                                "leave the solid in a variable called body"
                                % self.name)
-        ctx.apply(solid, self.operation, self.id, name=self.body_name)
+        ctx.apply(solid, self.operation, self.id, name=self.body_name,
+                  targets=self.solids)
 
     def summary(self) -> str:
         lines = [ln for ln in self.source.splitlines() if ln.strip()]

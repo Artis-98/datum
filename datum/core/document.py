@@ -347,6 +347,28 @@ class Document:
         self.modified = True
         return feature
 
+    def bodies_before(self, feature_id: int) -> List[str]:
+        """The solids there are just before a feature, by name, in order.
+
+        What a feature's Solids choice and a body pattern offer: the
+        bodies it could work on, not ones made further down the tree.
+        Read from what the last rebuild kept of the feature before it.
+        """
+        index = self.index_of(feature_id)
+        if index < 0:
+            return [b.name for b in self.bodies if b.valid]
+        for earlier in reversed(self.features[:index]):
+            held = self._built.get(earlier.id)
+            if held:
+                return [name for name, shape in held[0][1].bodies
+                        if kernel.is_valid(shape)]
+            if not earlier.suppressed:
+                break
+        if index == 0:
+            return []
+        # nothing kept to read it from: what the part has now will do
+        return [b.name for b in self.bodies if b.valid]
+
     # -- parameters ---------------------------------------------------------
 
     def _resolve_parameters(self) -> Dict[str, float]:

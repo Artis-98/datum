@@ -17,7 +17,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from OCP.TopoDS import TopoDS_Shape
 
-from . import fileformat, kernel, materials, modelparams, prefs
+from . import fileformat, kernel, materials, modelparams, modelstates, prefs
 from .rules import RuleSet
 from .features import (
     FEATURE_TYPES, STANDARD_AXES, Body, BuildContext, CodeFeature, Feature,
@@ -277,6 +277,8 @@ class Document:
         # the document is trusted, and trust is not something a file can
         # carry in from somewhere else.
         self.rules = RuleSet()
+        # Primary, and any other variations of this part; see modelstates
+        self.model_states = modelstates.ModelStates()
         # "" means "whatever the material comes in", which is what somebody
         # means when they pick a material and nothing else.  Setting it is
         # an override, and it changes not one gram.
@@ -975,6 +977,7 @@ class Document:
             "origin_autohidden": self.origin_autohidden,
             "parameters": self.params.to_list(),
             "features": [f.to_dict() for f in self.features],
+            "model_states": self.model_states.to_dict(self),
         }
 
     def load_dict(self, data: Dict[str, Any]) -> None:
@@ -1010,6 +1013,7 @@ class Document:
                 continue
         highest = max([f.id for f in self.features] + [0])
         self._next_id = max(self._next_id, highest + 1)
+        self.model_states.load(data.get("model_states"))
         # a part saved when every sketch counted from d1 is given names
         # that run across the whole part, and the parameters worked out
         # again now that the features they may read are here

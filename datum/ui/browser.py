@@ -37,6 +37,8 @@ class ModelBrowser(QtWidgets.QTreeWidget):
     reorder_requested = QtCore.Signal(int, int)     # feature id, new index
     rollback_requested = QtCore.Signal(object)      # index or None
     delete_below_requested = QtCore.Signal()
+    # model states: (what to do, the state's name, a new name when renaming)
+    model_state_requested = QtCore.Signal(str, str, str)
     visibility_toggled = QtCore.Signal(int)
 
     def __init__(self, parent=None) -> None:
@@ -117,6 +119,8 @@ class ModelBrowser(QtWidgets.QTreeWidget):
                 except Exception:
                     item.setToolTip(0, body.name)
             folder.setExpanded(True)
+
+        self._add_model_states(root, doc)
 
         origin = QtWidgets.QTreeWidgetItem(root, ["Origin"])
         origin.setIcon(0, icons.icon("plane", 16))
@@ -344,6 +348,33 @@ class ModelBrowser(QtWidgets.QTreeWidget):
             self.plane_activated.emit(str(item.data(0, ROLE_ID)))
         elif kind == "end":
             self.rollback_requested.emit(None)
+        elif kind == "state":
+            self.model_state_requested.emit(
+                "activate", str(item.data(0, ROLE_ID)), "")
+
+    def _add_model_states(self, root, doc) -> None:
+        """The Model States folder, at the top of the tree as in Inventor."""
+        states = getattr(doc, "model_states", None)
+        if states is None:
+            return
+        folder = QtWidgets.QTreeWidgetItem(
+            root, ["Model States: %s" % states.active])
+        folder.setIcon(0, icons.icon("params", 16))
+        folder.setData(0, ROLE_KIND, "states")
+        folder.setForeground(0, QtGui.QBrush(QtGui.QColor(C.text_dim)))
+        folder.setToolTip(0, "Variations of this part. Double-click one to "
+                             "make it the part; right-click for more.")
+        for name in states.names():
+            item = QtWidgets.QTreeWidgetItem(folder, [name])
+            item.setIcon(0, icons.icon("params", 16))
+            item.setData(0, ROLE_KIND, "state")
+            item.setData(0, ROLE_ID, name)
+            if name == states.active:
+                f = item.font(0)
+                f.setBold(True)
+                item.setFont(0, f)
+                item.setText(0, "%s  (active)" % name)
+        folder.setExpanded(len(states) > 1)
 
     def _menu(self, pos: QtCore.QPoint) -> None:
         item = self.itemAt(pos)
@@ -351,6 +382,33 @@ class ModelBrowser(QtWidgets.QTreeWidget):
             return
         kind = item.data(0, ROLE_KIND)
         menu = QtWidgets.QMenu(self)
+
+        if kind in ("states", "state"):
+            name = str(item.data(0, ROLE_ID) or "")
+            states = self._doc.model_states
+            if kind == "state":
+                act = menu.addAction("Activate")
+                act.setEnabled(name != states.active)
+                act.triggered.connect(lambda: self.model_state_requested.emit(
+                    "activate", name, ""))
+                copy = menu.addAction("Copy")
+                copy.triggered.connect(lambda: self.model_state_requested.emit(
+                    "copy", name, ""))
+                rename = menu.addAction("Rename...")
+                rename.setEnabled(name != "Primary")
+                rename.triggered.connect(lambda: self._rename_state(name))
+                menu.addSeparator()
+                delete = menu.addAction(icons.icon("delete", 16), "Delete")
+                delete.setEnabled(name != "Primary")
+                delete.triggered.connect(
+                    lambda: self.model_state_requested.emit(
+                        "delete", name, ""))
+            else:
+                new = menu.addAction("New Model State")
+                new.triggered.connect(lambda: self.model_state_requested.emit(
+                    "new", "", ""))
+            menu.exec(self.viewport().mapToGlobal(pos))
+            return
 
         if kind == "plane":
             key = str(item.data(0, ROLE_ID))
@@ -450,6 +508,13 @@ class ModelBrowser(QtWidgets.QTreeWidget):
         action.setChecked(self._doc.plane_visible(name))
         action.triggered.connect(
             lambda: self.plane_visibility_toggled.emit(name))
+
+    def _rename_state(self, name: str) -> None:
+        text, ok = QtWidgets.QInputDialog.getText(
+            self, "Rename Model State", "Name:", QtWidgets.QLineEdit.Normal,
+            name)
+        if ok and text.strip() and text.strip() != name:
+            self.model_state_requested.emit("rename", name, text.strip())
 
     def _rename(self, fid: int, current: str) -> None:
         text, ok = QtWidgets.QInputDialog.getText(

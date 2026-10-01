@@ -100,6 +100,10 @@ class PartLibrary:
             key = self._key(path)
             self._cache.pop(key, None)
             self._looks.pop(key, None)
+            # and the same part in any of its model states
+            states = key + "\x00"
+            for held in [k for k in self._cache if k.startswith(states)]:
+                self._cache.pop(held, None)
 
     def appearance(self, path: str):
         """What the part in this file is meant to look like.
@@ -209,8 +213,15 @@ class PartLibrary:
                 out.append(self.appearance(member))
         return out
 
-    def shape(self, path: str, depth: int = 0) -> Optional[TopoDS_Shape]:
-        """The body a referenced file builds to, or None when it has none."""
+    def shape(self, path: str, depth: int = 0,
+              state: str = "") -> Optional[TopoDS_Shape]:
+        """The body a referenced file builds to, or None when it has none.
+
+        ``state`` asks for one of a part's model states rather than the one
+        it was saved in; see modelstates.
+        """
+        if state:
+            return self._state_shape(path, state)
         if self.provider is not None:
             live = self.provider(path)
             if live is not None:
@@ -228,6 +239,58 @@ class PartLibrary:
             return hit[1]
 
         shape = self._build(path, depth)
+        self._cache[key] = (stamp, shape)
+        return shape
+
+    def _state_shape(self, path: str, state: str) -> Optional[TopoDS_Shape]:
+        """A part as one of its model states, built and kept like any other.
+
+        Kept under the part's own key with the state's name added, so the
+        same file in three states is three bodies in the cache, each built
+        once.
+        """
+        import hashlib
+        from . import bodycache, mesh
+        from .modelstates import PRIMARY
+
+        key = self._key(path) + "\x00" + state
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            self._cache.pop(key, None)
+            return None
+        hit = self._cache.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+
+        stored = ""
+        try:
+            stored = hashlib.sha256(
+                (bodycache.key_for_part(path) + "|state:" + state)
+                .encode("utf-8")).hexdigest()
+        except Exception:
+            stored = ""
+        shape = bodycache.load(stored) if stored else None
+        if shape is not None:
+            mesh.accept_stored(shape)
+        else:
+            from .document import Document
+
+            opened = fileformat.read(path, expected_type=PART)
+            part = Document()
+            part.load_dict(opened.geometry)
+            part.path = path
+            if state not in part.model_states:
+                raise FileFormatError(
+                    "%s has no model state called %s"
+                    % (os.path.basename(path), state))
+            if state != part.model_states.active:
+                part.model_states.activate(part, state if state else PRIMARY)
+            part.rebuild()
+            shape = part.shape
+            mesh.mesh(shape)
+            if stored and part.last_report.ok and bodycache.cacheable(part):
+                bodycache.store(stored, shape)
         self._cache[key] = (stamp, shape)
         return shape
 

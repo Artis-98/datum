@@ -101,6 +101,9 @@ class Occurrence:
     grounded: bool = False
     suppressed: bool = False
     visible: bool = True
+    # which of the part's model states this one is; "" is whichever the
+    # part was saved in
+    model_state: str = ""
     # filled in by a rebuild
     error: str = ""
     shape: Optional[TopoDS_Shape] = None
@@ -142,6 +145,7 @@ class Occurrence:
             "grounded": self.grounded,
             "suppressed": self.suppressed,
             "visible": self.visible,
+            "model_state": self.model_state,
         }
 
     @classmethod
@@ -156,7 +160,8 @@ class Occurrence:
                    name=str(data.get("name", "")), placement=placement,
                    grounded=bool(data.get("grounded", False)),
                    suppressed=bool(data.get("suppressed", False)),
-                   visible=bool(data.get("visible", True)))
+                   visible=bool(data.get("visible", True)),
+                   model_state=str(data.get("model_state", "") or ""))
 
 
 @dataclass
@@ -554,7 +559,8 @@ class AssemblyDocument:
                 report.missing.append(occurrence.label)
                 continue
             try:
-                occurrence.shape = self.library.shape(path, depth)
+                occurrence.shape = self.library.shape(
+                    path, depth, state=occurrence.model_state)
             except FileFormatError as exc:
                 occurrence.error = str(exc)
                 report.errors.append("%s: %s" % (occurrence.label, exc))

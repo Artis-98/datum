@@ -1150,6 +1150,7 @@ class MainWindow(QtWidgets.QMainWindow):
         b.reorder_requested.connect(self.reorder_feature)
         b.rollback_requested.connect(self.set_rollback)
         b.delete_below_requested.connect(self.delete_features_below)
+        b.model_state_requested.connect(self.model_state_action)
         b.visibility_toggled.connect(lambda _fid: self._draw_visible_sketches())
 
         self.viewport.selection_changed.connect(self._on_viewport_selection)
@@ -2525,6 +2526,54 @@ class MainWindow(QtWidgets.QMainWindow):
         self.document.push_undo()
         self.document.remove_feature(feature_id)
         self.rebuild()
+
+    def model_state_action(self, action: str, name: str = "",
+                           new: str = "") -> None:
+        """Activate, create, copy, rename or delete a model state."""
+        document = self.document
+        states = getattr(document, "model_states", None)
+        if states is None or not self.in_part:
+            return
+        if self.editor.active:
+            self.finish_sketch()
+        self.close_dialogs()
+        document.push_undo()
+        try:
+            if action == "activate":
+                states.activate(document, name)
+                said = "Model state %s is the part now." % name
+            elif action == "new":
+                made = states.create(document)
+                said = ("Model state %s made from what the part is, and "
+                        "active: changes to parameters, suppression, "
+                        "properties and material are its own." % made)
+            elif action == "copy":
+                if name != states.active:
+                    states.activate(document, name)
+                made = states.create(document, "%s Copy" % name
+                                     if "%s Copy" % name not in states
+                                     else "")
+                said = "Model state %s copied from %s." % (made, name)
+            elif action == "rename":
+                states.rename(document, name, new)
+                said = "Model state %s is now %s." % (name, new)
+            elif action == "delete":
+                if QtWidgets.QMessageBox.question(
+                        self, "Delete Model State",
+                        "Delete the model state %s?" % name
+                ) != QtWidgets.QMessageBox.Yes:
+                    document._undo.pop()
+                    return
+                states.delete(document, name)
+                said = "Model state %s deleted." % name
+            else:
+                return
+        except (KeyError, ValueError) as exc:
+            QtWidgets.QMessageBox.warning(self, "Model States", str(exc))
+            return
+        self.rebuild(keep_camera=True)
+        self.status_message.setStyleSheet("")
+        self.status_message.setText(said)
 
     def delete_features_below(self) -> None:
         """Delete everything under the End of Part marker."""

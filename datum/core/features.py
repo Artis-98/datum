@@ -577,6 +577,9 @@ class WorkAxisFeature(Feature):
     plane_a: str = "XZ"
     plane_b: str = "YZ"
     ref: Optional[ShapeRef] = None       # the edge or face, in edge mode
+    # which way along the line it points, for a pattern that runs along it
+    # or a revolve that turns about it
+    flip: bool = False
 
     def build(self, ctx: BuildContext) -> None:
         if self.mode == "origin":
@@ -586,6 +589,9 @@ class WorkAxisFeature(Feature):
             axis = self._from_model(ctx)
         else:
             axis = self._from_planes(ctx)
+        if self.flip:
+            axis = WorkAxis(axis.origin, tuple(-c for c in axis.direction),
+                            axis.name)
         ctx.axes[self.name] = axis
 
     def _from_planes(self, ctx: BuildContext) -> WorkAxis:
@@ -658,7 +664,8 @@ class WorkAxisFeature(Feature):
         d: Dict[str, Any] = {"mode": self.mode,
                              "origin_axis": self.origin_axis,
                              "plane_a": self.plane_a,
-                             "plane_b": self.plane_b}
+                             "plane_b": self.plane_b,
+                             "flip": self.flip}
         if self.ref is not None:
             d["ref"] = self.ref.to_dict()
         return d
@@ -668,6 +675,7 @@ class WorkAxisFeature(Feature):
         self.origin_axis = str(data.get("origin_axis", "Z"))
         self.plane_a = str(data.get("plane_a", "XZ"))
         self.plane_b = str(data.get("plane_b", "YZ"))
+        self.flip = bool(data.get("flip", False))
         self.ref = (ShapeRef.from_dict(data["ref"]) if data.get("ref")
                     else None)
 
@@ -1607,7 +1615,10 @@ class MirrorFeature(Feature):
 
     def build(self, ctx: BuildContext) -> None:
         body = ctx.require_shape(self.name)
-        plane = ctx.planes.get(self.plane) or STANDARD_PLANES["XY"]
+        plane = ctx.planes.get(self.plane)
+        if plane is None:
+            raise FeatureError("%s: plane %s no longer exists"
+                               % (self.name, self.plane))
 
         if self.scope == "body":
             ctx.shape = kernel.boolean(body, kernel.mirror(body, plane), "join")
@@ -1678,15 +1689,25 @@ class PatternFeature(Feature):
                 ctx.shape = kernel.boolean(ctx.shape, moved,
                                            op if op != "new" else "join")
 
-    _AXES = {"X": (1.0, 0.0, 0.0), "Y": (0.0, 1.0, 0.0), "Z": (0.0, 0.0, 1.0)}
+    def _axis(self, ctx: BuildContext, name: str) -> WorkAxis:
+        """An origin axis or a work axis, by name.
+
+        Directions and the rotation axis used to be X, Y or Z only, which
+        are the origin axes' own names, so files written then still read.
+        """
+        axis = ctx.axes.get(name)
+        if axis is None:
+            raise FeatureError("%s: axis %s no longer exists"
+                               % (self.name, name))
+        return axis
 
     def _rect_placements(self, ctx: BuildContext) -> List[Callable]:
         n1 = max(1, int(round(ctx.evaluate(self.count1, "%s count" % self.name))))
         n2 = max(1, int(round(ctx.evaluate(self.count2, "%s count" % self.name))))
         s1 = ctx.evaluate(self.spacing1, "%s spacing" % self.name)
         s2 = ctx.evaluate(self.spacing2, "%s spacing" % self.name)
-        d1 = self._AXES.get(self.dir1, (1.0, 0.0, 0.0))
-        d2 = self._AXES.get(self.dir2, (0.0, 1.0, 0.0))
+        d1 = _unit(self._axis(ctx, self.dir1).direction)
+        d2 = _unit(self._axis(ctx, self.dir2).direction) if n2 > 1 else d1
 
         out = []
         for i in range(n1):
@@ -1699,13 +1720,15 @@ class PatternFeature(Feature):
         n = max(1, int(round(ctx.evaluate(self.count1, "%s count" % self.name))))
         total = 360.0 if self.full_circle else ctx.evaluate(
             self.angle, "%s angle" % self.name)
-        axis = self._AXES.get(self.axis, (0.0, 0.0, 1.0))
+        # round the axis itself, wherever it is, not round the origin
+        about = self._axis(ctx, self.axis)
+        origin, axis = about.origin, _unit(about.direction)
         step = total / n if self.full_circle else (total / max(1, n - 1))
 
         out = []
         for i in range(n):
             ang = step * i
-            out.append(lambda shape, a=ang: kernel.rotate(shape, (0, 0, 0),
+            out.append(lambda shape, a=ang: kernel.rotate(shape, origin,
                                                           axis, a))
         return out
 

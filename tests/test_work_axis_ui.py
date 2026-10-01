@@ -125,6 +125,21 @@ check("revolving about it builds a ring", win.document.last_report.ok
       win.document.last_report.message)
 
 print()
+print("Pattern offers it too")
+from datum.core.features import PatternFeature  # noqa: E402
+
+win.new_feature(PatternFeature, mode="circular")
+pump()
+dialog = win._active_dialog
+for label, combo in (("rotation axis", dialog.axis),
+                     ("direction", dialog.dir1)):
+    choices = [combo.itemData(i) for i in range(combo.count())]
+    check("the work axis is offered as the %s" % label,
+          "Work Axis1" in choices and "Z" in choices, choices)
+dialog.cancel()
+pump()
+
+print()
 print("Extrude To Plane")
 win.new_document(prompt=False)
 top = WorkPlaneFeature(name="Lid")

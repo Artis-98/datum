@@ -223,6 +223,96 @@ doc, report = plate_to(side)
 check("a plane alongside the extrude is refused",
       not report.ok and "never meets" in report.message, report.message)
 
+# ==========================================================================
+print()
+print("patterns and mirror about work features")
+
+from datum.core.features import MirrorFeature, PatternFeature  # noqa: E402
+
+doc = Document()
+base = PrimitiveFeature(name="Plate")
+base.kind = "box"
+base.a, base.b, base.c = "100", "100", "10"
+doc.add_feature(base)
+peg = PrimitiveFeature(name="Peg")
+peg.kind = "cylinder"
+peg.a, peg.b, peg.c = "5", "20", "0"
+peg.origin = ("10", "10", "0")
+peg.operation = "join"
+doc.add_feature(peg)
+for name, plane in (("X50", "YZ"), ("Y50", "XZ")):
+    wp = WorkPlaneFeature(name=name)
+    wp.base = plane
+    wp.offset = "50"
+    # the XZ plane faces -Y, so +Y is the other way from its normal
+    wp.flip = plane == "XZ"
+    doc.add_feature(wp)
+middle = WorkAxisFeature(name="Middle")
+middle.mode = "planes"
+middle.plane_a, middle.plane_b = "X50", "Y50"
+doc.add_feature(middle)
+ring = PatternFeature(name="Ring")
+ring.mode = "circular"
+ring.parents = [peg.id]
+ring.count1 = "4"
+ring.axis = "Middle"
+doc.add_feature(ring)
+report = doc.rebuild()
+check("a circular pattern round a work axis builds", report.ok,
+      report.message)
+if report.ok:
+    _v, centre = kernel.volume_and_centre(doc.shape)
+    check("and goes round that axis, not round the origin",
+          near(centre[0], 50.0, 1e-3) and near(centre[1], 50.0, 1e-3),
+          centre)
+    box = kernel.bounding_box(doc.shape)
+    check("so every copy is still on the plate",
+          box[0] > -1e-6 and box[1] > -1e-6 and box[3] < 100 + 1e-6,
+          box)
+
+ring.axis = "Missing"
+report = doc.rebuild()
+check("an axis that is gone is an error",
+      not report.ok and "Missing" in report.message, report.message)
+
+ring.mode = "rectangular"
+ring.axis = "Z"
+ring.dir1 = "Middle"
+ring.count1 = "2"
+ring.spacing1 = "30"
+report = doc.rebuild()
+middle.flip = True
+report = doc.rebuild()
+check("Reverse direction turns the axis round",
+      report.ok and near(doc.axes["Middle"].direction[2], 1.0, 1e-9),
+      doc.axes["Middle"].direction)
+box = kernel.bounding_box(doc.shape) if report.ok else None
+# the copy is 30 up the axis, now that it points up
+check("a rectangular pattern runs along a work axis",
+      box is not None and near(box[5], 50.0)
+      and near(box[0], 0.0) and near(box[3], 100.0), box)
+
+doc = Document()
+block = PrimitiveFeature(name="Block")
+block.kind = "box"
+block.a, block.b, block.c = "10", "10", "10"
+doc.add_feature(block)
+far = WorkPlaneFeature(name="Far")
+far.base = "YZ"
+far.offset = "20"
+doc.add_feature(far)
+mirror = MirrorFeature(name="Mirror")
+mirror.plane = "Far"
+doc.add_feature(mirror)
+report = doc.rebuild()
+check("mirror about a work plane", report.ok
+      and near(kernel.bounding_box(doc.shape)[3], 40.0),
+      report.ok and kernel.bounding_box(doc.shape))
+mirror.plane = "Gone"
+report = doc.rebuild()
+check("and about one that is gone, an error rather than XY",
+      not report.ok and "Gone" in report.message, report.message)
+
 print()
 print("FAILED: " + ", ".join(FAILS) if FAILS else "all passed")
 sys.exit(1 if FAILS else 0)

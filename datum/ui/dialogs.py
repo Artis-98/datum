@@ -321,6 +321,15 @@ class FeatureDialog(QtWidgets.QDialog):
         return [f for f in self.doc.features
                 if isinstance(f, cls) and self.doc.index_of(f.id) < index]
 
+    def axis_combo(self) -> QtWidgets.QComboBox:
+        """The origin axes, then every work axis made before this feature."""
+        combo = QtWidgets.QComboBox()
+        for name in ("X", "Y", "Z"):
+            combo.addItem(icons.icon("axis", 15), "%s Axis" % name, name)
+        for axis in self.earlier(WorkAxisFeature):
+            combo.addItem(icons.icon("axis", 15), axis.name, axis.name)
+        return combo
+
     def plane_combo(self, current: str) -> QtWidgets.QComboBox:
         combo = QtWidgets.QComboBox()
         for name in ("XY", "XZ", "YZ"):
@@ -841,9 +850,7 @@ class PatternDialog(FeatureDialog):
         self.count1 = self.expression(self.feature.count1, "")
         self.form.add("Count", self.count1)
 
-        self.dir1 = QtWidgets.QComboBox()
-        for axis in ("X", "Y", "Z"):
-            self.dir1.addItem("%s axis" % axis, axis)
+        self.dir1 = self.axis_combo()
         self.bind(self.dir1)
         self.form.add("Direction", self.dir1)
 
@@ -855,9 +862,7 @@ class PatternDialog(FeatureDialog):
         self.count2 = self.expression(self.feature.count2, "")
         self.form.add("Count 2", self.count2)
 
-        self.dir2 = QtWidgets.QComboBox()
-        for axis in ("X", "Y", "Z"):
-            self.dir2.addItem("%s axis" % axis, axis)
+        self.dir2 = self.axis_combo()
         self.bind(self.dir2)
         self.form.add("Direction 2", self.dir2)
 
@@ -866,9 +871,7 @@ class PatternDialog(FeatureDialog):
 
         self.form.add_separator()
 
-        self.axis = QtWidgets.QComboBox()
-        for axis in ("X", "Y", "Z"):
-            self.axis.addItem("%s axis" % axis, axis)
+        self.axis = self.axis_combo()
         self.bind(self.axis)
         self.form.add("Rotation axis", self.axis)
 
@@ -1141,6 +1144,11 @@ class WorkAxisDialog(FeatureDialog):
         self.picked.setWordWrap(True)
         self.form.add("Picked", self.picked)
 
+        self.flip = QtWidgets.QCheckBox("Reverse direction")
+        self.flip.setToolTip("Which way a pattern along this axis runs")
+        self.bind(self.flip)
+        self.form.add("", self.flip)
+
         self.mode.currentIndexChanged.connect(lambda _i: self._sync())
 
     def _sync(self):
@@ -1161,6 +1169,7 @@ class WorkAxisDialog(FeatureDialog):
         self.mode.setCurrentIndex(max(0, self.mode.findData(self.feature.mode)))
         self.origin_axis.setCurrentIndex(
             max(0, self.origin_axis.findData(self.feature.origin_axis)))
+        self.flip.setChecked(self.feature.flip)
         self._sync()
 
     def store(self):
@@ -1168,6 +1177,7 @@ class WorkAxisDialog(FeatureDialog):
         self.feature.origin_axis = self.origin_axis.currentData()
         self.feature.plane_a = self.plane_a.currentData()
         self.feature.plane_b = self.plane_b.currentData()
+        self.feature.flip = self.flip.isChecked()
 
 
 class MoveDialog(FeatureDialog):

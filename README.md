@@ -111,14 +111,17 @@ or directly:
 - Hole — simple, counterbored, countersunk; drilling direction picked from the
   geometry
 - Fillet, Chamfer, Shell
-- Rectangular and circular patterns of *features*, Mirror (body or features)
+- Rectangular and circular patterns of *features*, along or round an origin
+  axis or any work axis; Mirror (body or features) about a datum or work
+  plane
 - Box, cylinder, sphere, cone, torus primitives
 - Work planes pulled off any flat face or datum plane — press, drag away, and
   release to set the offset, then type an exact value if you want one. The
   plane tracks its face as the model changes
 - **Work axes**: where two planes meet, along an origin axis, or along a
   straight edge or through the centre of a round face selected before
-  pressing **Axis**. Shown as a dashed line through the model
+  pressing **Axis**. Shown as a dashed line through the model; Reverse
+  direction picks which way a pattern along it runs
 - Move Body
 - STEP / IGES / BREP import as a base body
 

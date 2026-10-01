@@ -432,6 +432,26 @@ class Sketch:
         ids.append(self.add_arc(p2, r, ang - math.pi / 2, ang + math.pi / 2))
         ids.append(self.add_arc(p1, r, ang + math.pi / 2,
                                 ang + 3.0 * math.pi / 2))
+
+        # What Inventor puts in a slot besides its outline: the sides held
+        # tangent to the ends and the ends held the same size, so dragging
+        # one part of it moves a slot and not four loose pieces; and a
+        # construction centre line with a point held at its middle, which
+        # is the thing to constrain when a slot has to sit centred on
+        # something.  The centre line runs between the two arc centres, so
+        # it is the slot's own axis and needs nothing to keep it there.
+        for side in ids[:2]:
+            for end in ids[2:]:
+                self.add_constraint("tangent", entities=[side, end])
+        self.add_constraint("equal", entities=[ids[2], ids[3]])
+        centre_line = self.add_line_ids(self.entities[ids[3]].points[0],
+                                        self.entities[ids[2]].points[0],
+                                        construction=True)
+        middle = self.add_point((p1[0] + p2[0]) / 2.0,
+                                (p1[1] + p2[1]) / 2.0)
+        self.add_constraint("midpoint", points=[middle],
+                            entities=[centre_line])
+        ids.append(centre_line)
         return ids
 
     def add_quad(self, corners: Sequence[Tuple[float, float]],

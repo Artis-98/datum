@@ -90,7 +90,13 @@ def side_lengths(sketch):
 
 
 def kinds(sketch):
-    return sorted(e.kind for e in sketch.entities.values())
+    """The outline: a slot's construction centre line is not part of it."""
+    return sorted(e.kind for e in sketch.entities.values()
+                  if not e.construction)
+
+
+def centre_lines(sketch):
+    return [e for e in sketch.entities.values() if e.construction]
 
 
 def radii(sketch):
@@ -234,6 +240,7 @@ click(40, 0)
 click(40, 6)
 check("two lines and two arcs",
       kinds(sketch) == ["arc", "arc", "line", "line"], kinds(sketch))
+check("and a construction centre line", len(centre_lines(sketch)) == 1)
 check("the straight sides are the centre distance",
       near(side_lengths(sketch)[0], 40.0), side_lengths(sketch))
 check("capped at half the width", radii(sketch) == [6.0, 6.0], radii(sketch))
@@ -262,6 +269,7 @@ click(40, 0)
 click(40, 6)
 check("two lines and two arcs",
       kinds(sketch) == ["arc", "arc", "line", "line"], kinds(sketch))
+check("and a construction centre line", len(centre_lines(sketch)) == 1)
 check("the straight part is shorter by the two caps",
       near(side_lengths(sketch)[0], 28.0), side_lengths(sketch))
 # the ends are arcs, so the span is the cap centres plus their radius
@@ -291,6 +299,7 @@ click(20, 0)
 click(20, 6)
 check("two lines and two arcs",
       kinds(sketch) == ["arc", "arc", "line", "line"], kinds(sketch))
+check("and a construction centre line", len(centre_lines(sketch)) == 1)
 check("centre to centre is 40", near(side_lengths(sketch)[0], 40.0),
       side_lengths(sketch))
 xs = [round(sketch.points[p].x, 3) for p in sketch.points]

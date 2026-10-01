@@ -32,6 +32,10 @@ or directly:
   then Slot as Center to Center, Overall, Center Point, Three Point Arc and
   Center Point Arc, then Polygon. The button keeps whichever you used last,
   so the common two-point rectangle stays a single click
+- A straight slot comes out the way Inventor builds one: sides tangent to
+  the ends, ends of equal size, a construction centre line between the arc
+  centres and a **centre point** held at its middle, so Coincident between
+  that point and anything else centres the slot on it
 - A rectangle drawn at an angle is held square by parallels on the opposite
   sides and one perpendicular, since horizontal and vertical no longer apply
 - 2D fillet, trim (splits at real intersections), offset

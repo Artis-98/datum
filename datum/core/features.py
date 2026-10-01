@@ -67,6 +67,36 @@ class Body:
         return kernel.is_valid(self.shape)
 
 
+@dataclass
+class WorkAxis:
+    """A line in space a feature can turn about or run along."""
+
+    origin: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+    direction: Tuple[float, float, float] = (0.0, 0.0, 1.0)
+    name: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"origin": list(self.origin),
+                "direction": list(self.direction), "name": self.name}
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "WorkAxis":
+        return cls(tuple(float(c) for c in data.get("origin", (0, 0, 0))),
+                   tuple(float(c) for c in data.get("direction", (0, 0, 1))),
+                   str(data.get("name", "")))
+
+
+# the part's own three axes, there from the start like the origin planes
+STANDARD_AXES: Dict[str, WorkAxis] = {
+    "X": WorkAxis((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), "X"),
+    "Y": WorkAxis((0.0, 0.0, 0.0), (0.0, 1.0, 0.0), "Y"),
+    "Z": WorkAxis((0.0, 0.0, 0.0), (0.0, 0.0, 1.0), "Z"),
+}
+
+# how a feature names an axis rather than a direction of its own sketch
+AXIS_PREFIX = "axis:"
+
+
 class BuildContext:
     """State threaded through a rebuild."""
 
@@ -75,6 +105,7 @@ class BuildContext:
         self.bodies: List[Body] = []
         self.sketches: Dict[int, Sketch] = {}
         self.planes: Dict[int, SketchPlane] = dict(STANDARD_PLANES)
+        self.axes: Dict[str, WorkAxis] = dict(STANDARD_AXES)
         # feature id -> (tool solid, operation) for pattern/mirror replay
         self.tools: Dict[int, Tuple[TopoDS_Shape, str]] = {}
         self.log: List[str] = []
@@ -529,6 +560,129 @@ class WorkPlaneFeature(Feature):
             self.face_ref = ShapeRef.from_dict(data["face_ref"])
 
 
+@dataclass
+class WorkAxisFeature(Feature):
+    """A construction axis: an origin axis, where two planes meet, or the
+    line of a straight model edge or the centre of a round face.
+
+    Revolve can turn about one and a circular pattern can go round one, so
+    neither has to be drawn into a sketch first.
+    """
+
+    type_name: str = "workaxis"
+    icon: str = "axis"
+    name: str = "Work Axis"
+    mode: str = "planes"                 # origin / planes / edge
+    origin_axis: str = "Z"
+    plane_a: str = "XZ"
+    plane_b: str = "YZ"
+    ref: Optional[ShapeRef] = None       # the edge or face, in edge mode
+
+    def build(self, ctx: BuildContext) -> None:
+        if self.mode == "origin":
+            base = ctx.axes.get(self.origin_axis) or STANDARD_AXES["Z"]
+            axis = WorkAxis(base.origin, base.direction, self.name)
+        elif self.mode == "edge":
+            axis = self._from_model(ctx)
+        else:
+            axis = self._from_planes(ctx)
+        ctx.axes[self.name] = axis
+
+    def _from_planes(self, ctx: BuildContext) -> WorkAxis:
+        a = ctx.planes.get(self.plane_a)
+        b = ctx.planes.get(self.plane_b)
+        if a is None or b is None:
+            raise FeatureError("%s: plane %s no longer exists" % (
+                self.name, self.plane_a if a is None else self.plane_b))
+        na, nb = _unit(a.normal), _unit(b.normal)
+        d = _cross(na, nb)
+        dd = sum(c * c for c in d)
+        if dd < 1e-12:
+            raise FeatureError("%s: %s and %s are parallel, so they never "
+                               "meet" % (self.name, self.plane_a,
+                                         self.plane_b))
+        # the point on both planes nearest the origin
+        ha = sum(na[i] * a.origin[i] for i in range(3))
+        hb = sum(nb[i] * b.origin[i] for i in range(3))
+        p1, p2 = _cross(nb, d), _cross(d, na)
+        point = tuple((ha * p1[i] + hb * p2[i]) / dd for i in range(3))
+        return WorkAxis(point, _unit(d), self.name)
+
+    def _from_model(self, ctx: BuildContext) -> WorkAxis:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve, BRepAdaptor_Surface
+        from OCP.GeomAbs import GeomAbs_CurveType, GeomAbs_SurfaceType
+
+        if self.ref is None:
+            raise FeatureError("%s: pick a straight edge or a round face"
+                               % self.name)
+        if ctx.shape is None:
+            raise FeatureError("%s: needs a body to sit on" % self.name)
+        found = self.ref.rebind(ctx.shape)
+        if found is None:
+            raise FeatureError("%s: its edge or face no longer exists"
+                               % self.name)
+        if self.ref.kind == "edge":
+            curve = BRepAdaptor_Curve(TopoDS.Edge_s(found))
+            kind = curve.GetType()
+            if kind == GeomAbs_CurveType.GeomAbs_Line:
+                line = curve.Line()
+            elif kind == GeomAbs_CurveType.GeomAbs_Circle:
+                line = curve.Circle().Axis()
+            else:
+                raise FeatureError("%s: that edge is neither straight nor "
+                                   "round" % self.name)
+        else:
+            surface = BRepAdaptor_Surface(TopoDS.Face_s(found))
+            kind = surface.GetType()
+            if kind == GeomAbs_SurfaceType.GeomAbs_Cylinder:
+                line = surface.Cylinder().Axis()
+            elif kind == GeomAbs_SurfaceType.GeomAbs_Cone:
+                line = surface.Cone().Axis()
+            else:
+                raise FeatureError("%s: that face is not round" % self.name)
+        loc, direction = line.Location(), line.Direction()
+        return WorkAxis((loc.X(), loc.Y(), loc.Z()),
+                        (direction.X(), direction.Y(), direction.Z()),
+                        self.name)
+
+    def summary(self) -> str:
+        if self.mode == "origin":
+            what = "along %s" % self.origin_axis
+        elif self.mode == "edge":
+            what = "on a model %s" % (self.ref.kind if self.ref else "edge")
+        else:
+            what = "where %s meets %s" % (self.plane_a, self.plane_b)
+        return "%s: %s" % (self.name, what)
+
+    def field_dict(self) -> Dict[str, Any]:
+        d: Dict[str, Any] = {"mode": self.mode,
+                             "origin_axis": self.origin_axis,
+                             "plane_a": self.plane_a,
+                             "plane_b": self.plane_b}
+        if self.ref is not None:
+            d["ref"] = self.ref.to_dict()
+        return d
+
+    def load_fields(self, data: Dict[str, Any]) -> None:
+        self.mode = str(data.get("mode", "planes"))
+        self.origin_axis = str(data.get("origin_axis", "Z"))
+        self.plane_a = str(data.get("plane_a", "XZ"))
+        self.plane_b = str(data.get("plane_b", "YZ"))
+        self.ref = (ShapeRef.from_dict(data["ref"]) if data.get("ref")
+                    else None)
+
+
+def _unit(v: Sequence[float]) -> Tuple[float, float, float]:
+    n = math.sqrt(sum(c * c for c in v)) or 1.0
+    return (v[0] / n, v[1] / n, v[2] / n)
+
+
+def _cross(a: Sequence[float], b: Sequence[float]
+           ) -> Tuple[float, float, float]:
+    return (a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
 def _rotate_plane(plane: SketchPlane, axis: Sequence[float],
                   angle_deg: float) -> SketchPlane:
     a = math.radians(angle_deg)
@@ -594,6 +748,8 @@ class ExtrudeFeature(Feature):
     body_name: str = ""
     reversed: bool = False
     taper: str = "0"
+    # extent "to_plane": the datum or work plane the extrude stops at
+    to_plane: str = ""
 
     def depends_on(self) -> List[int]:
         ids = self.profiles.sketch_ids()
@@ -605,7 +761,9 @@ class ExtrudeFeature(Feature):
         normal = plane.normal
         taper = ctx.evaluate(self.taper, "%s taper" % self.name)
 
-        if self.extent == "through_all":
+        if self.extent == "to_plane":
+            tool = self._to_plane(ctx, profile, normal)
+        elif self.extent == "through_all":
             # sweep from well behind the body to well in front of it, so the
             # cut clears the solid no matter which side the sketch sits on
             reach = _through_all_reach(ctx.shape, plane)
@@ -626,8 +784,61 @@ class ExtrudeFeature(Feature):
 
         ctx.apply(tool, self.operation, self.id, name=self.body_name)
 
+    def _to_plane(self, ctx: BuildContext, profile: TopoDS_Shape,
+                  normal: Sequence[float]) -> TopoDS_Shape:
+        """Run the profile along its normal until it meets a plane.
+
+        A plane square to the extrude is simply a distance.  A tilted one
+        cuts the end off at its own angle, the way Inventor's To does: the
+        prism is run out past it and trimmed back to it.
+        """
+        target = ctx.planes.get(self.to_plane)
+        if target is None:
+            raise FeatureError("%s: pick the plane to extrude to" % self.name
+                               if not self.to_plane else
+                               "%s: plane %s no longer exists"
+                               % (self.name, self.to_plane))
+        n = _unit(normal)
+        nt = _unit(target.normal)
+        facing = sum(n[i] * nt[i] for i in range(3))
+        if abs(facing) < 1e-6:
+            raise FeatureError("%s: %s runs alongside the extrude, so it "
+                               "never meets it" % (self.name, self.to_plane))
+
+        def reach(point) -> float:
+            """How far along the normal from a point to the target plane."""
+            return sum(nt[i] * (target.origin[i] - point[i])
+                       for i in range(3)) / facing
+
+        xmin, ymin, zmin, xmax, ymax, zmax = kernel.bounding_box(profile)
+        corners = [(x, y, z) for x in (xmin, xmax) for y in (ymin, ymax)
+                   for z in (zmin, zmax)]
+        reaches = [reach(c) for c in corners]
+        if min(reaches) < -1e-6 and max(reaches) > 1e-6:
+            raise FeatureError("%s: %s passes through the profile itself"
+                               % (self.name, self.to_plane))
+        sign = 1.0 if sum(reaches) > 0 else -1.0
+        far = max(abs(r) for r in reaches)
+        if far < 1e-6:
+            raise FeatureError("%s: the profile already lies on %s"
+                               % (self.name, self.to_plane))
+        if abs(abs(facing) - 1.0) < 1e-9:
+            return kernel.extrude(profile, n, sign * far, 0.0)
+
+        # tilted: run past the plane, then keep only the near side of it
+        tool = kernel.extrude(profile, n, sign * (far * 1.5 + 1.0), 0.0)
+        centre = kernel.shape_centre(profile)
+        size = 4.0 * (far + max(xmax - xmin, ymax - ymin, zmax - zmin)) + 10.0
+        keep = kernel.half_box(target.origin, nt, centre, size)
+        try:
+            return kernel.boolean(tool, keep, "intersect")
+        except KernelError as exc:
+            raise FeatureError("%s: %s" % (self.name, exc)) from exc
+
     def summary(self) -> str:
-        if self.extent == "through_all":
+        if self.extent == "to_plane":
+            what = "to %s" % (self.to_plane or "?")
+        elif self.extent == "through_all":
             what = "through all"
         elif self.extent == "symmetric":
             what = "%s symmetric" % self.distance
@@ -646,12 +857,14 @@ class ExtrudeFeature(Feature):
             "operation": self.operation, "body_name": self.body_name,
             "reversed": self.reversed,
             "taper": self.taper,
+            "to_plane": self.to_plane,
         }
 
     def load_fields(self, data: Dict[str, Any]) -> None:
         self.sketch_id = int(data.get("sketch_id", 0))
         self.profiles = ProfileSelection.from_list(data.get("profiles"))
         self.distance = str(data.get("distance", "10"))
+        self.to_plane = str(data.get("to_plane", ""))
         self.extent = data.get("extent", "distance")
         self.operation = data.get("operation", JOIN)
         self.body_name = str(data.get("body_name", ""))
@@ -848,7 +1061,9 @@ class RevolveFeature(Feature):
     angle: str = "360"
     operation: str = JOIN
     body_name: str = ""
-    axis: str = "X"          # X / Y of the sketch plane, or "entity"
+    # X / Y of the sketch plane, "entity" for a sketch line, or
+    # "axis:<name>" for an origin or work axis
+    axis: str = "X"
     axis_entity: int = 0     # sketch entity id when axis == "entity"
     reversed: bool = False
 
@@ -867,8 +1082,16 @@ class RevolveFeature(Feature):
         ids = self.profiles.sketch_ids() or ([self.sketch_id]
                                              if self.sketch_id else [])
         sketch = ctx.sketches.get(ids[0]) if ids else None
-        origin, axis_dir = (self._axis(sketch) if sketch is not None
-                            else (plane.origin, plane.xdir))
+        if self.axis.startswith(AXIS_PREFIX):
+            named = ctx.axes.get(self.axis[len(AXIS_PREFIX):])
+            if named is None:
+                raise FeatureError("%s: axis %s no longer exists"
+                                   % (self.name,
+                                      self.axis[len(AXIS_PREFIX):]))
+            origin, axis_dir = named.origin, named.direction
+        else:
+            origin, axis_dir = (self._axis(sketch) if sketch is not None
+                                else (plane.origin, plane.xdir))
         try:
             tool = kernel.revolve(profile, origin, axis_dir, angle)
         except KernelError as exc:
@@ -893,7 +1116,9 @@ class RevolveFeature(Feature):
         return plane.origin, plane.xdir
 
     def summary(self) -> str:
-        return "%s: %s deg about %s, %s" % (self.name, self.angle, self.axis,
+        about = (self.axis[len(AXIS_PREFIX):]
+                 if self.axis.startswith(AXIS_PREFIX) else self.axis)
+        return "%s: %s deg about %s, %s" % (self.name, self.angle, about,
                                             self.output_summary())
 
     def field_dict(self) -> Dict[str, Any]:
@@ -1609,7 +1834,8 @@ class CodeFeature(Feature):
 
 FEATURE_TYPES: Dict[str, type] = {
     cls.type_name: cls for cls in (
-        SketchFeature, WorkPlaneFeature, ExtrudeFeature, RevolveFeature,
+        SketchFeature, WorkPlaneFeature, WorkAxisFeature,
+        ExtrudeFeature, RevolveFeature,
         SweepFeature, LoftFeature, HoleFeature, PrimitiveFeature,
         ImportFeature, FilletFeature, ChamferFeature, ShellFeature,
         MirrorFeature, PatternFeature, MoveFeature, CodeFeature,

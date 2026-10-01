@@ -24,6 +24,7 @@ from ..core.features import (
     ImportFeature, LoftFeature, MirrorFeature, MoveFeature, PatternFeature,
     PrimitiveFeature, RevolveFeature, ShellFeature, SketchFeature,
     SweepFeature, WorkPlaneFeature, plane_from_face, CodeFeature,
+    WorkAxisFeature,
 )
 from ..core.naming import RefSet, ShapeRef
 from ..core.sketch import STANDARD_PLANES, Sketch, SketchPlane
@@ -119,8 +120,10 @@ class _EscapeAnywhere(QtCore.QObject):
                 or event.key() != QtCore.Qt.Key_Escape
                 or event.modifiers() != QtCore.Qt.NoModifier):
             return False
-        focus = QtWidgets.QApplication.focusWidget()
-        if focus is None or obj is not focus:
+        # with the window not active nothing has the focus, and the key went
+        # straight to whatever it was sent to
+        focus = QtWidgets.QApplication.focusWidget() or obj
+        if not isinstance(focus, QtWidgets.QWidget) or obj is not focus:
             return False
         if focus.window() is not self.window:
             return False
@@ -364,6 +367,11 @@ class MainWindow(QtWidgets.QMainWindow):
                       "Click a flat face or datum plane and drag to pull an "
                       "offset work plane off it"
                       ).clicked.connect(self.start_work_plane)
+        panel.add_big("axis", "Axis",
+                      "A work axis: where two planes meet, an origin axis, "
+                      "or along a selected straight edge or round face. "
+                      "Revolve can turn about it."
+                      ).clicked.connect(self.start_work_axis)
 
         panel = model.add_panel("Pattern")
         panel.add_small("pattern", "Rectangular Pattern").clicked.connect(
@@ -2197,7 +2205,31 @@ class MainWindow(QtWidgets.QMainWindow):
                     self.viewport.draw_shape(
                         edge, C.sketch_construction if ent.construction
                         else "#7f8894", 1.2, dashed=ent.construction)
+        self._draw_work_axes()
         self.viewport.redraw()
+
+    def _draw_work_axes(self) -> None:
+        """Each work axis as a long dashed line through the model, named."""
+        made = [f for f in self.document.features
+                if isinstance(f, WorkAxisFeature) and not f.suppressed]
+        if not made:
+            return
+        span = self._picker_size()
+        for feature in made:
+            axis = self.document.axes.get(feature.name)
+            if axis is None:
+                continue
+            d = axis.direction
+            centre = axis.origin
+            if self.document.shape is not None:
+                # centred on the model along the axis, not at its origin
+                mid = kernel.shape_centre(self.document.shape)
+                t = sum((mid[i] - centre[i]) * d[i] for i in range(3))
+                centre = tuple(centre[i] + t * d[i] for i in range(3))
+            a = tuple(centre[i] - d[i] * span for i in range(3))
+            b = tuple(centre[i] + d[i] * span for i in range(3))
+            self.viewport.draw_edge(a, b, "#c8a24f", 1.6, dashed=True)
+            self.viewport.draw_text(feature.name, b, "#c8a24f", 13.0)
 
     # ============================================================ assemblies
 
@@ -2501,6 +2533,27 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.status_message.setText(feature.summary())
 
     # =========================================================== work planes
+
+    def start_work_axis(self) -> None:
+        """A work axis, from whatever is selected if that can make one."""
+        if not self.in_part:
+            return
+        preset = {}
+        picked_edges = self.viewport.selected_edges()
+        picked_faces = self.viewport.selected_faces()
+        if self.document.shape is not None and (picked_edges or picked_faces):
+            kind = "edge" if picked_edges else "face"
+            refs = RefSet()
+            refs.capture_from(self.document.shape, kind,
+                              [(picked_edges or picked_faces)[0]])
+            if refs.refs:
+                preset = {"mode": "edge", "ref": refs.refs[0]}
+        taken = {f.name for f in self.document.features}
+        n = 1
+        while "Work Axis%d" % n in taken:
+            n += 1
+        preset["name"] = "Work Axis%d" % n
+        self.new_feature(WorkAxisFeature, **preset)
 
     def start_work_plane(self) -> None:
         """Pick a flat face or datum plane, then drag the new plane off it."""

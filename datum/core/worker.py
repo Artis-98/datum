@@ -208,6 +208,8 @@ def _rebuild(key: str, path: str, data: Dict[str, Any], trusted: bool,
         "sketches": list(document._sketch_cache),
         "planes": {name: plane.to_dict()
                    for name, plane in document.planes.items()},
+        "axes": {name: axis.to_dict()
+                 for name, axis in document.axes.items()},
         "errors": [list(e) for e in report.errors],
         "warnings": list(report.warnings),
         "duration": report.duration,

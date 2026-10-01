@@ -22,6 +22,7 @@ from ..core.features import (
     HoleFeature, ImportFeature, LoftFeature, MirrorFeature, MoveFeature,
     PatternFeature, PrimitiveFeature, RevolveFeature, ShellFeature,
     SketchFeature, SweepFeature, WorkPlaneFeature, CodeFeature,
+    AXIS_PREFIX, WorkAxisFeature,
 )
 from ..core.naming import RefSet
 from . import icons
@@ -314,10 +315,19 @@ class FeatureDialog(QtWidgets.QDialog):
         self.bind(combo)
         return combo
 
+    def earlier(self, cls) -> List[Feature]:
+        """Features of a kind that come before this one in the tree."""
+        index = self.doc.index_of(self.feature.id)
+        return [f for f in self.doc.features
+                if isinstance(f, cls) and self.doc.index_of(f.id) < index]
+
     def plane_combo(self, current: str) -> QtWidgets.QComboBox:
         combo = QtWidgets.QComboBox()
         for name in ("XY", "XZ", "YZ"):
             combo.addItem(icons.icon("plane", 15), "%s Plane" % name, name)
+        # and the work planes made before this feature, which it can use
+        for plane in self.earlier(WorkPlaneFeature):
+            combo.addItem(icons.icon("plane", 15), plane.name, plane.name)
         pos = combo.findData(current)
         if pos >= 0:
             combo.setCurrentIndex(pos)
@@ -370,11 +380,18 @@ class ExtrudeDialog(FeatureDialog):
         self.extent.addItem("Distance", "distance")
         self.extent.addItem("Symmetric", "symmetric")
         self.extent.addItem("Through All", "through_all")
+        self.extent.addItem("To Plane", "to_plane")
         self.bind(self.extent)
         self.form.add("Extents", self.extent)
 
         self.distance = self.expression(self.feature.distance)
         self.form.add("Distance", self.distance)
+
+        self.to_plane = self.plane_combo(self.feature.to_plane)
+        self.to_plane.setToolTip(
+            "The datum or work plane the extrude runs up to. A tilted one "
+            "cuts the end on its slope.")
+        self.form.add("To", self.to_plane)
 
         self.taper = self.expression(self.feature.taper, "deg")
         self.form.add("Taper", self.taper)
@@ -387,8 +404,13 @@ class ExtrudeDialog(FeatureDialog):
 
     def _sync_enabled(self):
         mode = self.extent.currentData()
-        self.distance.setEnabled(mode != "through_all")
+        to_plane = mode == "to_plane"
+        self.distance.setEnabled(mode not in ("through_all", "to_plane"))
         self.taper.setEnabled(mode == "distance")
+        self.form.set_visible(self.distance, not to_plane)
+        self.form.set_visible(self.to_plane, to_plane)
+        # the plane decides which way it goes, so there is nothing to flip
+        self.flip.setEnabled(not to_plane)
 
     def load(self):
         self.load_boolean()
@@ -403,6 +425,7 @@ class ExtrudeDialog(FeatureDialog):
         self.store_boolean()
         self.feature.extent = self.extent.currentData()
         self.feature.distance = self.distance.text()
+        self.feature.to_plane = self.to_plane.currentData() or ""
         self.feature.taper = self.taper.text()
         self.feature.reversed = self.flip.isChecked()
 
@@ -421,6 +444,13 @@ class RevolveDialog(FeatureDialog):
         self.axis = QtWidgets.QComboBox()
         self.axis.addItem("Sketch X axis", "X")
         self.axis.addItem("Sketch Y axis", "Y")
+        # the part's own axes and every work axis made before this feature
+        for name in ("X", "Y", "Z"):
+            self.axis.addItem(icons.icon("axis", 15), "%s Axis" % name,
+                              AXIS_PREFIX + name)
+        for axis in self.earlier(WorkAxisFeature):
+            self.axis.addItem(icons.icon("axis", 15), axis.name,
+                              AXIS_PREFIX + axis.name)
         self.bind(self.axis)
         self.form.add("Axis", self.axis)
 
@@ -1074,6 +1104,72 @@ class WorkPlaneDialog(FeatureDialog):
         self.feature.flip = self.flip.isChecked()
 
 
+class WorkAxisDialog(FeatureDialog):
+    """Where a work axis comes from: an origin axis, two planes, or a pick.
+
+    A straight edge or a round face selected before pressing Axis is taken
+    straight away; the planes and origin choices need nothing picked.
+    """
+
+    MODES = (("planes", "Where two planes meet"),
+             ("origin", "Origin axis"),
+             ("edge", "Straight edge or round face"))
+
+    def __init__(self, host, feature, is_new, snapshot=None):
+        super().__init__(host, feature, "Work Axis", "axis", is_new, snapshot)
+
+    def build(self):
+        self.mode = QtWidgets.QComboBox()
+        for key, label in self.MODES:
+            self.mode.addItem(label, key)
+        self.bind(self.mode)
+        self.form.add("Axis", self.mode)
+
+        self.origin_axis = QtWidgets.QComboBox()
+        for name in ("X", "Y", "Z"):
+            self.origin_axis.addItem(icons.icon("axis", 15),
+                                     "%s Axis" % name, name)
+        self.bind(self.origin_axis)
+        self.form.add("Origin", self.origin_axis)
+
+        self.plane_a = self.plane_combo(self.feature.plane_a)
+        self.form.add("First plane", self.plane_a)
+        self.plane_b = self.plane_combo(self.feature.plane_b)
+        self.form.add("Second plane", self.plane_b)
+
+        self.picked = QtWidgets.QLabel()
+        self.picked.setWordWrap(True)
+        self.form.add("Picked", self.picked)
+
+        self.mode.currentIndexChanged.connect(lambda _i: self._sync())
+
+    def _sync(self):
+        mode = self.mode.currentData()
+        self.form.set_visible(self.origin_axis, mode == "origin")
+        self.form.set_visible(self.plane_a, mode == "planes")
+        self.form.set_visible(self.plane_b, mode == "planes")
+        self.form.set_visible(self.picked, mode == "edge")
+        if self.feature.ref is not None:
+            self.picked.setText("Model %s" % self.feature.ref.kind)
+            self.picked.setStyleSheet("color: %s;" % C.ok)
+        else:
+            self.picked.setText("Select a straight edge or a round face "
+                                "first, then press Axis.")
+            self.picked.setStyleSheet("color: %s;" % C.warn)
+
+    def load(self):
+        self.mode.setCurrentIndex(max(0, self.mode.findData(self.feature.mode)))
+        self.origin_axis.setCurrentIndex(
+            max(0, self.origin_axis.findData(self.feature.origin_axis)))
+        self._sync()
+
+    def store(self):
+        self.feature.mode = self.mode.currentData()
+        self.feature.origin_axis = self.origin_axis.currentData()
+        self.feature.plane_a = self.plane_a.currentData()
+        self.feature.plane_b = self.plane_b.currentData()
+
+
 class MoveDialog(FeatureDialog):
     def __init__(self, host, feature, is_new, snapshot=None):
         super().__init__(host, feature, "Move Body", "move", is_new, snapshot)
@@ -1117,6 +1213,7 @@ DIALOGS = {
     MirrorFeature: MirrorDialog,
     PrimitiveFeature: PrimitiveDialog,
     WorkPlaneFeature: WorkPlaneDialog,
+    WorkAxisFeature: WorkAxisDialog,
     MoveFeature: MoveDialog,
 }
 

@@ -43,6 +43,10 @@ def pump(n=3):
 
 
 def escape_on(widget):
+    # other suites run alongside this one and their windows take turns at
+    # being active, so make sure this one is before asking where focus is
+    widget.window().activateWindow()
+    widget.window().raise_()
     widget.setFocus()
     pump()
     QtWidgets.QApplication.sendEvent(widget, QtGui.QKeyEvent(

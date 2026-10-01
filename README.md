@@ -103,9 +103,10 @@ or directly:
   and make them coincident
 
 **Features**
-- Extrude (distance / symmetric / through-all, taper), with Join, Cut,
-  Intersect or New Body
-- Revolve about a sketch axis
+- Extrude (distance / symmetric / through-all / **to a plane**, taper), with
+  Join, Cut, Intersect or New Body. To Plane runs up to any datum or work
+  plane, and a tilted one cuts the end on its slope
+- Revolve about a sketch axis, an origin axis or a work axis
 - Sweep a profile along a path sketch; Loft between any number of sections
 - Hole — simple, counterbored, countersunk; drilling direction picked from the
   geometry
@@ -115,6 +116,9 @@ or directly:
 - Work planes pulled off any flat face or datum plane — press, drag away, and
   release to set the offset, then type an exact value if you want one. The
   plane tracks its face as the model changes
+- **Work axes**: where two planes meet, along an origin axis, or along a
+  straight edge or through the centre of a round face selected before
+  pressing **Axis**. Shown as a dashed line through the model
 - Move Body
 - STEP / IGES / BREP import as a base body
 

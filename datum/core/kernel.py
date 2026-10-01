@@ -1045,6 +1045,25 @@ def boolean(base: TopoDS_Shape, tool: TopoDS_Shape, op: str) -> TopoDS_Shape:
     return heal(result)
 
 
+def half_box(origin: Sequence[float], normal: Sequence[float],
+             keep: Sequence[float], size: float) -> TopoDS_Shape:
+    """A big block standing on a plane, on the side ``keep`` is on.
+
+    What a trim to a plane intersects with.  A real half-space would do the
+    same job, but an infinite solid is where booleans go to misbehave, and
+    a block bigger than anything it meets is indistinguishable from one.
+    """
+    from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+
+    side = sum(normal[i] * (keep[i] - origin[i]) for i in range(3))
+    towards = list(normal) if side >= 0 else [-c for c in normal]
+    # centre the block's footprint under the point being kept
+    foot = [keep[i] - side * normal[i] for i in range(3)]
+    plane = gp_Pln(pnt(foot), direction(normal))
+    face = BRepBuilderAPI_MakeFace(plane, -size, size, -size, size).Face()
+    return extrude(face, towards, size, 0.0)
+
+
 def unify(shape: TopoDS_Shape) -> TopoDS_Shape:
     """Merge faces that lie in the same surface, and edges in the same curve.
 

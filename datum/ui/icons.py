@@ -452,6 +452,14 @@ def _i_plane(p):
     p.drawLine(QtCore.QPointF(12, 12), QtCore.QPointF(15.5, 4))
 
 
+def _i_axis(p):
+    # a line running through, with the dashes of a centre line
+    _pen(p, _ACCENT, 1.6)
+    p.drawLine(QtCore.QPointF(4, 20), QtCore.QPointF(20, 4))
+    _pen(p, _LINE, 1.0, dashed=True)
+    p.drawEllipse(QtCore.QPointF(12, 12), 5.5, 2.6)
+
+
 def _i_import(p):
     _face(p, [(4, 5), (13, 5), (13, 19), (4, 19)], _SOLID, 70)
     _arrow(p, 21, 12, 14.5, 12, _GREEN, 3.4, 1.8)
@@ -912,7 +920,7 @@ PAINTERS: Dict[str, Callable[[QtGui.QPainter], None]] = {
     "chamfer": _i_chamfer, "shell": _i_shell, "pattern": _i_pattern_rect,
     "pattern_circ": _i_pattern_circ, "mirror": _i_mirror, "move": _i_move,
     "box": _i_box, "cylinder": _i_cylinder, "sphere": _i_sphere,
-    "plane": _i_plane, "import": _i_import, "export": _i_export,
+    "plane": _i_plane, "axis": _i_axis, "import": _i_import, "export": _i_export,
     "delete": _i_delete, "edit": _i_edit, "suppress": _i_suppress,
     "rollback": _i_rollback, "update": _i_update, "fit": _i_fit,
     "rect3": _i_rect3, "rect_centre": _i_rect_centre,

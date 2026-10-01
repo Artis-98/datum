@@ -20,8 +20,8 @@ from OCP.TopoDS import TopoDS_Shape
 from . import fileformat, kernel, materials, prefs
 from .rules import RuleSet
 from .features import (
-    FEATURE_TYPES, Body, BuildContext, CodeFeature, Feature, FeatureError,
-    ImportFeature, SketchFeature,
+    FEATURE_TYPES, STANDARD_AXES, Body, BuildContext, CodeFeature, Feature,
+    FeatureError, ImportFeature, SketchFeature,
 )
 from .params import referenced_names
 from .fileformat import FileFormatError, UnsupportedVersionError
@@ -193,7 +193,8 @@ def _definition(feature: Feature, scope: Dict[str, float],
 class _Built:
     """What the rebuild held after one feature: enough to carry on from."""
 
-    __slots__ = ("bodies", "sketches", "planes", "tools", "log", "error")
+    __slots__ = ("bodies", "sketches", "planes", "axes", "tools", "log",
+                 "error")
 
     @classmethod
     def take(cls, ctx: BuildContext, error: str) -> "_Built":
@@ -203,6 +204,7 @@ class _Built:
         built.bodies = [(b.name, b.shape) for b in ctx.bodies]
         built.sketches = dict(ctx.sketches)
         built.planes = dict(ctx.planes)
+        built.axes = dict(ctx.axes)
         built.tools = dict(ctx.tools)
         built.log = list(ctx.log)
         built.error = error
@@ -212,6 +214,7 @@ class _Built:
         ctx.bodies = [Body(name, shape) for name, shape in self.bodies]
         ctx.sketches = dict(self.sketches)
         ctx.planes = dict(self.planes)
+        ctx.axes = dict(self.axes)
         ctx.tools = dict(self.tools)
         ctx.log = list(self.log)
 
@@ -246,6 +249,7 @@ class Document:
         # together, which is what everything downstream still wants
         self.bodies: List[Any] = []
         self.planes: Dict[str, Any] = dict(STANDARD_PLANES)
+        self.axes: Dict[str, Any] = dict(STANDARD_AXES)
         self.path: str = ""
         # planes the user has switched off in the browser, by name; the three
         # origin planes start visible on a new part
@@ -633,6 +637,7 @@ class Document:
         self.shape = ctx.shape
         self._sketch_cache = dict(ctx.sketches)
         self.planes = dict(ctx.planes)
+        self.axes = dict(ctx.axes)
         report.warnings = list(ctx.log)
         report.ok = not report.errors
         report.duration = time.perf_counter() - start
@@ -737,6 +742,10 @@ class Document:
         from .sketch import SketchPlane
         self.planes = {name: SketchPlane.from_dict(data)
                        for name, data in result.get("planes", {}).items()}
+        from .features import STANDARD_AXES, WorkAxis
+        self.axes = dict(STANDARD_AXES)
+        self.axes.update({name: WorkAxis.from_dict(data)
+                          for name, data in result.get("axes", {}).items()})
         report = RebuildReport()
         report.errors = [tuple(e) for e in result.get("errors", [])]
         report.warnings = list(result.get("warnings", []))

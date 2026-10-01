@@ -132,6 +132,11 @@ def model_properties(path: str, shape: Optional[TopoDS_Shape],
         # what somebody typed into the part's own properties wins over the
         # file name: that is what those fields are for
         held = getattr(document, "properties", None) or {}
+        # every property the part holds can be asked for by its own name,
+        # {Model.Vendor} and so on; the named ones below then take over
+        for prop, value in held.items():
+            if str(value):
+                out.setdefault("Model." + str(prop), str(value))
         for key, prop in (("Model.Name", "Title"),
                           ("Model.PartNumber", "PartNumber"),
                           ("Model.Designer", "Designer")):

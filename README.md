@@ -124,6 +124,11 @@ or directly:
 - Undo / redo across the whole document
 - Live mass properties: volume, area, mass by material, centre of mass,
   bounding box
+- **dProperties**, DATUM's iProperties: title, part number, designer,
+  revision, project, stock number, vendor, cost and the rest, plus any
+  number of **custom** properties with a name of your own. They are saved in
+  the file, a parts list can show any of them as a column, and a title block
+  asks for one as `{Model.Vendor}`
 - Export STEP, STL, IGES, BREP
 
 ## File format

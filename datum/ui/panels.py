@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Dict, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -171,6 +171,11 @@ class DocumentProperties(QtWidgets.QWidget):
     here on every new document, where it can be changed for this one
     document without changing who you are.  A title block and a parts list
     read these fields, which is the whole reason they exist.
+
+    Below the fixed fields sit the custom ones, dProperties: any name, any
+    value, kept in the same file.  A parts list can show one as a column
+    and a title block can ask for one as {Model.Name}, so a supplier or a
+    stock number typed once turns up everywhere the part does.
     """
 
     changed = QtCore.Signal()
@@ -182,20 +187,48 @@ class DocumentProperties(QtWidgets.QWidget):
         ("Company", "Company"),
         ("Revision", "Revision"),
         ("Description", "Description"),
+        ("Project", "Project"),
+        ("StockNumber", "Stock Number"),
+        ("Vendor", "Vendor"),
+        ("EstimatedCost", "Estimated Cost"),
+        ("Comments", "Comments"),
     )
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.document = None
-        form = QtWidgets.QFormLayout(self)
-        form.setContentsMargins(10, 8, 10, 4)
+        root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(10, 8, 10, 4)
+        root.setSpacing(6)
+        form = QtWidgets.QFormLayout()
         form.setSpacing(6)
+        root.addLayout(form)
         self.edits = {}
         for key, label in self.FIELDS:
             edit = QtWidgets.QLineEdit()
             edit.editingFinished.connect(self._write)
             self.edits[key] = edit
             form.addRow(label, edit)
+
+        heading = QtWidgets.QLabel("Custom")
+        heading.setProperty("hint", True)
+        root.addWidget(heading)
+        self.custom = QtWidgets.QTableWidget(0, 2)
+        self.custom.setHorizontalHeaderLabels(("Name", "Value"))
+        self.custom.verticalHeader().setVisible(False)
+        self.custom.horizontalHeader().setStretchLastSection(True)
+        self.custom.setMinimumHeight(110)
+        self.custom.itemChanged.connect(lambda _item: self._write())
+        root.addWidget(self.custom)
+        row = QtWidgets.QHBoxLayout()
+        self.add_button = QtWidgets.QPushButton("Add")
+        self.add_button.clicked.connect(self.add_custom)
+        self.remove_button = QtWidgets.QPushButton("Remove")
+        self.remove_button.clicked.connect(self.remove_custom)
+        row.addWidget(self.add_button)
+        row.addWidget(self.remove_button)
+        row.addStretch(1)
+        root.addLayout(row)
 
     def update_from(self, doc) -> None:
         self.document = doc if hasattr(doc, "properties") else None
@@ -205,17 +238,66 @@ class DocumentProperties(QtWidgets.QWidget):
             was = edit.blockSignals(True)
             edit.setText(str(held.get(key, "")))
             edit.blockSignals(was)
+        was = self.custom.blockSignals(True)
+        self.custom.setRowCount(0)
+        for name, value in held.items():
+            if name in self.edits:
+                continue
+            self._append(name, str(value))
+        self.custom.blockSignals(was)
+
+    def _append(self, name: str, value: str) -> int:
+        row = self.custom.rowCount()
+        self.custom.insertRow(row)
+        self.custom.setItem(row, 0, QtWidgets.QTableWidgetItem(name))
+        self.custom.setItem(row, 1, QtWidgets.QTableWidgetItem(value))
+        return row
+
+    def add_custom(self) -> None:
+        """A new row, named so it is unique, ready to be renamed."""
+        taken = set(self.edits) | set(self._custom_values())
+        n = 1
+        while "Property%d" % n in taken:
+            n += 1
+        was = self.custom.blockSignals(True)
+        row = self._append("Property%d" % n, "")
+        self.custom.blockSignals(was)
+        self._write()
+        self.custom.setCurrentCell(row, 0)
+        self.custom.editItem(self.custom.item(row, 0))
+
+    def remove_custom(self) -> None:
+        rows = sorted({i.row() for i in self.custom.selectedIndexes()},
+                      reverse=True)
+        if not rows and self.custom.currentRow() >= 0:
+            rows = [self.custom.currentRow()]
+        for row in rows:
+            self.custom.removeRow(row)
+        self._write()
+
+    def _custom_values(self) -> Dict[str, str]:
+        """The custom rows, by name.  A blank name is a row half typed."""
+        out: Dict[str, str] = {}
+        for row in range(self.custom.rowCount()):
+            name_item = self.custom.item(row, 0)
+            value_item = self.custom.item(row, 1)
+            name = name_item.text().strip() if name_item else ""
+            # a custom one may not hide behind a fixed field's name, or
+            # typing in the form above would quietly overwrite it
+            if not name or name in self.edits:
+                continue
+            out[name] = value_item.text() if value_item else ""
+        return out
 
     def _write(self) -> None:
         if self.document is None:
             return
-        held = dict(self.document.properties)
+        held = {}
         for key, edit in self.edits.items():
             text = edit.text().strip()
             if text:
                 held[key] = text
-            else:
-                held.pop(key, None)
+        held.update(self._custom_values())
         if held != self.document.properties:
             self.document.properties = held
             self.document.modified = True

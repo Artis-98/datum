@@ -913,7 +913,22 @@ class PartsListDialog(QtWidgets.QDialog):
         root.addWidget(QtWidgets.QLabel("Columns"))
         self.columns = QtWidgets.QListWidget()
         self.columns.setMaximumHeight(150)
-        for key, label in bom.COLUMNS.items():
+        # then every custom property the listed parts carry, so a Vendor
+        # typed into a part's Properties can become a column here
+        choices = list(bom.COLUMNS.items())
+        names = bom.property_names(table.rows)
+        names += [c[len(bom.PROP):] for c in table.columns
+                  if c.startswith(bom.PROP)
+                  and c[len(bom.PROP):] not in names]
+        for name in names:
+            key = bom.PROP + name
+            if any(key == k for k, _ in choices):
+                continue
+            # the fixed ones already have a column of their own
+            if name in ("PartNumber", "Description", "Part Number"):
+                continue
+            choices.append((key, bom.heading(key)))
+        for key, label in choices:
             item = QtWidgets.QListWidgetItem(label)
             item.setData(QtCore.Qt.UserRole, key)
             item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)

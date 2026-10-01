@@ -585,7 +585,7 @@ def _row_text(painter, layout, table, row, x0: float, y: float,
     baseline = y + (table.row_height - height) / 2.0 + height * 0.15
     for column in table.columns:
         span = table.column_width(column)
-        text = (bom_module.COLUMNS.get(column, column.upper()) if row is None
+        text = (bom_module.heading(column) if row is None
                 else row.value(column))
         # numbers in the middle of their box, words against the left of it
         if column in ("item", "qty"):

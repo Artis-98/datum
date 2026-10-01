@@ -29,6 +29,27 @@ COLUMNS = {
 
 DEFAULT_COLUMNS = ("item", "qty", "part_number", "description", "material")
 
+# A column can also be any one of a part's own properties, the ones typed
+# into its Properties window, spelled "prop:" and the property's name.
+PROP = "prop:"
+
+
+def heading(column: str) -> str:
+    """What a column is called at the top of the table."""
+    if column.startswith(PROP):
+        return column[len(PROP):].upper()
+    return COLUMNS.get(column, column.upper())
+
+
+def property_names(rows: Sequence["Row"]) -> List[str]:
+    """Every property name any row has, in the order they were first met."""
+    out: List[str] = []
+    for row in rows:
+        for name in row.extra:
+            if name not in out:
+                out.append(name)
+    return out
+
 # Millimetres, at a text height of 3.5.  A parts list that has to be read
 # across a workshop is mostly part number and description.
 DEFAULT_WIDTHS = {
@@ -51,8 +72,12 @@ class Row:
     key: str = ""
     path: str = ""
     occurrences: List[int] = field(default_factory=list)
+    # everything the part's Properties window holds, for "prop:" columns
+    extra: Dict[str, str] = field(default_factory=dict)
 
     def value(self, column: str) -> str:
+        if column.startswith(PROP):
+            return str(self.extra.get(column[len(PROP):], ""))
         if column == "item":
             return str(self.item)
         if column == "qty":
@@ -67,7 +92,8 @@ class Row:
                 "part_number": self.part_number,
                 "description": self.description, "material": self.material,
                 "mass": self.mass, "key": self.key, "path": self.path,
-                "occurrences": list(self.occurrences)}
+                "occurrences": list(self.occurrences),
+                "extra": dict(self.extra)}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Row":
@@ -78,7 +104,9 @@ class Row:
                    material=str(d.get("material", "")),
                    mass=str(d.get("mass", "")),
                    key=str(d.get("key", "")), path=str(d.get("path", "")),
-                   occurrences=[int(i) for i in d.get("occurrences", [])])
+                   occurrences=[int(i) for i in d.get("occurrences", [])],
+                   extra={str(k): str(v) for k, v
+                          in (d.get("extra") or {}).items()})
 
 
 def key_for(path: str) -> str:
@@ -150,7 +178,8 @@ def _collect(occurrence, base: str, library, recurse: bool,
         part_number=_property(document, "part_number", name),
         description=_property(document, "description", ""),
         material=_property(document, "material", ""),
-        key=key, path=path, occurrences=[occurrence.id])
+        key=key, path=path, occurrences=[occurrence.id],
+        extra=_properties(document))
     order.append(key)
 
 
@@ -161,7 +190,14 @@ def _row_for_part(document, base_dir: str) -> Row:
                part_number=_property(document, "part_number", name),
                description=_property(document, "description", ""),
                material=_property(document, "material", ""),
-               key=key_for(path), path=path)
+               key=key_for(path), path=path, extra=_properties(document))
+
+
+def _properties(document) -> Dict[str, str]:
+    held = getattr(document, "properties", None)
+    if not isinstance(held, dict):
+        return {}
+    return {str(k): str(v) for k, v in held.items() if str(v)}
 
 
 def _property(document, name: str, fallback: str) -> str:

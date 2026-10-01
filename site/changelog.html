@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.4</span></div>
+        <span id="live-version">Latest: 0.2.5</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.4/DATUM-0.2.4-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.5/DATUM-0.2.5-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -72,9 +72,63 @@
 
     <div class="release current">
       <div class="head">
+        <span class="ver">0.2.5</span>
+        <span class="when">1 October 2026</span>
+        <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        Twenty eight requests in one release, from the Reddit thread and
+        from using DATUM every day.
+      </p>
+      <ul>
+        <li><strong>dProperties.</strong> Title, part number, material and
+          more fixed fields, plus any properties of your own, on every
+          document. The parts list and the title block read them.
+          Right-click the part, an assembly or a component for dProperties
+          or Open File Location; dProperties is in the File menu too.</li>
+        <li><strong>Units.</strong> Millimetres, centimetres, metres, inches
+          or feet, per document: click the unit in the status bar. Sketch
+          dimensions, the Parameters table, Measure and Properties all read
+          in it, and a number typed bare means it.</li>
+        <li><strong>Every dimension is a parameter.</strong> Each sketch
+          dimension and feature value gets a name, d1, d2 and so on, and
+          sits in the Parameters table, editable there; rules can set them
+          by name. In an assembly the table lists every part's parameters
+          by part number, so one change can drive the whole assembly.</li>
+        <li><strong>Model states.</strong> A part's Primary state plus
+          variations with their own values, suppression, properties and
+          material, each placeable in an assembly.</li>
+        <li><strong>Work axes</strong>, Revolve around any axis, Extrude To
+          Plane, patterns along and around work axes, and Mirror about
+          work planes.</li>
+        <li><strong>Choose the solids.</strong> Join, Cut and Intersect can
+          name the solids they work on in a multi body part, and patterns
+          can copy whole solid bodies.</li>
+        <li><strong>Sketching:</strong> circle and arc centres always shown;
+          a sketch tucks itself away once a feature uses it; a live preview
+          for every rectangle and slot; horizontal and vertical between two
+          points; slots carry a centre line to constrain to; Project
+          Geometry takes a whole face, and a projected circle keeps its
+          size; dimension across two concentric circles, centre to centre,
+          or a circle to a line. Leaving a sketch puts the view back where
+          it was.</li>
+        <li><strong>Feature dialogs</strong> offer the sketches you can see,
+          not every sketch in the part.</li>
+        <li><strong>Parallel constraint</strong> in assemblies.</li>
+        <li><strong>Turntable orbit</strong> in Preferences, with Z always
+          up, for anyone who cannot stand the free one.</li>
+        <li><strong>Esc</strong> stops whatever is in progress.</li>
+        <li><strong>End of Part</strong> lands after the feature it is
+          dropped on, and its menu can delete everything below it.</li>
+        <li><strong>A contributor guide</strong> on GitHub, for anyone who
+          wants to help build DATUM.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
         <span class="ver">0.2.4</span>
         <span class="when">27 September 2026</span>
-        <span class="badge">current</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         Every core. DATUM now puts all of your processor to work, the
@@ -349,7 +403,7 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.4/DATUM-0.2.4-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.5/DATUM-0.2.5-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>

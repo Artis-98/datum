@@ -51,7 +51,15 @@ from OCP.V3d import (
     V3d_AmbientLight, V3d_DirectionalLight, V3d_TypeOfOrientation, V3d_View,
     V3d_Viewer,
 )
-from OCP.WNT import WNT_Window
+#from OCP.WNT import WNT_Window
+import sys
+if sys.platform == "win32":
+    from OCP.WNT import WNT_Window as _NativeWindow
+elif sys.platform == "darwin":
+    from OCP.Cocoa import Cocoa_Window as _NativeWindow
+else:
+    from OCP.Xw import Xw_Window as _NativeWindow
+
 from OCP.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Lin, gp_Pln, gp_Pnt, gp_Vec
 
 from ..core import mesh
@@ -324,10 +332,13 @@ class Viewport(QtWidgets.QWidget):
         self._style_highlights()
 
         self.view = self.viewer.CreateView()
-        self._window = WNT_Window(_capsule(self.winId()))
+        self._window = _NativeWindow(_capsule(self.winId()))
         self.view.SetWindow(self._window)
         if not self._window.IsMapped():
             self._window.Map()
+
+        from PySide6.QtWidgets import QApplication
+        QApplication.instance().aboutToQuit.connect(self.shutdown)
 
         self.apply_background()
         self.view.SetShadingModel(
@@ -2607,3 +2618,14 @@ class Viewport(QtWidgets.QWidget):
             return False
         self.view.Redraw()
         return bool(self.view.Dump(path))
+        
+    def shutdown(self):
+        if getattr(self, "_shut_down", False):
+            return
+        self._shut_down = True
+        try:
+            self.view.Remove()          # detach the OCCT view from its window
+        except Exception:
+            pass
+        # keep the wrapper alive (see _KEEPALIVE); just drop our own handle to it
+        self._window = None

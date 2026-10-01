@@ -114,9 +114,13 @@ or directly:
 - Hole — simple, counterbored, countersunk; drilling direction picked from the
   geometry
 - Fillet, Chamfer, Shell
-- Rectangular and circular patterns of *features*, along or round an origin
-  axis or any work axis; Mirror (body or features) about a datum or work
-  plane
+- Rectangular and circular patterns of *features* or of whole **solid
+  bodies**, along or round an origin axis or any work axis; copies of a
+  solid join it or each become a solid of its own. Mirror (body or
+  features) about a datum or work plane
+- In a part with several solids, Join, Cut and Intersect can be told which
+  **Solids** they work on: a cut through two at once, a join that fuses
+  several into one. Nothing ticked means the solid the new material meets
 - Box, cylinder, sphere, cone, torus primitives
 - Work planes pulled off any flat face or datum plane — press, drag away, and
   release to set the offset, then type an exact value if you want one. The

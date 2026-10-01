@@ -214,13 +214,13 @@ CONSTRAINT_KINDS = (
     "coincident", "horizontal", "vertical", "parallel", "perpendicular",
     "equal", "distance", "distance_x", "distance_y", "distance_pl",
     "radius", "diameter", "point_on", "tangent", "angle", "symmetric",
-    "fix", "ground", "concentric", "midpoint", "collinear",
+    "fix", "ground", "concentric", "midpoint", "collinear", "radial_gap",
 )
 
 # Kinds that carry a number the user typed, and so get a name of their own
 # that other dimensions can refer to.
 DIMENSION_KINDS = ("distance", "distance_x", "distance_y", "distance_pl",
-                   "radius", "diameter", "angle")
+                   "radius", "diameter", "angle", "radial_gap")
 
 
 @dataclass
@@ -740,6 +740,16 @@ class Sketch:
         arcs = [e for e in self.entities.values() if e.kind == "arc"]
 
         fixed_points = [(p.id, p.x, p.y) for p in self.points.values() if p.fixed]
+        # A projection pins its points, which holds a projected line, and an
+        # arc through its pinned ends, but not a whole circle: its radius
+        # was still the solver's to change, so the shadow of a hole could be
+        # dragged bigger or pulled by a constraint like drawn geometry. Its
+        # radius is held too; the next rebuild casts it afresh from the
+        # model as before.
+        projected = self.projected_entities()
+        fixed_radii = [(eid, self.entities[eid].radius) for eid in projected
+                       if eid in self.entities
+                       and self.entities[eid].kind == "circle"]
 
         def P(x: np.ndarray, pid: int) -> Tuple[float, float]:
             return x[idx[("px", pid)]], x[idx[("py", pid)]]
@@ -765,6 +775,9 @@ class Sketch:
                 px, py = P(x, pid)
                 out.append(px - fx)
                 out.append(py - fy)
+
+            for eid, radius in fixed_radii:
+                out.append(R(x, eid) - radius)
 
             for kind, c, val in specs:
                 try:
@@ -851,6 +864,12 @@ class Sketch:
                         if n < TOL:
                             continue
                         out.append(((px - ax) * dy - (py - ay) * dx) / n - val)
+                    elif kind == "radial_gap":
+                        # across the ring between two circles on one centre:
+                        # the outer radius less the inner, signed, so the
+                        # inner circle stays inside where it was drawn
+                        out.append(R(x, c.entities[1]) - R(x, c.entities[0])
+                                   - val)
                     elif kind == "radius":
                         out.append(R(x, c.entities[0]) - val)
                     elif kind == "diameter":

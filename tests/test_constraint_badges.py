@@ -288,10 +288,10 @@ check("though the dimension label is still there, as it should be",
 # ==========================================================================
 print("every constraint kind has a glyph")
 
-from datum.core.sketch import CONSTRAINT_KINDS                     # noqa: E402
+from datum.core.sketch import CONSTRAINT_KINDS, DIMENSION_KINDS    # noqa: E402
 
-dimension_kinds = {"distance", "distance_x", "distance_y", "distance_pl",
-                   "radius", "diameter", "angle"}
+# a dimension shows its number, not a glyph
+dimension_kinds = set(DIMENSION_KINDS)
 missing = [k for k in CONSTRAINT_KINDS
            if k not in dimension_kinds and k not in CONSTRAINT_BADGES]
 check("none are left without one", missing == [], missing)

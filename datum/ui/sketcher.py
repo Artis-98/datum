@@ -1829,8 +1829,17 @@ class SketchEditor(QtCore.QObject):
             first, second = self._pending[0][1], self._pending[1][1]
             if first == second:
                 return None
-            if (s.entities[first].kind != "line"
-                    or s.entities[second].kind != "line"):
+            round_kinds = ("circle", "arc")
+            kind_a, kind_b = s.entities[first].kind, s.entities[second].kind
+            if kind_a in round_kinds and kind_b in round_kinds:
+                return self._between_circles(first, second)
+            if "line" in (kind_a, kind_b) and (kind_a in round_kinds
+                                               or kind_b in round_kinds):
+                # a circle and a line: its centre square onto the line
+                line, circle = ((first, second) if kind_a == "line"
+                                else (second, first))
+                return self._point_to_line(s.entities[circle].points[0], line)
+            if kind_a != "line" or kind_b != "line":
                 return None
             if self._parallel(first, second):
                 # two parallel lines measure across the gap, from one line's
@@ -1848,6 +1857,29 @@ class SketchEditor(QtCore.QObject):
                     "current": angle}
 
         return None
+
+    def _between_circles(self, first: int, second: int) -> Dict[str, Any]:
+        """Two circles or arcs: across the ring if they share a centre.
+
+        Concentric circles measure the gap between them, outer radius less
+        inner, the way two parallel lines measure across theirs; the inner
+        one goes first, so the value typed is the value seen and neither
+        circle jumps through the other to make it. Two that do not share a
+        centre measure from centre to centre.
+        """
+        s = self.sketch
+        a, b = s.entities[first], s.entities[second]
+        ca, cb = s.points[a.points[0]], s.points[b.points[0]]
+        size = max(a.radius, b.radius, 1.0)
+        if a.points[0] == b.points[0] or \
+                math.hypot(ca.x - cb.x, ca.y - cb.y) <= 1e-6 * size:
+            inner, outer = ((first, second) if a.radius <= b.radius
+                            else (second, first))
+            gap = s.entities[outer].radius - s.entities[inner].radius
+            return {"kind": "radial_gap", "points": [],
+                    "entities": [inner, outer], "axial": False,
+                    "current": gap}
+        return self._point_pair(a.points[0], b.points[0])
 
     def _point_pair(self, first: int, second: int) -> Dict[str, Any]:
         a, b = self.sketch.points[first], self.sketch.points[second]
@@ -1963,6 +1995,7 @@ class SketchEditor(QtCore.QObject):
         "distance_x": "Horizontal",
         "distance_y": "Vertical",
         "distance_pl": "Perpendicular",
+        "radial_gap": "Distance",
         "distance": "Distance",
     }
 
@@ -1975,6 +2008,9 @@ class SketchEditor(QtCore.QObject):
             return "Perpendicular distance. Move to place it, then click."
         if target["kind"] == "angle":
             return "Angle between the two lines. Move to place it, then click."
+        if target["kind"] == "radial_gap":
+            return ("Distance between the two circles. Move to place it, "
+                    "then click.")
         return "Move to place the dimension, then click to set it."
 
     def _dimension_offset(self, target: Dict[str, Any],
@@ -2001,6 +2037,16 @@ class SketchEditor(QtCore.QObject):
                 ent = s.entities[target["entities"][0]]
                 a = s.points[ent.points[0]]
                 return (cursor[0] - a.x, cursor[1] - a.y)
+
+            if target["kind"] == "radial_gap":
+                outer = s.entities[target["entities"][1]]
+                centre = s.points[outer.points[0]]
+                dx, dy = cursor[0] - centre.x, cursor[1] - centre.y
+                length = math.hypot(dx, dy)
+                if length < 1e-9:
+                    return (outer.radius * 1.15, 0.0)
+                reach = max(length, outer.radius * 1.15)
+                return (dx / length * reach, dy / length * reach)
 
             if target["kind"] == "distance_pl":
                 # the label slides along the line it measures from, keeping
@@ -2536,11 +2582,12 @@ class SketchEditor(QtCore.QObject):
             for eid in created:
                 for pid in s.entities[eid].points:
                     s.points[pid].fixed = True
-            if source is not None:
-                # remember where it was cast from, so every later rebuild
-                # can cast it again instead of leaving a shadow of a shape
-                # that has since changed
-                s.add_projection(source, created, construction)
+            # Remember where it was cast from, so every later rebuild can
+            # cast it again instead of leaving a shadow of a shape that has
+            # since changed. Recorded even with no source to cast from: the
+            # record is also what tells the solver this is a projection,
+            # whose circles keep their radius.
+            s.add_projection(source or {}, created, construction)
             self._touch()
         return len(created)
 
@@ -2668,7 +2715,7 @@ class SketchEditor(QtCore.QObject):
         if s is None:
             return None
         try:
-            if c.kind in ("radius", "diameter"):
+            if c.kind in ("radius", "diameter", "radial_gap"):
                 ent = s.entities[c.entities[0]]
                 centre = s.points[ent.points[0]]
                 return (centre.x, centre.y)
@@ -2690,6 +2737,9 @@ class SketchEditor(QtCore.QObject):
             if c.kind in ("radius", "diameter"):
                 ent = s.entities[c.entities[0]]
                 return ent.radius * (2.0 if c.kind == "diameter" else 1.0)
+            if c.kind == "radial_gap":
+                return abs(s.entities[c.entities[1]].radius
+                           - s.entities[c.entities[0]].radius)
             if c.kind == "distance_pl":
                 return abs(self._perpendicular(c.points[0], c.points[1],
                                                c.points[2]))
@@ -2728,6 +2778,24 @@ class SketchEditor(QtCore.QObject):
             vp.draw_edge(self._to3d(near), self._to3d(label_pos),
                          colour, 1.3, preview=preview)
             prefix = "ø" if c.kind == "diameter" else "R"
+        elif c.kind == "radial_gap":
+            # measured along one ray from the shared centre, from the inner
+            # circle out to the outer, with the label further out on it
+            inner = s.entities[c.entities[0]]
+            outer = s.entities[c.entities[1]]
+            centre = s.points[inner.points[0]]
+            reach = math.hypot(off[0], off[1]) or outer.radius
+            direction = ((off[0] / reach, off[1] / reach) if reach
+                         else (1.0, 0.0))
+            near = (centre.x + direction[0] * inner.radius,
+                    centre.y + direction[1] * inner.radius)
+            far = (centre.x + direction[0] * outer.radius,
+                   centre.y + direction[1] * outer.radius)
+            vp.draw_edge(self._to3d(near), self._to3d(far),
+                         colour, 1.3, preview=preview)
+            vp.draw_edge(self._to3d(far), self._to3d(label_pos),
+                         colour, 1.1, preview=preview, dashed=True)
+            prefix = ""
         elif c.kind == "angle":
             try:
                 first = self._line_direction(c.entities[0])

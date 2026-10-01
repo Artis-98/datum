@@ -255,13 +255,17 @@ print("a line against itself is not a dimension")
 ed._pending = [("entity", first), ("entity", first)]
 check("refused", ed._dimension_target() is None)
 
-print("a circle and a line together are not either")
+print("a circle and a line measure from its centre to the line")
 sketch = fresh()
 line = sketch.add_line((0.0, 0.0), (50.0, 0.0))
 circle = sketch.add_circle((20.0, 20.0), 8.0)
 ed.set_tool("dimension")
 ed._pending = [("entity", line), ("entity", circle)]
-check("refused", ed._dimension_target() is None)
+target = ed._dimension_target()
+check("square onto the line, the way Inventor does it",
+      target is not None and target["kind"] == "distance_pl"
+      and near(abs(target["current"]), 20.0, 1e-6),
+      target)
 
 
 # ==========================================================================

@@ -46,6 +46,7 @@ DIMENSION_LABELS = {
     "radius": "Radius",
     "diameter": "Diameter",
     "angle": "Angle",
+    "radial_gap": "Distance",
 }
 
 PRIMITIVE_LABELS = {

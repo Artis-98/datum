@@ -72,6 +72,9 @@ SELECTION_MODES = {
     # first saying which; OCCT happily has both modes live at once and
     # resolves it by what is nearest the cursor.
     "assembly": (SEL_FACE, SEL_EDGE),
+    # Project Geometry takes an edge, or a whole face's outline: an edge
+    # wins where the cursor is on one, the face everywhere else on it
+    "project": (SEL_EDGE, SEL_FACE),
 }
 
 VIEW_DIRECTIONS = {
@@ -1904,7 +1907,7 @@ class Viewport(QtWidgets.QWidget):
     def set_edge_picking(self, on: bool) -> None:
         """Let model edges be picked even though a sketch is open."""
         self.edge_picking = bool(on)
-        self.set_selection_mode("edge" if on else "none")
+        self.set_selection_mode("project" if on else "none")
         if not on:
             self.clear_selection()
         self.setCursor(QtCore.Qt.CrossCursor if on else QtCore.Qt.ArrowCursor)

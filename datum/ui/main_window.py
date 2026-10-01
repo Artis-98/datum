@@ -3802,8 +3802,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.editor.set_tool("project")
         self.status_message.setStyleSheet("")
         self.status_message.setText(
-            "Project Geometry: click the model edges you want on this "
-            "sketch. Esc when you are done.")
+            "Project Geometry: click a model edge, or a face to bring its "
+            "whole outline onto this sketch. Esc when you are done.")
 
     def _project_picked_edge(self) -> None:
         """One model edge was clicked while Project Geometry is running."""
@@ -3824,8 +3824,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 % made)
         else:
             self.status_message.setText(
-                "That edge is square to the sketch, so it projects to "
-                "nothing. Pick another.")
+                "That is square to the sketch, so it projects to nothing. "
+                "Pick another.")
 
     def _plane_from_selected_face(self) -> None:
         """Build a work plane straight off the face that was right-clicked."""

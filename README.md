@@ -39,6 +39,9 @@ or directly:
 - A rectangle drawn at an angle is held square by parallels on the opposite
   sides and one perpendicular, since horizontal and vertical no longer apply
 - 2D fillet, trim (splits at real intersections), offset
+- **Project Geometry**: click a model edge, or a face to bring its whole
+  outline over at once. A projection is a shadow of the model and is cast
+  again whenever the model changes
 - A numeric constraint solver (Levenberg-Marquardt) over coincident,
   horizontal, vertical, parallel, perpendicular, equal, tangent, concentric,
   midpoint, point-on, symmetric and grounded constraints

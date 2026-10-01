@@ -267,8 +267,8 @@ win.project_geometry()
 pump(4)
 check("it arms as a tool rather than projecting everything",
       ed.tool == "project", ed.tool)
-check("and model edges become pickable while the sketch is open",
-      win.viewport.edge_picking and win.viewport.selection_mode == "edge",
+check("and model edges and faces become pickable while the sketch is open",
+      win.viewport.edge_picking and win.viewport.selection_mode == "project",
       (win.viewport.edge_picking, win.viewport.selection_mode))
 check("nothing has been projected just by arming it",
       len(s.entities) == 0, len(s.entities))
@@ -299,6 +299,20 @@ pump(3)
 check("edge picking is off", not win.viewport.edge_picking)
 check("and the selection mode with it",
       win.viewport.selection_mode == "none", win.viewport.selection_mode)
+
+print("a whole face brings its outline over in one pick")
+before = len(s.entities)
+top = next(face for face in kernel.faces(win.document.shape)
+           if abs(kernel.shape_centre(face)[2] - 20.0) < 1e-6)
+got = ed.project_one(top, body=win.document.shape)
+pump(3)
+check("all four sides of the top", got == 4 and len(s.entities) == before + 4,
+      (got, len(s.entities) - before))
+check("recorded against the face, so it follows the model",
+      any(p.source.get("kind") == "face" for p in s.projections),
+      [p.source for p in s.projections])
+win.undo()
+pump(3)
 
 
 # ==========================================================================

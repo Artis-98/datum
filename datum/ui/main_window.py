@@ -95,6 +95,46 @@ class _Relay(QtCore.QObject):
     done = QtCore.Signal()
 
 
+class _EscapeAnywhere(QtCore.QObject):
+    """Esc cancels the operation in progress, wherever the focus is.
+
+    The view handles Esc itself, but only while it has the keyboard; one
+    click in the tree or on a ribbon drop-down took the focus away and Esc
+    then did nothing at all, which reads as the command being stuck. A key
+    meant for typing still goes to the field it was typed in, and a dialog
+    of its own keeps its own Esc.
+    """
+
+    TYPING = (QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox,
+              QtWidgets.QTextEdit, QtWidgets.QPlainTextEdit,
+              QtWidgets.QComboBox)
+
+    def __init__(self, window, viewport) -> None:
+        super().__init__(window)
+        self.window = window
+        self.viewport = viewport
+
+    def eventFilter(self, obj, event) -> bool:
+        if (event.type() != QtCore.QEvent.KeyPress
+                or event.key() != QtCore.Qt.Key_Escape
+                or event.modifiers() != QtCore.Qt.NoModifier):
+            return False
+        focus = QtWidgets.QApplication.focusWidget()
+        if focus is None or obj is not focus:
+            return False
+        if focus.window() is not self.window:
+            return False
+        if focus is self.viewport or self.viewport.isAncestorOf(focus):
+            return False
+        if isinstance(focus, self.TYPING):
+            return False
+        if (isinstance(focus, QtWidgets.QAbstractItemView)
+                and focus.state() == QtWidgets.QAbstractItemView.EditingState):
+            return False
+        self.viewport.escape_pressed.emit()
+        return True
+
+
 class _HoldInput(QtCore.QObject):
     """While a worker rebuilds: the view navigates, forms slide, the rest waits.
 
@@ -240,6 +280,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self._install_remote()
         self._build_status_bar()
         self._build_shortcuts()
+        self._escape_anywhere = _EscapeAnywhere(self, self.viewport)
+        QtWidgets.QApplication.instance().installEventFilter(
+            self._escape_anywhere)
 
     # -- ribbon -------------------------------------------------------------
 

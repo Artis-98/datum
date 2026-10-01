@@ -2543,9 +2543,16 @@ class SketchEditor(QtCore.QObject):
         # Points are drawn only when they matter: under the cursor, picked,
         # being dragged, or grounded.  Inventor shows a bare sketch as lines
         # alone, and a dot at every end is the difference between reading a
-        # sketch and squinting at it.
+        # sketch and squinting at it.  Two kinds always matter, as they do
+        # in Inventor: the centre of a circle or an arc, drawn as a cross,
+        # and a point placed on its own, which is nothing but its dot.
+        centres = {ent.points[0] for ent in s.entities.values()
+                   if ent.kind in ("circle", "arc") and ent.points}
+        used = {pid for ent in s.entities.values() for pid in ent.points}
         for pid, p in s.points.items():
             colour, size = None, 3.2
+            marker = (Aspect_TypeOfMarker.Aspect_TOM_O_PLUS if p.origin
+                      else Aspect_TypeOfMarker.Aspect_TOM_O)
             if pid == self._drag_point:
                 magnetised = self._magnet is not None
                 colour = C.sketch_magnet if magnetised else C.sketch_drag
@@ -2558,10 +2565,16 @@ class SketchEditor(QtCore.QObject):
                 colour, size = C.sketch_ground, 6.0
             elif p.fixed:
                 colour, size = C.sketch_fixed, 4.5
+            elif pid in centres:
+                colour = (C.sketch_line if s.point_constrained(pid)
+                          else C.sketch_free)
+                size, marker = 3.5, Aspect_TypeOfMarker.Aspect_TOM_PLUS
+            elif pid not in used:
+                colour = (C.sketch_line if s.point_constrained(pid)
+                          else C.sketch_free)
+                size, marker = 5.0, Aspect_TypeOfMarker.Aspect_TOM_POINT
             if colour is None:
                 continue
-            marker = (Aspect_TypeOfMarker.Aspect_TOM_O_PLUS if p.origin
-                      else Aspect_TypeOfMarker.Aspect_TOM_O)
             vp.draw_point(self._to3d((p.x, p.y)), colour, size, marker=marker)
 
         # a ring round the point being mated to, so it is obvious which one

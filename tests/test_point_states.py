@@ -391,6 +391,41 @@ ed.set_tool("select")
 pump()
 
 # ==========================================================================
+print("centre points and lone points are always shown")
+
+sketch = fresh()
+# away from the origin, where the cursor sits and would hover it
+circle = sketch.add_circle((-60.0, 30.0), 10.0)
+arc = sketch.add_arc((40.0, 0.0), 8.0, 0.0, math.pi)
+slot = sketch.add_slot((80.0, 0.0), (110.0, 0.0), 10.0)
+lone = sketch.add_point(0.0, 40.0)
+line = sketch.add_line((0.0, 60.0), (30.0, 60.0))
+sketch.solve()
+markers = redraw()
+circle_centre = sketch.entities[circle].points[0]
+arc_centre = sketch.entities[arc].points[0]
+slot_centres = [sketch.entities[e].points[0] for e in slot
+                if sketch.entities[e].kind == "arc"]
+check("a circle's centre is drawn",
+      colour_of(sketch, circle_centre) is not None)
+check("an arc's centre is drawn", colour_of(sketch, arc_centre) is not None)
+check("both of a slot's centres are drawn",
+      len(slot_centres) == 2
+      and all(colour_of(sketch, c) is not None for c in slot_centres),
+      slot_centres)
+check("a point placed on its own is drawn",
+      colour_of(sketch, lone) is not None)
+check("a free centre is in the free colour",
+      colour_of(sketch, circle_centre) == C.sketch_free,
+      colour_of(sketch, circle_centre))
+check("the ends of a line still are not",
+      all(colour_of(sketch, p) is None
+          for p in sketch.entities[line].points))
+check("and the arc's ends are not either",
+      all(colour_of(sketch, p) is None
+          for p in sketch.entities[arc].points[1:]))
+
+# ==========================================================================
 vp.draw_point = _real_draw_point
 for entry in list(win.session.documents):
     entry.document.modified = False

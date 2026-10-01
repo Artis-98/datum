@@ -63,6 +63,10 @@ RECT_TOOLS = ("rect", "rect3", "rect_centre", "rect3_centre")
 SLOT_TOOLS = ("slot", "slot_overall", "slot_centre", "slot_arc3",
               "slot_arc_centre")
 
+# the variants whose rubber band is worked out by _preview_variant
+VARIANT_PREVIEWS = ("rect3", "rect_centre", "rect3_centre", "slot_overall",
+                    "slot_centre", "slot_arc3", "slot_arc_centre")
+
 TOOLS = (("select", "line", "circle", "arc", "spline", "point", "fillet2d",
           "trim", "offset", "dimension", "polygon", "project")
          + RECT_TOOLS + SLOT_TOOLS)
@@ -1577,14 +1581,20 @@ class SketchEditor(QtCore.QObject):
             self.status_changed.emit(
                 "Slot: that width does not fit on an arc of this radius.")
             return
+        a0, a1 = self._slot_angles(centre, start, end)
+        if self.sketch.add_arc_slot(centre, radius, a0, a1, width):
+            self._touch()
+
+    @staticmethod
+    def _slot_angles(centre, start, end) -> Tuple[float, float]:
+        """The start and end angle of an arc slot, the short way round."""
         a0 = math.atan2(start[1] - centre[1], start[0] - centre[0])
         a1 = math.atan2(end[1] - centre[1], end[0] - centre[0])
         if a1 < a0:
             a1 += 2.0 * math.pi
         if a1 - a0 > math.pi:
             a0, a1 = a1 - 2.0 * math.pi, a0
-        if self.sketch.add_arc_slot(centre, radius, a0, a1, width):
-            self._touch()
+        return a0, a1
 
     def _tool_spline(self, point, modifiers) -> None:
         self._pending.append(point)
@@ -2801,6 +2811,8 @@ class SketchEditor(QtCore.QObject):
                 p1, p2 = self._pending[0], self._pending[1]
                 width = 2.0 * _dist_point_segment(cur, p1, p2)
                 self._preview_slot(p1, p2, width, colour)
+        elif self.tool in VARIANT_PREVIEWS and self._pending:
+            self._preview_variant(cur, colour)
         elif self.tool == "spline" and self._pending:
             pts = self._pending + [cur]
             for i in range(len(pts) - 1):
@@ -2871,6 +2883,178 @@ class SketchEditor(QtCore.QObject):
                                         colour, 1.6, preview=True)
             prev = p
 
+    def _preview_polygon(self, corners, colour) -> None:
+        for i in range(len(corners)):
+            self.viewport.draw_edge(self._to3d(corners[i]),
+                                    self._to3d(corners[(i + 1) % len(corners)]),
+                                    colour, 1.6, preview=True)
+
+    def _preview_guide(self, a, b, colour) -> None:
+        """A thin line for a click still to come: a centre line, a radius."""
+        if math.dist(a, b) > 1e-9:
+            self.viewport.draw_edge(self._to3d(a), self._to3d(b), colour, 1.2,
+                                    preview=True, dashed=True)
+
+    def _preview_arc_angles(self, centre, radius, a0, a1, colour) -> None:
+        if radius < 1e-7:
+            return
+        segments = 40
+        prev = None
+        for i in range(segments + 1):
+            a = a0 + (a1 - a0) * i / segments
+            p = (centre[0] + radius * math.cos(a),
+                 centre[1] + radius * math.sin(a))
+            if prev is not None:
+                self.viewport.draw_edge(self._to3d(prev), self._to3d(p),
+                                        colour, 1.6, preview=True)
+            prev = p
+
+    def _preview_arc_through(self, centre, radius, start, through, end,
+                             colour) -> None:
+        """The arc from start to end that passes the middle point."""
+        a0 = math.atan2(start[1] - centre[1], start[0] - centre[0])
+        am = math.atan2(through[1] - centre[1], through[0] - centre[0])
+        a1 = math.atan2(end[1] - centre[1], end[0] - centre[0])
+        turn = 2.0 * math.pi
+        to_middle, to_end = (am - a0) % turn, (a1 - a0) % turn
+        if to_middle <= to_end:
+            self._preview_arc_angles(centre, radius, a0, a0 + to_end, colour)
+        else:
+            self._preview_arc_angles(centre, radius, a0, a0 - (turn - to_end),
+                                     colour)
+
+    def _preview_arc_slot(self, centre, radius, start, end, edge,
+                          colour) -> None:
+        """The slot _build_arc_slot would make, or its centre arc so far."""
+        a0, a1 = self._slot_angles(centre, start, end)
+        r = abs(math.dist(centre, edge) - radius)
+        if r < 1e-7 or radius <= r:
+            self._preview_arc_angles(centre, radius, a0, a1, colour)
+            return
+        self._preview_arc_angles(centre, radius + r, a0, a1, colour)
+        self._preview_arc_angles(centre, radius - r, a0, a1, colour)
+        for angle, outward in ((a0, False), (a1, True)):
+            cap = (centre[0] + radius * math.cos(angle),
+                   centre[1] + radius * math.sin(angle))
+            if outward:
+                self._preview_arc_angles(cap, r, angle, angle + math.pi,
+                                         colour)
+            else:
+                self._preview_arc_angles(cap, r, angle + math.pi,
+                                         angle + 2.0 * math.pi, colour)
+
+    def _preview_variant(self, cur, colour) -> None:
+        """Live shape for the rectangle and slot variants.
+
+        Each one draws what the next click would make, worked out the same
+        way its tool works it out, so nothing is ever clicked blind.
+        """
+        tool, pending = self.tool, self._pending
+        if tool == "rect3":
+            if len(pending) == 1:
+                self.viewport.draw_edge(self._to3d(pending[0]),
+                                        self._to3d(cur), colour, 1.6,
+                                        preview=True)
+                return
+            corners = self._rect_corners(pending[0], pending[1], cur)
+            if corners:
+                self._preview_polygon(corners, colour)
+        elif tool == "rect_centre":
+            c = pending[0]
+            half = (cur[0] - c[0], cur[1] - c[1])
+            self._preview_polygon(
+                [(c[0] - half[0], c[1] - half[1]),
+                 (c[0] + half[0], c[1] - half[1]),
+                 (c[0] + half[0], c[1] + half[1]),
+                 (c[0] - half[0], c[1] + half[1])], colour)
+        elif tool == "rect3_centre":
+            centre = pending[0]
+            edge = pending[1] if len(pending) > 1 else cur
+            mirror = (2.0 * centre[0] - edge[0], 2.0 * centre[1] - edge[1])
+            if len(pending) == 1:
+                self._preview_guide(mirror, cur, colour)
+                return
+            dx, dy = edge[0] - centre[0], edge[1] - centre[1]
+            half = math.hypot(dx, dy)
+            if half < 1e-7:
+                return
+            ux, uy = dx / half, dy / half
+            nx, ny = -uy, ux
+            wide = abs((cur[0] - centre[0]) * nx + (cur[1] - centre[1]) * ny)
+            if wide < 1e-7:
+                self._preview_guide(mirror, edge, colour)
+                return
+            self._preview_polygon([
+                (centre[0] - ux * half - nx * wide,
+                 centre[1] - uy * half - ny * wide),
+                (centre[0] + ux * half - nx * wide,
+                 centre[1] + uy * half - ny * wide),
+                (centre[0] + ux * half + nx * wide,
+                 centre[1] + uy * half + ny * wide),
+                (centre[0] - ux * half + nx * wide,
+                 centre[1] - uy * half + ny * wide)], colour)
+        elif tool == "slot_overall":
+            if len(pending) == 1:
+                self._preview_guide(pending[0], cur, colour)
+                return
+            p1, p2 = pending[0], pending[1]
+            width = 2.0 * _dist_point_segment(cur, p1, p2)
+            length = math.dist(p1, p2)
+            if width < 1e-6 or length <= width:
+                self._preview_guide(p1, p2, colour)
+                return
+            r = width / 2.0
+            ux, uy = (p2[0] - p1[0]) / length, (p2[1] - p1[1]) / length
+            self._preview_slot((p1[0] + ux * r, p1[1] + uy * r),
+                               (p2[0] - ux * r, p2[1] - uy * r), width,
+                               colour)
+        elif tool == "slot_centre":
+            centre = pending[0]
+            end = pending[1] if len(pending) > 1 else cur
+            other = (2.0 * centre[0] - end[0], 2.0 * centre[1] - end[1])
+            if len(pending) == 1:
+                self._preview_guide(other, cur, colour)
+                return
+            width = 2.0 * _dist_point_segment(cur, other, end)
+            if width < 1e-6:
+                self._preview_guide(other, end, colour)
+                return
+            self._preview_slot(other, end, width, colour)
+        elif tool == "slot_arc3":
+            if len(pending) == 1:
+                self._preview_guide(pending[0], cur, colour)
+                return
+            start, end = pending[0], pending[1]
+            through = pending[2] if len(pending) > 2 else cur
+            circle = _circle_through(start, through, end)
+            if circle is None:
+                self._preview_guide(start, end, colour)
+                return
+            centre, radius = circle
+            if len(pending) == 2:
+                self._preview_arc_through(centre, radius, start, through,
+                                          end, colour)
+            else:
+                self._preview_arc_slot(centre, radius, start, end, cur,
+                                       colour)
+        elif tool == "slot_arc_centre":
+            centre = pending[0]
+            if len(pending) == 1:
+                self._preview_guide(centre, cur, colour)
+                return
+            start = pending[1]
+            radius = math.dist(centre, start)
+            if radius < 1e-7:
+                return
+            if len(pending) == 2:
+                # the end is only a direction: it lands on the arc
+                self._preview_guide(centre, cur, colour)
+                a0, a1 = self._slot_angles(centre, start, cur)
+                self._preview_arc_angles(centre, radius, a0, a1, colour)
+                return
+            self._preview_arc_slot(centre, radius, start, pending[2], cur,
+                                   colour)
+
     def _preview_slot(self, p1, p2, width, colour) -> None:
         r = width / 2.0
         dx, dy = p2[0] - p1[0], p2[1] - p1[1]
@@ -2884,8 +3068,9 @@ class SketchEditor(QtCore.QObject):
         self.viewport.draw_edge(self._to3d((p1[0] - nx, p1[1] - ny)),
                                 self._to3d((p2[0] - nx, p2[1] - ny)),
                                 colour, 1.6, preview=True)
-        ang = math.atan2(dy, dx)
-        self._preview_arc(p2, r, (p2[0] + nx, p2[1] + ny),
-                          (p2[0] - nx, p2[1] - ny), colour)
-        self._preview_arc(p1, r, (p1[0] - nx, p1[1] - ny),
-                          (p1[0] + nx, p1[1] + ny), colour)
+        # each round end bulges away from the slot: counter-clockwise from
+        # one rail to the other, starting on the side that puts it outside
+        self._preview_arc(p2, r, (p2[0] - nx, p2[1] - ny),
+                          (p2[0] + nx, p2[1] + ny), colour)
+        self._preview_arc(p1, r, (p1[0] + nx, p1[1] + ny),
+                          (p1[0] - nx, p1[1] - ny), colour)

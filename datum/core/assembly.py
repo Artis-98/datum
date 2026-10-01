@@ -319,7 +319,15 @@ class AssemblyDocument:
     def __init__(self) -> None:
         self.occurrences: List[Occurrence] = []
         self.constraints: List[AssemblyConstraint] = []
+        # Part parameters the assembly drives, by their qualified name,
+        # box_d2, with the expression that drives each; see
+        # assembly_params.  And the parts' values by the same names, for
+        # the assembly's own parameters to read; filled in by whoever has
+        # the parts open, never saved.
+        self.drivers: Dict[str, str] = {}
+        self.component_values: Dict[str, float] = {}
         self.params = ParameterTable()
+        self.params.bind(self._resolve_parameters)
         self.units = "mm"
         self.path = ""
         self.created = fileformat.now()
@@ -342,6 +350,34 @@ class AssemblyDocument:
         self._next_id = 1
         self._undo: List[str] = []
         self._redo: List[str] = []
+
+    # ---------------------------------------------------------- parameters
+
+    def _resolve_parameters(self) -> None:
+        """The assembly's own parameters, able to read its parts' as well.
+
+        An assembly parameter may be written as box_d2 * 2.  The parts'
+        values are whatever the window last read into component_values;
+        with none, such a parameter says it cannot find the name, which is
+        the truth.
+        """
+        from . import modelparams
+
+        expressions = {p.name: p.expression for p in self.params}
+        order, cyclic = modelparams._order(expressions)
+        scope = {k: v for k, v in (self.component_values or {}).items()
+                 if k not in expressions}
+        for name in order:
+            param = self.params[name]
+            if name in cyclic:
+                param.error, param.value = "circular reference", 0.0
+            else:
+                try:
+                    param.value = evaluate(param.expression, scope)
+                    param.error = ""
+                except ExpressionError as exc:
+                    param.error, param.value = str(exc), 0.0
+            scope[name] = param.value
 
     # ------------------------------------------------------------ identity
 
@@ -575,7 +611,10 @@ class AssemblyDocument:
         stale frame still holds the assembly together, which beats dropping
         the constraint the moment somebody adds a fillet.
         """
-        scope = self.params.scope()
+        # an offset may name a part's parameter, box_d2, as well as one of
+        # the assembly's own
+        scope = dict(self.component_values or {})
+        scope.update(self.params.scope())
         out: List[ResolvedConstraint] = []
 
         for constraint in self.constraints:
@@ -767,6 +806,7 @@ class AssemblyDocument:
             "rules": self.rules.to_list(),
             "next_id": self._next_id,
             "parameters": self.params.to_list(),
+            "parameter_drivers": dict(self.drivers),
             "occurrences": [o.to_dict() for o in self.occurrences],
             "constraints": [c.to_dict() for c in self.constraints],
             "material": self.material,
@@ -794,7 +834,10 @@ class AssemblyDocument:
                                    or abs(float(stored) - known.density)
                                    > 1e-9):
             self._density_override = float(stored)
+        self.drivers = {str(k): str(v) for k, v in
+                        (data.get("parameter_drivers") or {}).items()}
         self.params = ParameterTable()
+        self.params.bind(self._resolve_parameters)
         self.params.load(data.get("parameters", []))
 
         raw = data.get("occurrences")

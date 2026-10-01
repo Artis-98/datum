@@ -277,6 +277,14 @@ body is reloaded from that file whenever it changes on disk.
 - **Free Move** and **Free Rotate** drag components in the plane of the
   screen; the constraints re-solve on release
 - Ground, hide, isolate, suppress and replace any component
+- **Parameters across the assembly.** `Ctrl+P` in an assembly lists its own
+  parameters and then every parameter of every part it places, each named
+  for its part number (or file name): a Box part's d2 is `Box_d2`. Change
+  one and the part changes, there and then. Write one in terms of another
+  part's or of the assembly's own, `Box_d1 = plate_d1 / 2`, and the
+  assembly drives it: it keeps the expression and hands the part the
+  number, so the part still opens on its own. Parts changed this way, or
+  edited in place, are saved when the assembly is
 
 ## CAM
 

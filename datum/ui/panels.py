@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -14,7 +15,7 @@ from .theme import MONO_STACK, C
 COLUMNS = ("Name", "Used by", "Unit", "Expression", "Value", "Comment")
 NAME, USED, UNIT, EXPRESSION, VALUE, COMMENT = range(len(COLUMNS))
 
-HEADER, MODEL, USER = "header", "model", "user"
+HEADER, MODEL, USER, PART = "header", "model", "user", "part"
 
 
 class ParametersDialog(QtWidgets.QDialog):
@@ -25,13 +26,21 @@ class ParametersDialog(QtWidgets.QDialog):
     parameters somebody added by name.  Both halves can be renamed and
     rewritten in place, and a change lands where the value lives, on the
     sketch or the feature, so the table and the model never disagree.
+
+    Opened on an assembly, with ``components`` (assembly_params), the
+    assembly's own parameters come first and then every part's, each named
+    for its part: Box_d2.  Changing one changes the part; writing one in
+    terms of another part or of the assembly makes the assembly drive it.
     """
 
     changed = QtCore.Signal()
+    # the part documents a change from an assembly reached
+    parts_changed = QtCore.Signal(list)
 
-    def __init__(self, doc, parent=None) -> None:
+    def __init__(self, doc, parent=None, components=None) -> None:
         super().__init__(parent)
         self.doc = doc
+        self.components = components
         self._loading = False
         # what each table row stands for: (kind, name)
         self._rows: List[Tuple[str, str]] = []
@@ -53,6 +62,12 @@ class ParametersDialog(QtWidgets.QDialog):
         self.del_btn.setToolTip("Delete the selected user parameter")
         bar.addWidget(self.add_btn)
         bar.addWidget(self.del_btn)
+        self.release_btn = QtWidgets.QPushButton("Release")
+        self.release_btn.setToolTip(
+            "Stop the assembly driving the selected part parameter; the part "
+            "keeps the value it has")
+        self.release_btn.setVisible(components is not None)
+        bar.addWidget(self.release_btn)
         bar.addStretch(1)
         hint = QtWidgets.QLabel(
             "Any parameter can be written in terms of another, "
@@ -87,6 +102,7 @@ class ParametersDialog(QtWidgets.QDialog):
 
         self.add_btn.clicked.connect(self._add)
         self.del_btn.clicked.connect(self._delete)
+        self.release_btn.clicked.connect(self._release)
         close.clicked.connect(self.accept)
         self.table.itemChanged.connect(self._item_changed)
         self.table.currentCellChanged.connect(
@@ -133,10 +149,14 @@ class ParametersDialog(QtWidgets.QDialog):
                 if m.error:
                     errors.append("%s: %s" % (m.name, m.error))
 
+        if self.components is not None:
+            self.components.refresh_assembly()
         self.doc.params.evaluate_all()
         users = list(self.doc.params)
         if self._has_model:
             self._add_header("User Parameters", len(users))
+        elif self.components is not None:
+            self._add_header("Assembly Parameters", len(users))
         for param in users:
             self._add_row(USER, param.name,
                           ", ".join(self._consumers(param.name)), param.unit,
@@ -145,11 +165,47 @@ class ParametersDialog(QtWidgets.QDialog):
             if param.error:
                 errors.append("%s: %s" % (param.name, param.error))
 
+        if self.components is not None:
+            errors += self._add_parts()
+
         self.message.setText("; ".join(errors))
         self.message.setStyleSheet("color: %s;" % (C.error if errors
                                                    else C.text_dim))
         self._loading = False
         self._sync_buttons()
+
+    def _add_parts(self) -> List[str]:
+        """A section for each part the assembly places."""
+        errors: List[str] = []
+        _scope, driver_errors = self.components.scope()
+        by_part: Dict[str, List[Any]] = {}
+        order: List[Any] = []
+        for row in self.components.rows():
+            if row.component.prefix not in by_part:
+                by_part[row.component.prefix] = []
+                order.append(row.component)
+            by_part[row.component.prefix].append(row)
+        for component in order:
+            rows = by_part[component.prefix]
+            self._add_header("%s  (%s)" % (component.prefix,
+                                           os.path.basename(component.path)),
+                             len(rows))
+            for row in rows:
+                error = driver_errors.get(row.qualified, "") or row.error
+                comment = ("driven by the assembly" if row.driven else "")
+                self._add_row(PART, row.qualified, row.owner, row.unit,
+                              row.driven or row.expression, row.value, error,
+                              comment, reference=row.reference)
+                if row.driven:
+                    r = self.table.rowCount() - 1
+                    for col in range(len(COLUMNS)):
+                        item = self.table.item(r, col)
+                        if item is not None:
+                            item.setForeground(QtGui.QBrush(QtGui.QColor(
+                                C.error if error else C.sketch_free)))
+                if error:
+                    errors.append("%s: %s" % (row.qualified, error))
+        return errors
 
     def _add_header(self, title: str, count: int) -> None:
         row = self.table.rowCount()
@@ -180,6 +236,10 @@ class ParametersDialog(QtWidgets.QDialog):
             items[col].setFlags(locked)
         if kind == MODEL:
             items[UNIT].setFlags(locked)
+        if kind == PART:
+            # a part's parameter is renamed and described in the part
+            for col in (NAME, UNIT, COMMENT):
+                items[col].setFlags(locked)
             items[USED].setToolTip("%s, %s" % (used.split(", ")[0], label))
         if reference:
             items[EXPRESSION].setFlags(locked)
@@ -214,8 +274,19 @@ class ParametersDialog(QtWidgets.QDialog):
         return (HEADER, "")
 
     def _sync_buttons(self) -> None:
-        kind, _name = self._selected()
+        kind, name = self._selected()
         self.del_btn.setEnabled(kind == USER)
+        self.release_btn.setEnabled(
+            kind == PART and self.components is not None
+            and name in (getattr(self.doc, "drivers", {}) or {}))
+
+    def _release(self) -> None:
+        kind, name = self._selected()
+        if kind != PART or self.components is None:
+            return
+        self.components.release(name)
+        self.reload()
+        self.changed.emit()
 
     def _add(self) -> None:
         if self._has_model:
@@ -262,6 +333,9 @@ class ParametersDialog(QtWidgets.QDialog):
         if kind == HEADER:
             return
         text = item.text()
+        if kind == PART:
+            self._part_changed(name, col, text)
+            return
         try:
             if col == NAME:
                 if self._has_model:
@@ -287,7 +361,30 @@ class ParametersDialog(QtWidgets.QDialog):
             QtWidgets.QMessageBox.warning(self, "Parameter", str(exc))
         if hasattr(self.doc, "modified"):
             self.doc.modified = True
+        changed = []
+        if self.components is not None:
+            # an assembly parameter may be what a driver reads
+            try:
+                changed = self.components.apply()
+            except ExpressionError:
+                changed = []
         self.reload()
+        if changed:
+            self.parts_changed.emit(changed)
+        self.changed.emit()
+
+    def _part_changed(self, name: str, col: int, text: str) -> None:
+        if col != EXPRESSION or self.components is None:
+            self.reload()
+            return
+        try:
+            changed = self.components.set(name, text)
+        except ExpressionError as exc:
+            QtWidgets.QMessageBox.warning(self, "Parameter", str(exc))
+            changed = []
+        self.reload()
+        if changed:
+            self.parts_changed.emit(changed)
         self.changed.emit()
 
 

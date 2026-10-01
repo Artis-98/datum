@@ -1700,10 +1700,14 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "Save failed", str(exc))
             return False
+        also = (self._save_components()
+                if isinstance(document, AssemblyDocument) else [])
         self._update_title()
         self.start_page.remember(written, document.doc_type)
         self.refresh_tabs()
-        self.status_message.setText("Saved %s" % os.path.basename(written))
+        self.status_message.setText(
+            "Saved %s" % os.path.basename(written)
+            + (", and %s" % ", ".join(also) if also else ""))
         return True
 
     def save_key(self, key: str) -> None:
@@ -3020,10 +3024,91 @@ class MainWindow(QtWidgets.QMainWindow):
         self.refresh_tabs()
 
     def edit_parameters(self) -> None:
-        dialog = ParametersDialog(self.active_document, self)
+        components = None
+        if self.in_assembly and self.assembly is not None:
+            # every part's parameters, by part number, under the
+            # assembly's own: read from the files, opened only to change
+            from ..core.assembly_params import AssemblyParameters
+            components = AssemblyParameters(
+                self.assembly, self._component_for_reading,
+                self._in_place_document)
+        dialog = ParametersDialog(self.active_document, self,
+                                  components=components)
+        dialog.parts_changed.connect(self._parts_changed_from_assembly)
         dialog.changed.connect(lambda: self.rebuild(keep_camera=True))
         dialog.exec()
         self.rebuild(keep_camera=True)
+
+    def _component_for_reading(self, path: str):
+        """A part to list the parameters of, built only if already open.
+
+        What is open, in place or in a tab, is what the assembly shows and
+        so what the table must show.  Anything else is read from its file
+        without building it, and kept until the file changes.
+        """
+        from ..core.assembly_params import load_unbuilt
+
+        key = os.path.normcase(os.path.abspath(path))
+        held = self._in_place_docs.get(key)
+        if held is not None:
+            return held
+        entry = self.session.by_path(path)
+        if entry is not None:
+            return entry.document
+        try:
+            stamp = os.path.getmtime(path)
+        except OSError:
+            return None
+        cache = self.__dict__.setdefault("_parameter_reads", {})
+        hit = cache.get(key)
+        if hit is not None and hit[0] == stamp:
+            return hit[1]
+        document = load_unbuilt(path)
+        cache[key] = (stamp, document)
+        return document
+
+    def _parts_changed_from_assembly(self, documents) -> None:
+        """Parts the assembly's table changed: build them, show them.
+
+        They are held where edit in place holds its parts, so the assembly
+        sees them live through the shape provider, and they are saved when
+        the assembly is.
+        """
+        for document in documents:
+            try:
+                document.rebuild()
+            except Exception:
+                continue
+            entry = self.session.by_document(document)
+            if entry is not None:
+                entry.note_change()
+        if documents:
+            self.refresh_tabs()
+
+    def _save_components(self) -> List[str]:
+        """Save the parts changed through an assembly, with the assembly.
+
+        A part edited in place, or given new parameter values from the
+        assembly's table, is held open with its changes; saving the
+        assembly is when those are kept, as Inventor does.
+        """
+        saved = []
+        for document in list(self._in_place_docs.values()):
+            if not getattr(document, "modified", False):
+                continue
+            path = getattr(document, "path", "")
+            if not path or document is self.assembly:
+                continue
+            try:
+                document.save(path, thumbnail=getattr(document, "thumbnail",
+                                                      None))
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    self, "Save", "%s could not be saved: %s"
+                    % (os.path.basename(path), exc))
+                continue
+            saved.append(os.path.basename(path))
+        return saved
 
     def _toggle_section(self, on: bool) -> None:
         self.viewport.set_section(on, STANDARD_PLANES["XZ"], 0.0)

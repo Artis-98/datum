@@ -192,7 +192,10 @@ class ModelParam:
             raise ExpressionError(
                 "%s is a driven dimension: it measures the sketch, so "
                 "nothing can set it" % self.name)
-        plain = _plain_number(text)
+        from . import units
+        # 2 in, or a plain number, which is millimetres: either way a value
+        plain = units.plain_value(
+            text, "mm", units.ANGLE if self.unit == ANGLE else units.LENGTH)
         if plain is not None:
             # a plain number is the dimension's value, which is how the
             # sketch holds one it was typed rather than written as a sum
@@ -568,6 +571,11 @@ class ParameterView:
 
     def scope(self) -> Dict[str, float]:
         return self._doc.parameter_scope()
+
+    @property
+    def units(self) -> str:
+        """The part's length unit, which a bare typed number is in."""
+        return getattr(self._doc, "units", "mm") or "mm"
 
     def taken(self) -> Set[str]:
         return taken_names(self._doc)

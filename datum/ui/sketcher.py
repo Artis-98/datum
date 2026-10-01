@@ -18,6 +18,7 @@ from OCP.Aspect import Aspect_TypeOfMarker
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge
 
 from ..core import kernel
+from ..core import units as unitlib
 from ..core.params import ExpressionError, ParameterTable, evaluate
 from ..core.sketch import Constraint, Entity, Sketch, SketchPoint
 from .sketchinput import LiveDimensionBar, ValuePopup
@@ -616,6 +617,31 @@ class SketchEditor(QtCore.QObject):
 
     # ------------------------------------------------------------ solving
 
+    @property
+    def units(self) -> str:
+        """The part's length unit: what dimensions read in and are typed in."""
+        return unitlib.known(getattr(self.params, "units", "mm") or "mm")
+
+    def _shown(self, c_kind: str, value: float) -> str:
+        """A dimension's value as the part's units write it, no unit."""
+        if c_kind == "angle":
+            return unitlib.fmt(value)
+        return unitlib.fmt(unitlib.to_unit(value, self.units))
+
+    def _typed(self, kind: str, text: str) -> Tuple[float, str]:
+        """(value in mm, expression) for what was typed into a dimension.
+
+        A plain number is the dimension's value, in the part's units; an
+        expression is kept with its lengths' units written in, so it
+        means the same if the part's units change.  Raises ExpressionError.
+        """
+        unit_kind = unitlib.ANGLE if kind == "angle" else unitlib.LENGTH
+        plain = unitlib.plain_value(text, self.units, unit_kind)
+        if plain is not None:
+            return plain, ""
+        stored = unitlib.for_storage(text, self.units, unit_kind)
+        return evaluate(stored, self.scope()), stored
+
     def scope(self) -> Dict[str, float]:
         """Named parameters, plus this sketch's own dimensions by name.
 
@@ -764,7 +790,9 @@ class SketchEditor(QtCore.QObject):
             self.live.configure(captions)
         values = self._live_values(self._resolved_cursor(self._cursor))
         if values:
-            self.live.track(values, QtGui.QCursor.pos())
+            # every heads-up field is a length, shown in the part's units
+            self.live.track([unitlib.to_unit(v, self.units) for v in values],
+                            QtGui.QCursor.pos())
 
     def _on_click(self, u: float, v: float, modifiers) -> None:
         if not self.active:
@@ -997,7 +1025,11 @@ class SketchEditor(QtCore.QObject):
         if cid is None:
             return
         c = self.sketch.constraints[cid]
-        current = c.expression or "%.4g" % self._dimension_value(c)
+        current = (unitlib.for_display(
+            c.expression, self.units,
+            unitlib.ANGLE if c.kind == "angle" else unitlib.LENGTH)
+            if c.expression else self._shown(c.kind,
+                                             self._dimension_value(c)))
         self._editing_dimension = cid
         self._ask_value(current,
                         lambda text, k=cid: self._edit_dimension(k, text),
@@ -1009,18 +1041,12 @@ class SketchEditor(QtCore.QObject):
             return
         self.begin_change()
         before = (c.value, c.expression)
-        scope = self.scope()
         text = text.strip()
         try:
-            c.value = float(text)
-            c.expression = ""
-        except ValueError:
-            try:
-                c.value = evaluate(text, scope)
-                c.expression = text
-            except ExpressionError as exc:
-                self._complain("That is not a valid value: %s" % exc)
-                return
+            c.value, c.expression = self._typed(c.kind, text)
+        except ExpressionError as exc:
+            self._complain("That is not a valid value: %s" % exc)
+            return
         self.solve()
         if self.sketch.solve_message.startswith("over"):
             c.value, c.expression = before
@@ -1064,7 +1090,7 @@ class SketchEditor(QtCore.QObject):
 
         def number(text, fallback):
             try:
-                return evaluate(text, scope)
+                return evaluate(unitlib.for_storage(text, self.units), scope)
             except (ExpressionError, TypeError):
                 return fallback
 
@@ -1704,7 +1730,7 @@ class SketchEditor(QtCore.QObject):
             self._dim_offset = self._dimension_offset(self._dim_target, point)
             target = self._dim_target
             self._ask_value(
-                "%.4g" % target["current"],
+                self._shown(target["kind"], target["current"]),
                 lambda text, t=target, off=self._dim_offset:
                     self._apply_new_dimension(t, off, text),
                 caption=self.DIMENSION_CAPTIONS.get(target["kind"],
@@ -2045,17 +2071,11 @@ class SketchEditor(QtCore.QObject):
         if not text:
             return None
         self.begin_change()
-        scope = self.scope()
         try:
-            value = float(text)
-            expression = ""
-        except ValueError:
-            try:
-                value = evaluate(text, scope)
-                expression = text
-            except ExpressionError as exc:
-                self._complain("That is not a valid value: %s" % exc)
-                return None
+            value, expression = self._typed(kind, text)
+        except ExpressionError as exc:
+            self._complain("That is not a valid value: %s" % exc)
+            return None
 
         cid = self.sketch.add_constraint(kind, points=list(points or []),
                                          entities=list(entities or []),
@@ -2089,7 +2109,9 @@ class SketchEditor(QtCore.QObject):
 
     def _dimension_text(self, c) -> str:
         value = self._dimension_value(c)
-        return "%.4g%s" % (value, " deg" if c.kind == "angle" else " mm")
+        if c.kind == "angle":
+            return "%s deg" % unitlib.fmt(value)
+        return unitlib.length_text(value, self.units)
 
     def _ask_value(self, initial: str, apply: Callable[[str], None],
                    caption: str = "") -> None:
@@ -2759,10 +2781,12 @@ class SketchEditor(QtCore.QObject):
             prefix = ""
 
         value = self._dimension_value(c)
-        text = "%s%.4g%s" % (prefix, value,
-                             " deg" if c.kind == "angle" else "")
+        text = "%s%s%s" % (prefix, self._shown(c.kind, value),
+                           " deg" if c.kind == "angle" else "")
         if c.expression:
-            text = "%s  (%s)" % (text, c.expression)
+            text = "%s  (%s)" % (text, unitlib.for_display(
+                c.expression, self.units,
+                unitlib.ANGLE if c.kind == "angle" else unitlib.LENGTH))
         vp.draw_text(text, self._to3d(label_pos), colour, 15.0,
                      preview=preview)
 

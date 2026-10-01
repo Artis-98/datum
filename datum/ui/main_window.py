@@ -10,7 +10,7 @@ from typing import Any, Callable, Dict, List, Optional  # noqa: F401
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .. import APP_NAME, __version__
-from ..core import fileformat, fileio, kernel
+from ..core import fileformat, fileio, kernel, prefs
 from ..core import assembly as assembly_core
 from ..core.materials import Appearance
 from ..core.assembly import AssemblyDocument
@@ -1007,10 +1007,66 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status_build.setStyleSheet("padding-right: 12px;")
         bar.addPermanentWidget(self.status_build)
 
-        self.status_units = QtWidgets.QLabel("mm")
+        # the document's units, and the way to change them: click it
+        from ..core import units as unitlib
+        self.status_units = QtWidgets.QToolButton()
+        self.status_units.setText("mm")
+        self.status_units.setAutoRaise(True)
+        self.status_units.setPopupMode(QtWidgets.QToolButton.InstantPopup)
+        self.status_units.setToolTip(
+            "Units of this document. Changing them changes how lengths are "
+            "shown and what a bare number means; nothing in the model moves.")
         self.status_units.setStyleSheet("color: %s; padding-right: 8px;"
                                         % C.text_dim)
+        menu = QtWidgets.QMenu(self.status_units)
+        self._unit_actions = {}
+        group = QtGui.QActionGroup(menu)
+        for key, label in unitlib.LABELS.items():
+            action = menu.addAction("%s  (%s)" % (label, key))
+            action.setCheckable(True)
+            group.addAction(action)
+            action.triggered.connect(
+                lambda _=False, k=key: self.set_document_units(k))
+            self._unit_actions[key] = action
+        self.status_units.setMenu(menu)
         bar.addPermanentWidget(self.status_units)
+
+    def set_document_units(self, unit: str) -> None:
+        """Change what the active document's lengths are shown in.
+
+        Geometry is millimetres inside and stays exactly where it is; what
+        changes is how every length reads and what a number typed without
+        a unit means from now on.  Expressions already typed keep their
+        meaning, because they were stored with their units.
+        """
+        from ..core import units as unitlib
+
+        document = self.active_document
+        unit = unitlib.known(unit)
+        if document is None or getattr(document, "units", "mm") == unit:
+            self._sync_units()
+            return
+        if hasattr(document, "push_undo"):
+            document.push_undo()
+        document.units = unit
+        document.modified = True
+        self._sync_units()
+        self._update_title()
+        if self.editor.active:
+            self.editor.render()
+        self.properties.update_from(document)
+        self.status_message.setStyleSheet("")
+        self.status_message.setText(
+            "Units: %s. Nothing in the model moved; lengths read in %s now."
+            % (unitlib.LABELS[unit], unit))
+
+    def _sync_units(self) -> None:
+        document = self.active_document
+        unit = getattr(document, "units", "mm") or "mm"
+        self.status_units.setText(unit)
+        action = self._unit_actions.get(unit)
+        if action is not None:
+            action.setChecked(True)
 
     # -- shortcuts ----------------------------------------------------------
 
@@ -1392,6 +1448,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # then disagreed with in the table.  Every dimension is a parameter
         # of its own now, so the table fills itself as the part is drawn.
         document = Document()
+        document.units = prefs.prefs().units
         self._adopt(document, fileformat.PART)
         self.status_message.setText(
             "New part. Start a sketch on a plane, or drop in a primitive.")
@@ -1476,7 +1533,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "to cut.")
 
     def new_assembly(self, prompt: bool = True) -> None:
-        self._adopt(AssemblyDocument(), fileformat.ASSEMBLY)
+        assembly = AssemblyDocument()
+        assembly.units = prefs.prefs().units
+        self._adopt(assembly, fileformat.ASSEMBLY)
         self.status_message.setStyleSheet("")
         self.status_message.setText(
             "New assembly. Place a component to begin - the first one is "
@@ -2110,6 +2169,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.doc_tabs.setTabText(
                 self.doc_tabs.currentIndex(), "%s%s" % (entry.label, mark))
         self._sync_update_button()
+        self._sync_units()
 
     # the assembly controller lives outside this class, so it needs a name
     # that does not start with an underscore

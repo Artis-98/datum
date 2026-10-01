@@ -6,13 +6,40 @@ from typing import Callable, List, Optional
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..core import units as unitlib
 from ..core.params import ExpressionError, ParameterTable, evaluate
 from . import icons
 from .theme import C
 
 
+class DocumentView:
+    """What an expression box asks of a document that is not a part.
+
+    Its parameters to evaluate against, an assembly's with its parts'
+    values as well, and the units a bare number is typed in.
+    """
+
+    def __init__(self, document) -> None:
+        self._document = document
+
+    def scope(self):
+        out = dict(getattr(self._document, "component_values", {}) or {})
+        out.update(self._document.params.scope())
+        return out
+
+    @property
+    def units(self) -> str:
+        return getattr(self._document, "units", "mm") or "mm"
+
+
 class ExpressionEdit(QtWidgets.QWidget):
-    """A text field holding a parametric expression, with a live readout."""
+    """A text field holding a parametric expression, with a live readout.
+
+    ``unit`` says what the field holds: "mm" a length, "deg" an angle, ""
+    a plain number.  A length is shown and typed in the document's units
+    (``params.units``), and what is typed is stored with its units written
+    in; see core.units.
+    """
 
     changed = QtCore.Signal()
 
@@ -21,6 +48,7 @@ class ExpressionEdit(QtWidgets.QWidget):
         super().__init__(parent)
         self.params = params
         self.unit = unit
+        value = self._for_display(value)
 
         layout = QtWidgets.QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -42,11 +70,28 @@ class ExpressionEdit(QtWidgets.QWidget):
     def _scope(self):
         return self.params.scope() if self.params is not None else {}
 
+    @property
+    def _length(self) -> bool:
+        return self.unit == "mm"
+
+    @property
+    def doc_unit(self) -> str:
+        return unitlib.known(getattr(self.params, "units", "mm") or "mm")
+
+    def _for_display(self, stored: str) -> str:
+        if not self._length:
+            return str(stored)
+        return unitlib.for_display(str(stored), self.doc_unit)
+
     def _validate(self) -> None:
-        text = self.edit.text().strip()
+        text = self.text()
         try:
             value = evaluate(text, self._scope())
-            self.readout.setText("= %.4g %s" % (value, self.unit))
+            if self._length:
+                self.readout.setText("= %s" % unitlib.length_text(
+                    value, self.doc_unit))
+            else:
+                self.readout.setText("= %.4g %s" % (value, self.unit))
             self.readout.setStyleSheet("color: %s;" % C.text_dim)
             self.edit.setProperty("invalid", False)
             self._valid = True
@@ -64,7 +109,11 @@ class ExpressionEdit(QtWidgets.QWidget):
         return getattr(self, "_valid", False)
 
     def text(self) -> str:
-        return self.edit.text().strip()
+        """What to store: in a length field, with the units written in."""
+        typed = self.edit.text().strip()
+        if not self._length:
+            return typed
+        return unitlib.for_storage(typed, self.doc_unit)
 
     def value(self, default: float = 0.0) -> float:
         try:
@@ -73,7 +122,7 @@ class ExpressionEdit(QtWidgets.QWidget):
             return default
 
     def set_text(self, text: str) -> None:
-        self.edit.setText(str(text))
+        self.edit.setText(self._for_display(str(text)))
 
     def set_params(self, params: ParameterTable) -> None:
         self.params = params

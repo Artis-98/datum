@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from ..core import units as unitlib
 from ..core.document import Document
 from ..core.params import ExpressionError
 from . import icons
@@ -42,8 +43,10 @@ class ParametersDialog(QtWidgets.QDialog):
         self.doc = doc
         self.components = components
         self._loading = False
-        # what each table row stands for: (kind, name)
+        # what each table row stands for: (kind, name), and the unit its
+        # numbers are shown and typed in, with what sort of number it is
         self._rows: List[Tuple[str, str]] = []
+        self._units: List[Tuple[str, Optional[str]]] = []
 
         self.setWindowTitle("Parameters")
         self.setWindowIcon(icons.icon("params", 24))
@@ -131,10 +134,32 @@ class ParametersDialog(QtWidgets.QDialog):
         from ..core.modelparams import consumers
         return consumers(self.doc, name)
 
+    @property
+    def doc_unit(self) -> str:
+        return unitlib.known(getattr(self.doc, "units", "mm") or "mm")
+
+    def _unit_of(self, unit: str, own: bool = False
+                 ) -> Tuple[str, Optional[str]]:
+        """(the unit to show, the sort of number) for a row's unit.
+
+        A model parameter's "mm" means a length, shown in the document's
+        units.  A user parameter's unit is its own (``own``).
+        """
+        if not unit:
+            return "", None
+        if unit == "mm" and not own:
+            return self.doc_unit, unitlib.LENGTH
+        if unit in unitlib.LENGTHS:
+            return unit, unitlib.LENGTH
+        if unit == "deg":
+            return "deg", unitlib.ANGLE
+        return unit, None
+
     def reload(self) -> None:
         self._loading = True
         self.table.setRowCount(0)
         self._rows = []
+        self._units = []
         errors = []
 
         model = self._model()
@@ -219,14 +244,19 @@ class ParametersDialog(QtWidgets.QDialog):
         self.table.setItem(row, 0, item)
         self.table.setSpan(row, 0, 1, len(COLUMNS))
         self._rows.append((HEADER, title))
+        self._units.append(("", None))
 
     def _add_row(self, kind: str, name: str, used: str, unit: str,
                  expression: str, value: float, error: str, comment: str,
                  reference: bool = False, label: str = "") -> None:
         row = self.table.rowCount()
         self.table.insertRow(row)
+        shown_unit, sort = self._unit_of(unit, own=kind == USER)
+        if sort == unitlib.LENGTH:
+            expression = unitlib.for_display(expression, shown_unit)
+            value = unitlib.to_unit(value, shown_unit)
         items = [QtWidgets.QTableWidgetItem(text) for text in (
-            name, used, unit,
+            name, used, shown_unit,
             "(measured)" if reference else expression,
             "-" if error else "%.6g" % value, comment)]
         locked = QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
@@ -259,6 +289,7 @@ class ParametersDialog(QtWidgets.QDialog):
         for col, item in enumerate(items):
             self.table.setItem(row, col, item)
         self._rows.append((kind, name))
+        self._units.append((shown_unit, sort))
 
     def row_of(self, name: str) -> int:
         """The table row a parameter is on, or -1."""
@@ -297,7 +328,9 @@ class ParametersDialog(QtWidgets.QDialog):
             while "d%d" % i in self.doc.params:
                 i += 1
             name = "d%d" % i
-        self.doc.params.add(name, "10")
+        # a new one is ten of whatever the document is in
+        self.doc.params.add(name, unitlib.for_storage("10", self.doc_unit),
+                            unit=self.doc_unit)
         self.reload()
         self.changed.emit()
         self.table.setCurrentCell(self.row_of(name), NAME)
@@ -333,6 +366,10 @@ class ParametersDialog(QtWidgets.QDialog):
         if kind == HEADER:
             return
         text = item.text()
+        shown_unit, sort = self._units[row]
+        if col == EXPRESSION and sort == unitlib.LENGTH:
+            # typed in the unit shown, kept with that unit written in
+            text = unitlib.for_storage(text, shown_unit)
         if kind == PART:
             self._part_changed(name, col, text)
             return
@@ -609,12 +646,24 @@ class PropertiesPanel(QtWidgets.QWidget):
 
         bx, by, bz = props["bbox"]
         cx, cy, cz = props["centre"]
+        # in the document's own units; a millimetre part keeps the
+        # centimetres a workshop reads volumes and areas in
+        unit = unitlib.known(getattr(doc, "units", "mm") or "mm")
+        size = lambda v: unitlib.fmt(unitlib.to_unit(v, unit), 5)  # noqa
+        if unit == "mm":
+            volume = "%.3f cm3" % (props["volume_mm3"] / 1000.0)
+            area = "%.2f cm2" % (props["area_mm2"] / 100.0)
+        else:
+            volume = unitlib.volume_text(props["volume_mm3"], unit, 5)
+            area = unitlib.area_text(props["area_mm2"], unit, 5)
         rows = [
-            ("Bounding box", "%.2f x %.2f x %.2f mm" % (bx, by, bz)),
-            ("Volume", "%.3f cm3" % (props["volume_mm3"] / 1000.0)),
-            ("Surface area", "%.2f cm2" % (props["area_mm2"] / 100.0)),
-            ("Mass", "%.2f g" % props["mass_g"]),
-            ("Centre of mass", "%.2f, %.2f, %.2f" % (cx, cy, cz)),
+            ("Bounding box", "%s x %s x %s %s" % (size(bx), size(by),
+                                                  size(bz), unit)),
+            ("Volume", volume),
+            ("Surface area", area),
+            ("Mass", unitlib.mass_text(props["mass_g"], unit, 5)),
+            ("Centre of mass", "%s, %s, %s %s" % (size(cx), size(cy),
+                                                  size(cz), unit)),
             ("Faces", str(props["faces"])),
             ("Edges", str(props["edges"])),
         ]
@@ -841,6 +890,17 @@ class MeasureDialog(QtWidgets.QDialog):
         from OCP.TopAbs import TopAbs_EDGE, TopAbs_FACE, TopAbs_VERTEX
         from OCP.TopoDS import TopoDS
 
+        # in the units of whatever is being measured
+        doc = getattr(self.host, "active_document", None)
+        unit = unitlib.known(getattr(doc, "units", "mm") or "mm")
+
+        def length(v: float) -> str:
+            return unitlib.length_text(v, unit, 6)
+
+        def at(p) -> str:
+            return ", ".join(unitlib.fmt(unitlib.to_unit(c, unit), 6)
+                             for c in p)
+
         points = []
         for shape in shapes:
             kind = shape.ShapeType()
@@ -848,21 +908,24 @@ class MeasureDialog(QtWidgets.QDialog):
             points.append(centre)
             if kind == TopAbs_FACE:
                 face = TopoDS.Face_s(shape)
-                lines.append("Face   area %.3f mm2" % kernel.face_area(face))
+                lines.append("Face   area %s" % unitlib.area_text(
+                    kernel.face_area(face), unit, 6))
             elif kind == TopAbs_EDGE:
                 edge = TopoDS.Edge_s(shape)
-                lines.append("Edge   length %.4f mm" % kernel.edge_length(edge))
+                lines.append("Edge   length %s"
+                             % length(kernel.edge_length(edge)))
             else:
                 lines.append("Vertex")
-            lines.append("       at %.3f, %.3f, %.3f" % centre)
+            lines.append("       at %s" % at(centre))
 
         if len(points) == 2:
             import math
             d = math.dist(points[0], points[1])
             delta = tuple(points[1][i] - points[0][i] for i in range(3))
             lines.append("")
-            lines.append("Distance   %.4f mm" % d)
-            lines.append("dX %.3f   dY %.3f   dZ %.3f" % delta)
+            lines.append("Distance   %s" % length(d))
+            lines.append("dX %s   dY %s   dZ %s" % tuple(
+                unitlib.fmt(unitlib.to_unit(c, unit), 6) for c in delta))
 
         self.readout.setPlainText("\n".join(lines))
 

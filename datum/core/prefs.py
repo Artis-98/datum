@@ -75,12 +75,14 @@ class Preferences:
     # here, on this machine, because a file must never vouch for itself.
     trusted_folders: List[str] = field(default_factory=list)
     orbit: str = ORBIT_FREE
+    # what a new part or assembly is drawn in
+    units: str = "mm"
 
     def to_dict(self) -> Dict[str, Any]:
         return {"name": self.name, "initials": self.initials,
                 "company": self.company, "colours": dict(self.colours),
                 "trusted_folders": list(self.trusted_folders),
-                "orbit": self.orbit}
+                "orbit": self.orbit, "units": self.units}
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Preferences":
@@ -94,7 +96,8 @@ class Preferences:
             trusted_folders=[str(f) for f in
                              data.get("trusted_folders", []) or [] if f],
             orbit=(str(data.get("orbit")) if data.get("orbit") in ORBITS
-                   else ORBIT_FREE))
+                   else ORBIT_FREE),
+            units=_units(data.get("units")))
 
     def stamp(self, properties: Dict[str, str],
               key: str = "Designer") -> Dict[str, str]:
@@ -117,6 +120,11 @@ class Preferences:
             json.dump(self.to_dict(), handle, indent=2)
             handle.write("\n")
         return target
+
+
+def _units(value: Any) -> str:
+    from .units import LENGTHS
+    return str(value) if value in LENGTHS else "mm"
 
 
 def _is_colour(value: Any) -> bool:

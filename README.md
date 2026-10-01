@@ -138,6 +138,15 @@ or directly:
   in the table changes the dimension or the feature itself. Units (`mm`,
   `in`, `deg`, …), dependency ordering and circular-reference detection
   across the lot. Rules reach them all: `params.d7 = 30`
+- **Units**: millimetres, centimetres, metres, inches or feet, per
+  document, chosen by clicking the unit in the status bar, with the default
+  for new documents in Preferences. Geometry is millimetres inside and never
+  moves when the units change; what changes is how every length reads, in
+  dimensions, the Parameters table, expression boxes, Measure and the
+  Properties panel, and what a number typed without a unit means. Typed
+  lengths are kept with their unit written in, `2` in an inch part as
+  `2 in` and `d1 + 2` as `d1 + 2 in`, while factors such as the 2 in
+  `d1 * 2` are left alone, so nothing changes meaning later
 - Full feature tree: reorder, suppress, roll back, edit anything at any time.
   A sketch consumed by a feature nests underneath it and goes out of sight,
   as in Inventor, until **Show Sketch** brings it back; **Share Sketch** keeps

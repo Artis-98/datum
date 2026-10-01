@@ -129,6 +129,17 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.company_edit = QtWidgets.QLineEdit(self.prefs.company)
         self.company_edit.setPlaceholderText("appears in the title block")
         form.addRow("Company", self.company_edit)
+
+        from ..core import units as unitlib
+        self.units_combo = QtWidgets.QComboBox()
+        for key, label in unitlib.LABELS.items():
+            self.units_combo.addItem("%s  (%s)" % (label, key), key)
+        self.units_combo.setCurrentIndex(
+            max(0, self.units_combo.findData(self.prefs.units)))
+        self.units_combo.setToolTip(
+            "What new parts and assemblies are drawn in. A document's own "
+            "units are changed from the unit in the status bar.")
+        form.addRow("Units for new documents", self.units_combo)
         return page
 
     def _display_page(self) -> QtWidgets.QWidget:
@@ -184,6 +195,7 @@ class PreferencesDialog(QtWidgets.QDialog):
         self.prefs.name = self.name_edit.text().strip()
         self.prefs.initials = self.initials_edit.text().strip()
         self.prefs.company = self.company_edit.text().strip()
+        self.prefs.units = self.units_combo.currentData() or "mm"
         self.prefs.orbit = (self.orbit_combo.currentData()
                             or core_prefs.ORBIT_FREE)
         # only what differs from the shipped palette is written, so a

@@ -33,7 +33,9 @@ from ..core.constraints3d import (
 from . import icons
 from .assembly_browser import AssemblyBrowser
 from .theme import C
-from .widgets import ExpressionEdit, FormRows, SegmentedControl, SelectionField
+from .widgets import (
+    DocumentView, ExpressionEdit, FormRows, SegmentedControl, SelectionField,
+)
 
 # Assembly relationships get their own glyphs rather than borrowing the
 # sketch ones.  They used to borrow them, and somebody on r/AutodeskInventor
@@ -143,7 +145,7 @@ class ConstraintDialog(QtWidgets.QDialog):
         self.second.cleared.connect(lambda: self._clear(1))
         self.form.add("", self.second)
 
-        self.offset = ExpressionEdit("0", self.doc.params, "mm")
+        self.offset = ExpressionEdit("0", DocumentView(self.doc), "mm")
         self.offset.changed.connect(self._changed)
         self.offset_row = self.form.add("Offset", self.offset)
 
@@ -488,7 +490,8 @@ class PlacementDialog(QtWidgets.QDialog):
                                    ("Turn about X", rotation[0], "deg"),
                                    ("Turn about Y", rotation[1], "deg"),
                                    ("Turn about Z", rotation[2], "deg")):
-            edit = ExpressionEdit("%.4g" % value, self.doc.params, unit)
+            edit = ExpressionEdit("%.4g" % value, DocumentView(self.doc),
+                                  unit)
             edit.changed.connect(self._changed)
             form.add(label, edit)
             self.fields.append(edit)

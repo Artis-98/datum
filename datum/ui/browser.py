@@ -36,6 +36,7 @@ class ModelBrowser(QtWidgets.QTreeWidget):
     move_requested = QtCore.Signal(int, int)
     reorder_requested = QtCore.Signal(int, int)     # feature id, new index
     rollback_requested = QtCore.Signal(object)      # index or None
+    delete_below_requested = QtCore.Signal()
     visibility_toggled = QtCore.Signal(int)
 
     def __init__(self, parent=None) -> None:
@@ -428,6 +429,13 @@ class ModelBrowser(QtWidgets.QTreeWidget):
         elif kind == "end":
             act = menu.addAction(icons.icon("rollback", 16), "Roll to End")
             act.triggered.connect(lambda: self.rollback_requested.emit(None))
+            rolled = self._doc.rollback_index
+            menu.addSeparator()
+            drop = menu.addAction(icons.icon("delete", 16),
+                                  "Delete All Features Below")
+            drop.setEnabled(rolled is not None
+                            and rolled < len(self._doc.features))
+            drop.triggered.connect(self.delete_below_requested.emit)
         else:
             return
 
@@ -507,13 +515,19 @@ class ModelBrowser(QtWidgets.QTreeWidget):
         row = self._feature_row(target)
         if row < 0:
             return
-        below = self.dropIndicatorPosition() in (
+        position = self.dropIndicatorPosition()
+        below = position in (
             QtWidgets.QAbstractItemView.BelowItem,
             QtWidgets.QAbstractItemView.OnViewport)
 
         kind = source.data(0, ROLE_KIND)
         if kind == "end":
-            index = row + (1 if below else 0)
+            # Let go of the marker on a feature and it goes after that
+            # feature, so the feature is in: that is what Inventor does,
+            # and what anyone dragging it down a row expects.  Only the
+            # thin line above a row puts it before.
+            after = below or position == QtWidgets.QAbstractItemView.OnItem
+            index = row + (1 if after else 0)
             total = len(self._doc.features)
             self.rollback_requested.emit(None if index >= total else index)
         elif kind == "feature":

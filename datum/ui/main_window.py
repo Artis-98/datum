@@ -1093,6 +1093,7 @@ class MainWindow(QtWidgets.QMainWindow):
         b.move_requested.connect(self.move_feature)
         b.reorder_requested.connect(self.reorder_feature)
         b.rollback_requested.connect(self.set_rollback)
+        b.delete_below_requested.connect(self.delete_features_below)
         b.visibility_toggled.connect(lambda _fid: self._draw_visible_sketches())
 
         self.viewport.selection_changed.connect(self._on_viewport_selection)
@@ -2463,6 +2464,31 @@ class MainWindow(QtWidgets.QMainWindow):
         self.document.push_undo()
         self.document.remove_feature(feature_id)
         self.rebuild()
+
+    def delete_features_below(self) -> None:
+        """Delete everything under the End of Part marker."""
+        start = self.document.rollback_index
+        if start is None:
+            return
+        doomed = self.document.features[start:]
+        if not doomed:
+            return
+        names = [f.name for f in doomed]
+        shown = names if len(names) <= 12 else names[:12] + [
+            "... and %d more" % (len(names) - 12)]
+        text = "Delete %d feature%s below the End of Part?\n\n  %s" % (
+            len(names), "" if len(names) == 1 else "s", "\n  ".join(shown))
+        if QtWidgets.QMessageBox.question(
+                self, "Delete Below", text) != QtWidgets.QMessageBox.Yes:
+            return
+        self.document.push_undo()
+        for feature in doomed:
+            self.document.remove_feature(feature.id)
+        self.document.rollback_index = None
+        self.rebuild()
+        self.status_message.setText(
+            "Deleted %d feature%s." % (len(names),
+                                       "" if len(names) == 1 else "s"))
 
     def delete_selected_feature(self) -> None:
         for fid in self.browser.selected_feature_ids():

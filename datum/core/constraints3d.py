@@ -56,14 +56,15 @@ FLUSH = "flush"
 ANGLE = "angle"
 TANGENT = "tangent"
 INSERT = "insert"
+PARALLEL = "parallel"
 
-KINDS = (MATE, FLUSH, ANGLE, TANGENT, INSERT)
+KINDS = (MATE, FLUSH, ANGLE, TANGENT, INSERT, PARALLEL)
 
 # Inventor does not offer Flush as a *type*: it is one of two Solutions to a
 # Mate, and which one you want is a property of the pair of faces rather than
 # a different relationship.  They stay two kinds here because the residual
 # differs by a sign, but the dialog presents them the way Inventor does.
-TYPES = (MATE, ANGLE, TANGENT, INSERT)
+TYPES = (MATE, ANGLE, TANGENT, INSERT, PARALLEL)
 SOLUTIONS = (MATE, FLUSH)
 
 
@@ -77,6 +78,7 @@ KIND_LABELS = {
     ANGLE: "Angle",
     TANGENT: "Tangent",
     INSERT: "Insert",
+    PARALLEL: "Parallel",
 }
 
 SOLUTION_HINTS = {
@@ -90,6 +92,7 @@ KIND_HINTS = {
     ANGLE: "A fixed angle between two faces or axes.",
     TANGENT: "A round face touching a flat or round one.",
     INSERT: "Axes collinear and the two circles a set distance apart.",
+    PARALLEL: "Two faces or axes kept parallel, free to slide apart.",
 }
 
 KIND_UNITS = {ANGLE: "deg"}
@@ -102,11 +105,13 @@ OFFSET_LABELS = {
     ANGLE: "Angle",
     TANGENT: "Clearance",
     INSERT: "Offset",
+    PARALLEL: "Offset",
 }
 
 FLIP_LABELS = {
     TANGENT: ("Outside", "Inside"),
     INSERT: ("Opposed", "Aligned"),
+    PARALLEL: ("Aligned", "Opposed"),
 }
 
 # How hard a component resists being moved when the constraints do not care
@@ -407,7 +412,7 @@ def compatible(a: Frame, b: Frame, kind: str) -> bool:
         return False
     if kind == INSERT:
         return a.axial and b.axial
-    if kind == ANGLE:
+    if kind in (ANGLE, PARALLEL):
         return a.kind != POINT and b.kind != POINT
     if kind == TANGENT:
         return ((a.axial and b.kind == PLANE) or (a.kind == PLANE and b.axial)
@@ -429,6 +434,8 @@ def describe(kind: str, a: Frame, b: Frame) -> str:
         return "Axes collinear, circles held apart by the offset."
     if kind == ANGLE:
         return "A fixed angle between the two directions."
+    if kind == PARALLEL:
+        return "The two directions held parallel; nothing else is fixed."
     if kind == TANGENT:
         return "The round face rolls against the other, touching."
     if a.axial and b.axial:
@@ -471,6 +478,19 @@ def _rows(c: ResolvedConstraint, oa: np.ndarray, da: np.ndarray,
     if c.kind == ANGLE:
         # one residual, one degree of freedom removed
         out.append(float(np.dot(da, db)) - math.cos(math.radians(c.offset)))
+        return out
+
+    if c.kind == PARALLEL:
+        # An Angle of zero says the same thing, but its residual has no
+        # slope at zero, which is exactly where it is wanted, so the solver
+        # crawls in.  Matching the directions themselves keeps a slope all
+        # the way.  Two removed: a direction has two, the spin about it is
+        # left free, and so is every slide.
+        if ka == PLANE and kb == PLANE:
+            out.extend(float(v) for v in (da + db if c.flip else da - db))
+        else:
+            # an axis has no front and back, so either way along it will do
+            out.extend(float(v) for v in np.cross(da, db))
         return out
 
     if c.kind == TANGENT:

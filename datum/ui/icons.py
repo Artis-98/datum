@@ -851,6 +851,16 @@ def _i_c3d_angle(p):
     p.drawArc(rect, 0 * 16, 58 * 16)
 
 
+def _i_c3d_parallel(p):
+    # two faces at different heights, both looking the same way
+    _block(p, 2.5, 11, 6.5, 8)
+    _block(p, 12, 5, 6.5, 8)
+    _face_arrow(p, 9.4, 15, 1, length=2.6)
+    _face_arrow(p, 19, 9, 1, length=2.6)
+    _pen(p, _LINE, 1.0, dashed=True)
+    p.drawLine(QtCore.QPointF(2.5, 21.4), QtCore.QPointF(21.5, 21.4))
+
+
 def _i_c3d_tangent(p):
     # a round face resting on a flat one, touching at a point
     _fill(p, _SOLID)
@@ -928,6 +938,7 @@ PAINTERS: Dict[str, Callable[[QtGui.QPainter], None]] = {
     # the assembly ones, which are a different thing from the sketch ones
     "c3d_mate": _i_c3d_mate, "c3d_flush": _i_c3d_flush,
     "c3d_angle": _i_c3d_angle, "c3d_tangent": _i_c3d_tangent,
+    "c3d_parallel": _i_c3d_parallel,
     "c3d_insert": _i_c3d_insert, "c3d_symmetry": _i_c3d_symmetry,
     "feature": _i_box,
 }

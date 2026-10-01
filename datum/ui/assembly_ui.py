@@ -27,7 +27,7 @@ from ..core.assembly import (
     Occurrence,
 )
 from ..core.constraints3d import (
-    ANGLE, FLIP_LABELS, FLUSH, KIND_HINTS, KIND_LABELS, MATE, OFFSET_LABELS,
+    ANGLE, FLIP_LABELS, FLUSH, PARALLEL, KIND_HINTS, KIND_LABELS, MATE, OFFSET_LABELS,
     SOLUTION_HINTS, SOLUTIONS, TYPES, type_of,
 )
 from . import icons
@@ -46,6 +46,7 @@ KIND_ICONS = {
     "angle": "c3d_angle",
     "tangent": "c3d_tangent",
     "insert": "c3d_insert",
+    "parallel": "c3d_parallel",
 }
 
 # how far apart newly placed components are set down, as a fraction of what
@@ -206,6 +207,8 @@ class ConstraintDialog(QtWidgets.QDialog):
         self.form.set_label(self.offset, OFFSET_LABELS.get(kind, "Offset"))
 
         self.form.set_visible(self.solution, kind in SOLUTIONS)
+        # parallel holds a direction and nothing else, so it has no value
+        self.form.set_visible(self.offset, kind != PARALLEL)
 
         labels = FLIP_LABELS.get(kind)
         self.flip.setVisible(labels is not None)

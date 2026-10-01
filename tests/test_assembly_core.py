@@ -321,6 +321,54 @@ check("and still resolve",
 
 
 # ==========================================================================
+# ==========================================================================
+print("parallel holds a direction and nothing else")
+
+PARALLEL = constraints3d.PARALLEL
+check("it is offered as a type", PARALLEL in constraints3d.TYPES)
+check("it takes faces and axes, not points",
+      constraints3d.compatible(a_frame, b_frame, PARALLEL)
+      and not constraints3d.compatible(
+          a_frame, constraints3d.Frame(constraints3d.POINT, (0, 0, 0),
+                                       (0, 0, 1)), PARALLEL))
+top = constraints3d.Frame(constraints3d.PLANE, (0, 0, 10), (0, 0, 1))
+side = constraints3d.Frame(constraints3d.PLANE, (5, 0, 0), (1, 0, 0))
+parallel = constraints3d.ResolvedConstraint(
+    id=5, kind=PARALLEL, occ_a=1, occ_b=2, frame_a=top, frame_b=side)
+start = [30.0, -12.0, 44.0]
+placements = {1: Placement(), 2: Placement(list(start), [0.3, -0.5, 0.2])}
+report = constraints3d.solve(placements, [parallel], [2])
+check("it converges", report.ok, report.message)
+world_d = placements[2].apply_direction(side.direction)
+check("the faces end up looking the same way",
+      abs(world_d[2] - 1.0) < 1e-6, world_d)
+check("without being pulled across to it",
+      max(abs(placements[2].position[i] - start[i]) for i in range(3)) < 1.0,
+      placements[2].position)
+check("it leaves 4 DOF: every slide and the spin", report.dof == 4,
+      report.dof)
+
+parallel.flip = True
+placements[2] = Placement(list(start), [0.3, -0.5, 0.2])
+constraints3d.solve(placements, [parallel], [2])
+world_d = placements[2].apply_direction(side.direction)
+check("opposed turns them to face each other",
+      abs(world_d[2] + 1.0) < 1e-6, world_d)
+
+shaft = constraints3d.Frame(constraints3d.AXIS, (0, 0, 0), (0, 0, 1), 3.0)
+rod = constraints3d.Frame(constraints3d.AXIS, (0, 0, 0), (1, 0, 0), 2.0)
+axes = constraints3d.ResolvedConstraint(
+    id=6, kind=PARALLEL, occ_a=1, occ_b=2, frame_a=shaft, frame_b=rod)
+placements[2] = Placement([40.0, 10.0, 0.0], [0.2, 0.4, 0.0])
+constraints3d.solve(placements, [axes], [2])
+world_d = placements[2].apply_direction(rod.direction)
+check("two axes end up parallel, either way along",
+      abs(abs(world_d[2]) - 1.0) < 1e-6, world_d)
+
+saved = AssemblyConstraint(kind=PARALLEL, flip=True)
+check("its summary has no value in it",
+      saved.summary() == "Parallel  (opposed)", saved.summary())
+
 shutil.rmtree(WORK, ignore_errors=True)
 print()
 if FAILED:

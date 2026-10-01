@@ -207,7 +207,8 @@ class AssemblyConstraint:
                 constraints3d.FLUSH: "c_parallel",
                 constraints3d.ANGLE: "dimension",
                 constraints3d.TANGENT: "c_tangent",
-                constraints3d.INSERT: "c_concentric"}.get(self.kind,
+                constraints3d.INSERT: "c_concentric",
+                constraints3d.PARALLEL: "c_parallel"}.get(self.kind,
                                                           "c_coincident")
 
     def value(self, scope: Optional[Dict[str, float]] = None) -> float:
@@ -223,6 +224,9 @@ class AssemblyConstraint:
         if self.error:
             return self.error
         unit = "deg" if self.kind == constraints3d.ANGLE else "mm"
+        if self.kind == constraints3d.PARALLEL:
+            return "%s%s" % (KIND_LABELS.get(self.kind, self.kind),
+                             "  (opposed)" if self.flip else "")
         return "%s  %s %s%s" % (KIND_LABELS.get(self.kind, self.kind),
                                 self.offset or "0", unit,
                                 "  (flipped)" if self.flip else "")

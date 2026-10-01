@@ -16,7 +16,7 @@ from ..core.materials import Appearance
 from ..core.assembly import AssemblyDocument
 from ..core.cam import CamDocument
 from ..core.constraints3d import (
-    ANGLE, FLUSH, INSERT, KIND_HINTS, KIND_LABELS, MATE, TANGENT,
+    ANGLE, FLUSH, INSERT, KIND_HINTS, KIND_LABELS, MATE, PARALLEL, TANGENT,
 )
 from ..core.document import FILE_EXTENSION, Document, RebuildReport
 from ..core.features import (
@@ -499,7 +499,8 @@ class MainWindow(QtWidgets.QMainWindow):
                       ).clicked.connect(lambda: self.assembly_ui.constrain(MATE))
         for kind, icon_name in ((FLUSH, "c3d_flush"), (INSERT, "c3d_insert"),
                                 (ANGLE, "c3d_angle"),
-                                (TANGENT, "c3d_tangent")):
+                                (TANGENT, "c3d_tangent"),
+                                (PARALLEL, "c3d_parallel")):
             panel.add_small(icon_name, KIND_LABELS[kind], KIND_HINTS[kind]
                             ).clicked.connect(
                 lambda _=False, k=kind: self.assembly_ui.constrain(k))

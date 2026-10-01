@@ -246,8 +246,10 @@ body is reloaded from that file whenever it changes on disk.
 
 - **Place Component** brings in parts and sub-assemblies; the first one is
   grounded automatically, and the rest are set down beside it
-- Constraints are **Mate**, **Flush**, **Angle**, **Tangent** and **Insert**,
-  picked off faces and edges without saying which first
+- Constraints are **Mate**, **Flush**, **Angle**, **Tangent**, **Insert** and
+  **Parallel**, picked off faces and edges without saying which first.
+  Parallel holds two faces or axes the same way round and leaves every slide
+  free; Aligned or Opposed decides which way the faces look
 - They are solved as rigid placements — six unknowns per free component,
   driven by the same damped least-squares core as the sketch solver — so the
   browser can report the degrees of freedom that are left

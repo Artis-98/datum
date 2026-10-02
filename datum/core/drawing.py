@@ -1513,10 +1513,29 @@ class DrawingReport:
         return ", ".join(bits) or "Empty drawing - place a base view"
 
 
+_HASHED: Dict[str, Tuple[int, int, str]] = {}
+
+
 def file_hash(path: str) -> str:
-    """A cheap fingerprint of a model file, to notice it has changed."""
+    """A cheap fingerprint of a model file, to notice it has changed.
+
+    Asked for every view on every rebuild, so it is only worked out again
+    when the file's date or size says it might have changed: reading a
+    big model in full for each of a sheet's views was most of a rebuild.
+    """
     try:
-        with open(path, "rb") as handle:
-            return hashlib.blake2b(handle.read(), digest_size=16).hexdigest()
+        info = os.stat(path)
     except OSError:
         return ""
+    key = os.path.normcase(os.path.abspath(path))
+    held = _HASHED.get(key)
+    if held is not None and held[0] == info.st_mtime_ns             and held[1] == info.st_size:
+        return held[2]
+    try:
+        with open(path, "rb") as handle:
+            digest = hashlib.blake2b(handle.read(),
+                                     digest_size=16).hexdigest()
+    except OSError:
+        return ""
+    _HASHED[key] = (info.st_mtime_ns, info.st_size, digest)
+    return digest

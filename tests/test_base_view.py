@@ -205,7 +205,7 @@ def press_on_cube(where):
     settle()
 
 
-up_arrow = next(poly for name, poly in cube._buttons if name == "up")
+up_arrow = next(poly for name, poly in cube._buttons if name == "turn:up")
 press_on_cube(up_arrow.boundingRect().center())
 check("the up arrow looks down from the top",
       same(session.direction, hlr.ORIENTATIONS["top"][0]),

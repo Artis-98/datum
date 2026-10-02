@@ -88,6 +88,30 @@ def projected_orientation(parent_dir: Sequence[float],
     return (new_look, new_up)
 
 
+def iso_orientation(parent_dir: Sequence[float],
+                    parent_up: Sequence[float], dx: float, dy: float
+                    ) -> Tuple[Tuple[float, float, float],
+                               Tuple[float, float, float]]:
+    """The isometric a view dragged off a corner of its parent shows.
+
+    Taken from the parent, not from the model's own axes: off the top
+    right of a front view it is the model seen from the front, the right
+    and above, and off the top right of a top view it is the top view
+    tipped the same way.  The corner it is put towards is the corner it is
+    seen from, so turning the parent turns it too.
+    """
+    look = _unit(parent_dir)
+    up = _unit(parent_up)
+    right = _unit(_cross(up, _negate(look)))
+    sx = math.copysign(1.0, dx)
+    sy = math.copysign(1.0, dy)
+    direction = _unit([look[i] - sx * right[i] - sy * up[i]
+                       for i in range(3)])
+    along = sum(up[i] * direction[i] for i in range(3))
+    new_up = _unit([up[i] - along * direction[i] for i in range(3)])
+    return (direction, new_up)
+
+
 def outline(box: Sequence[float], direction: Sequence[float],
             up: Sequence[float]) -> Tuple[float, float]:
     """How big a model's box looks from this direction: across, and up.
@@ -322,7 +346,12 @@ class Generator:
         for sheet in doc.sheets:
             # parents first, so a child can read what its parent resolved to
             for view in self._in_order(sheet):
+                had = view.projection
                 self._one(doc, sheet, view, base, models, report, force)
+                if view.projection is not None and (
+                        view.projection is not had
+                        or getattr(view, "drawn_as", None) is None):
+                    view.drawn_as = self._drawn_direction(doc, sheet, view)
             self._reanchor(doc, sheet, models, report)
             self._recount(doc, sheet, base, models, report)
 
@@ -330,6 +359,60 @@ class Generator:
         report.duration = time.perf_counter() - started
         report.ok = not report.missing and not report.errors
         doc.last_report = report
+        return report
+
+    # -- after a view is moved --------------------------------------------
+
+    def _drawn_direction(self, doc: DrawingDocument, sheet: Sheet,
+                         view: View):
+        """Which way a view looks, to remember it was drawn that way."""
+        if view.kind in (SECTION, DETAIL):
+            return None
+        try:
+            return self._plain_direction(doc, sheet, view)
+        except Exception:
+            return None
+
+    def turned(self, doc: DrawingDocument, sheet: Sheet) -> List[View]:
+        """The views that now look a different way from how they are drawn.
+
+        A projected view looks whichever way it sits from its parent, so
+        dragging one across to the other side turns it.  Nearly every move
+        turns nothing: a view slid along its line, or a parent dragged with
+        its projections, looks the way it did, and has nothing to redraw.
+        Whatever comes from a turned view turns with it.
+        """
+        out: List[View] = []
+        for view in self._in_order(sheet):
+            if view.parent and any(v.id == view.parent for v in out):
+                out.append(view)
+                continue
+            drawn = getattr(view, "drawn_as", None)
+            if view.kind != PROJECTED or view.projection is None                     or drawn is None:
+                continue
+            now = self._drawn_direction(doc, sheet, view)
+            if now is None:
+                continue
+            if any(abs(a - b) > 1e-9 for pair in zip(now, drawn)
+                   for a, b in zip(pair[0], pair[1])):
+                out.append(view)
+        return out
+
+    def redraw(self, doc: DrawingDocument, sheet: Sheet,
+               views: Sequence[View],
+               base_dir: Optional[str] = None) -> DrawingReport:
+        """Draw these views again, and only these."""
+        report = DrawingReport()
+        base = base_dir if base_dir is not None else doc.base_dir
+        wanted = {id(v) for v in views}
+        models: Dict[int, Tuple[Optional[TopoDS_Shape], object, str]] = {}
+        for view in self._in_order(sheet):
+            if id(view) not in wanted:
+                continue
+            self._one(doc, sheet, view, base, models, report, True)
+            if view.projection is not None:
+                view.drawn_as = self._drawn_direction(doc, sheet, view)
+        report.ok = not report.missing and not report.errors
         return report
 
     def _reanchor(self, doc: DrawingDocument, sheet: Sheet, models: Dict,
@@ -666,7 +749,7 @@ class Generator:
             pd, pu = self._resolved_orientation(doc, sheet, parent)
             dx, dy = view.x - parent.x, view.y - parent.y
             if abs(dx) > 1e-6 and abs(dy) > 1e-6:
-                return hlr.ORIENTATIONS["iso"]
+                return iso_orientation(pd, pu, dx, dy)
             return projected_orientation(pd, pu, dx, dy, doc.angle)
         if view.kind == AUXILIARY:
             parent = sheet.view(view.parent)
@@ -700,7 +783,7 @@ class Generator:
             pd, pu = self._resolved_orientation(doc, sheet, parent)
             dx, dy = view.x - parent.x, view.y - parent.y
             if abs(dx) > 1e-6 and abs(dy) > 1e-6:
-                direction, up = hlr.ORIENTATIONS["iso"]
+                direction, up = iso_orientation(pd, pu, dx, dy)
             else:
                 direction, up = projected_orientation(pd, pu, dx, dy,
                                                       doc.angle)
@@ -747,7 +830,7 @@ class Generator:
         if view.kind == PROJECTED:
             dx, dy = view.x - parent.x, view.y - parent.y
             if abs(dx) > 1e-6 and abs(dy) > 1e-6:
-                return hlr.ORIENTATIONS["iso"]
+                return iso_orientation(pd, pu, dx, dy)
             return projected_orientation(pd, pu, dx, dy, doc.angle)
         return (pd, pu)
 

@@ -259,11 +259,13 @@ class OrientationCube:
         c = self.centre
         reach = self.SIZE + 16.0
         tip, half = 8.0, 6.0
+        # named turn:..., not "right" and "left": those are faces, and an
+        # arrow taken for the face it points at only ever went one step
         shapes = {
-            "right": [(reach + tip, 0), (reach, -half), (reach, half)],
-            "left": [(-reach - tip, 0), (-reach, -half), (-reach, half)],
-            "up": [(0, -reach - tip), (-half, -reach), (half, -reach)],
-            "down": [(0, reach + tip), (-half, reach), (half, reach)],
+            "turn:right": [(reach + tip, 0), (reach, -half), (reach, half)],
+            "turn:left": [(-reach - tip, 0), (-reach, -half), (-reach, half)],
+            "turn:up": [(0, -reach - tip), (-half, -reach), (half, -reach)],
+            "turn:down": [(0, reach + tip), (-half, reach), (half, reach)],
         }
         self._buttons = []
         for name, points in shapes.items():
@@ -276,7 +278,7 @@ class OrientationCube:
                                  for x, y in ((0, -7), (7, 0), (4, 0), (4, 6),
                                               (-4, 6), (-4, 0), (-7, 0))])
         self._buttons.append(("home", house))
-        for name, dx in (("ccw", reach - 20.0), ("cw", reach + 2.0)):
+        for name, dx in (("turn:ccw", reach - 20.0), ("turn:cw", reach + 2.0)):
             box = QtCore.QRectF(c.x() + dx - 8.0, c.y() - reach - 8.0,
                                 16.0, 16.0)
             self._buttons.append((name, QtGui.QPolygonF(box)))
@@ -287,12 +289,12 @@ class OrientationCube:
         for name, polygon in self._buttons:
             hot = self.hover == name
             colour = QtGui.QColor("#3b82d6" if hot else "#6b7684")
-            if name in ("cw", "ccw"):
+            if name in ("turn:cw", "turn:ccw"):
                 painter.save()
                 painter.setFont(symbol_font)
                 painter.setPen(colour)
                 painter.drawText(polygon.boundingRect(), QtCore.Qt.AlignCenter,
-                                 "↻" if name == "cw" else "↺")
+                                 "↻" if name == "turn:cw" else "↺")
                 painter.restore()
                 continue
             painter.setPen(QtCore.Qt.NoPen)
@@ -335,8 +337,8 @@ class OrientationCube:
             return looking_at(_parse(element))
         if element == "home":
             return (_unit(ISO[0]), square_up(ISO[0], ISO[1]))
-        if element in ("right", "left", "up", "down", "cw", "ccw"):
-            return turned(self.direction, self.up, element)
+        if element.startswith("turn:"):
+            return turned(self.direction, self.up, element[5:])
         return None
 
     def contains(self, pos: QtCore.QPointF) -> bool:

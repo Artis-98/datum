@@ -89,8 +89,11 @@ def exact(sheet_height: float, scale: float = 1.0) -> Layout:
 def paint(painter: QtGui.QPainter, doc: DrawingDocument, sheet: Sheet,
           layout: Layout, model_properties: Optional[Dict[str, str]] = None,
           with_paper: bool = True, selection: Sequence[int] = (),
-          on_screen: bool = False) -> None:
+          on_screen: bool = False, hidden: Sequence[int] = ()) -> None:
     """Draw one sheet, whole.
+
+    ``hidden`` views are left out, with whatever is pinned to them: the
+    ones being changed on screen, drawn there as they will be instead.
 
     ``model_properties`` may be a dict or a function of the sheet.  The
     canvas has several sheets to hand and resolves each one's model lazily;
@@ -109,9 +112,13 @@ def paint(painter: QtGui.QPainter, doc: DrawingDocument, sheet: Sheet,
     _title_block(painter, doc, sheet, layout, width, height, model_properties)
 
     for view in sheet.views:
+        if view.id in hidden:
+            continue
         _view(painter, doc, sheet, view, layout,
               selected=view.id in selection, on_screen=on_screen)
     for note in sheet.annotations:
+        if note.view in hidden:
+            continue
         _annotation(painter, doc, sheet, note, layout,
                     selected=note.id in selection)
     for table in sheet.parts_lists:

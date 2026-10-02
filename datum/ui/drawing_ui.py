@@ -59,7 +59,9 @@ class DrawingController(QtCore.QObject):
         canvas = self.canvas
         canvas.changed.connect(self._canvas_changed)
         canvas.selection_changed.connect(self._canvas_selection)
-        canvas.view_activated.connect(self.open_model)
+        # a view double-clicked opens its box again, as in Inventor; the
+        # model it shows is a right-click away
+        canvas.view_activated.connect(self.edit_view)
         canvas.context_requested.connect(self._canvas_menu)
         canvas.placing_finished.connect(self._placing_finished)
 
@@ -225,6 +227,97 @@ class DrawingController(QtCore.QObject):
         self.host.status_message.setText(
             "Point the view with the cube and drag it where it goes. Click "
             "round it for projections, then OK.")
+
+    def edit_view(self, view_id: int) -> None:
+        """A view double-clicked: its box again, to change it.
+
+        A base view gets the Drawing View box and the cube, as when it was
+        placed, with its projections there to drag; any other view gets
+        its own smaller box, its scale the base view's unless it is given
+        one of its own.
+        """
+        doc, sheet, view = self._selected_view(view_id)
+        if view is None:
+            return
+        if view.kind != BASE:
+            self.view_properties(view.id)
+            return
+        self.end_placement()
+        dialog = BaseViewDialog(self.host, self, doc, sheet, editing=view)
+        self._start_placer(BaseViewSession(self, sheet, dialog,
+                                           editing=view))
+        dialog.move(self.canvas.mapToGlobal(QtCore.QPoint(16, 16)))
+        dialog.show()
+        self.host.status_message.setStyleSheet("")
+        self.host.status_message.setText(
+            "Change %s with the box and the cube, drag it or its "
+            "projections, then OK." % view.name)
+
+    def apply_view_edit(self, view: View, settings: Dict[str, Any],
+                        direction, up, x: float, y: float,
+                        children: Sequence[Sequence[float]],
+                        child_ids: Sequence[int]) -> None:
+        """OK on a base view being edited: change it, and its projections."""
+        doc = self.document
+        sheet = doc.active() if doc else None
+        if sheet is None:
+            return
+        doc.push_undo()
+        path = settings.get("path") or ""
+        model = doc.view_model(sheet, view)
+        current = (model.ref.resolve(doc.base_dir)
+                   if model is not None and model.ref.path else None)
+        if path and (current is None or os.path.normcase(
+                os.path.abspath(path)) != os.path.normcase(
+                os.path.abspath(current))):
+            view.ref = fileformat.ComponentRef(
+                path=fileformat.relative_path(path, doc.base_dir),
+                name=os.path.basename(path),
+                label=os.path.splitext(os.path.basename(path))[0])
+        view.display = settings.get("display") or WITH_HIDDEN
+        view.scale = float(settings.get("scale") or view.scale)
+        view.name = settings.get("name") or view.name
+        view.direction = [float(c) for c in direction]
+        view.up = [float(c) for c in up]
+        view.orientation = viewgen.named_orientation(direction) or "front"
+
+        shift = (x - view.x, y - view.y)
+        view.x, view.y = x, y
+        kept = {i for i in child_ids if i}
+        for child in list(sheet.children_of(view.id)):
+            if child.kind == PROJECTED and child.id not in kept:
+                # dropped in the box, with whatever came from it
+                doc.remove_view(sheet, child.id, children=True)
+        moved_with_own = set()
+        made = set()
+        for (cx, cy), cid in zip(children, child_ids):
+            if cid:
+                child = sheet.view(cid)
+                if child is None:
+                    continue
+                step = (cx - child.x, cy - child.y)
+                child.x, child.y = cx, cy
+                for below in _descendants(sheet, child.id):
+                    below.x += step[0]
+                    below.y += step[1]
+                    moved_with_own.add(below.id)
+                moved_with_own.add(child.id)
+            else:
+                diagonal = abs(cx - x) > 1e-6 and abs(cy - y) > 1e-6
+                made.add(doc.add_view(sheet, View(
+                    kind=PROJECTED, parent=view.id, x=float(cx),
+                    y=float(cy), display="visible" if diagonal else "")).id)
+        # sections and details of it, and anything else not in the box,
+        # go where it went
+        for below in _descendants(sheet, view.id):
+            if below.id not in moved_with_own and below.id not in made:
+                below.x += shift[0]
+                below.y += shift[1]
+        # everything that comes from it is drawn again, and nothing else
+        for again in [view] + _descendants(sheet, view.id):
+            again.projection = None
+        doc.modified = True
+        self.rebuild()
 
     def add_projected(self) -> None:
         """Projections of the selected view, placed with the cursor."""
@@ -447,7 +540,10 @@ class DrawingController(QtCore.QObject):
         if dialog.exec() == QtWidgets.QDialog.Accepted:
             doc.push_undo()
             dialog.apply()
-            self.rebuild(force=True)
+            # drawn again: the view and what comes from it, nothing else
+            for again in [view] + _descendants(sheet, view.id):
+                again.projection = None
+            self.rebuild()
 
     def open_model(self, view_id: int) -> None:
         """Open the part or assembly a view is drawn from."""
@@ -836,13 +932,26 @@ class DrawingController(QtCore.QObject):
         self.host.status_message.setText(message)
 
     def _canvas_changed(self) -> None:
+        """Something on the sheet was dragged: draw again only what turned.
+
+        Moving a view used to rebuild the whole drawing, every view of
+        every sheet drawn afresh, twice over, after every drag; a view slid
+        along its line has not changed what it shows, and should just be
+        where it was put.  The one thing a move can change is which way a
+        projected view looks, when it is dragged across to the other side
+        of its parent, and only those views, and what comes from them, are
+        drawn again.
+        """
         doc = self.document
-        if doc is None:
+        sheet = doc.active() if doc else None
+        if sheet is None:
             return
         doc.modified = True
-        # a projected view's direction comes from where it sits, so moving
-        # one can change what it shows
-        self.rebuild(force=True)
+        turned = self.generator.turned(doc, sheet)
+        if turned:
+            self.generator.redraw(doc, sheet, turned)
+        self.canvas.update()
+        self.host.update_title()
 
     def _canvas_selection(self) -> None:
         if self.canvas.selected_views:
@@ -1223,14 +1332,21 @@ class ViewDialog(QtWidgets.QDialog):
         self.orientation.setEnabled(view.kind == BASE)
         form.addRow("Orientation", self.orientation)
 
+        # A view taken from another has that one's scale, locked, unless
+        # it is given one of its own: the box says which, as Inventor's
         self.scale = QtWidgets.QComboBox()
         self.scale.setEditable(True)
-        self.scale.addItem("From parent" if view.parent else "1:1", 0.0)
         for value in dwg.SCALES:
             self.scale.addItem(dwg.scale_text(value), value)
-        index = self.scale.findData(view.scale)
-        self.scale.setCurrentIndex(index if index >= 0 else 0)
+        self.scale.setEditText(dwg.scale_text(doc.view_scale(sheet, view)))
         form.addRow("Scale", self.scale)
+        self.own_scale = QtWidgets.QCheckBox("Its own scale, not the base "
+                                             "view's")
+        if view.parent:
+            self.own_scale.setChecked(view.scale > 0)
+            self.scale.setEnabled(view.scale > 0)
+            self.own_scale.toggled.connect(self.scale.setEnabled)
+            form.addRow("", self.own_scale)
 
         self.display = QtWidgets.QComboBox()
         self.display.addItem("From parent", "")
@@ -1276,8 +1392,11 @@ class ViewDialog(QtWidgets.QDialog):
             view.orientation = self.orientation.currentData() or "front"
             view.direction = []
             view.up = []
-        data = self.scale.currentData()
-        view.scale = float(data) if data is not None else view.scale
+        typed = dwg.parse_scale(self.scale.currentText())
+        if view.parent and not self.own_scale.isChecked():
+            view.scale = 0.0
+        elif typed:
+            view.scale = typed
         view.display = self.display.currentData() or ""
         if view.kind == SECTION:
             view.hatch = self.hatch.isChecked()
@@ -1299,17 +1418,20 @@ class BaseViewDialog(QtWidgets.QDialog):
     place_requested = QtCore.Signal()
 
     def __init__(self, parent, controller: DrawingController,
-                 doc: DrawingDocument, sheet: Sheet) -> None:
+                 doc: DrawingDocument, sheet: Sheet,
+                 editing: Optional[View] = None) -> None:
         super().__init__(parent)
         self.controller = controller
         self.doc = doc
         self.sheet = sheet
-        self.setWindowTitle("Drawing View")
+        self.editing = editing
+        self.setWindowTitle("Drawing View (%s)" % editing.name
+                            if editing is not None else "Drawing View")
         self.setModal(False)
         self.setMinimumWidth(380)
         # a scale picked or typed is the user's; until then it follows the
-        # model, the way Inventor's does
-        self._scale_chosen = False
+        # model, the way Inventor's does.  A view being edited has one.
+        self._scale_chosen = editing is not None
 
         form = QtWidgets.QFormLayout(self)
         row = QtWidgets.QHBoxLayout()
@@ -1360,7 +1482,21 @@ class BaseViewDialog(QtWidgets.QDialog):
         self.style.currentIndexChanged.connect(lambda _i: self.changed.emit())
         self.scale.editTextChanged.connect(self._scale_edited)
         self.name.textChanged.connect(lambda _t: self.changed.emit())
+        if editing is not None:
+            self._show_view(editing)
         self._model_changed()
+
+    def _show_view(self, view: View) -> None:
+        """Fill the box in from a view on the sheet, to change it."""
+        model = self.doc.view_model(self.sheet, view)
+        resolved = (model.ref.resolve(self.doc.base_dir)
+                    if model is not None and model.ref.path else None)
+        if resolved:
+            self.choose_file(resolved)
+        self.style.setCurrentIndex(max(0, self.style.findData(
+            self.doc.view_display(self.sheet, view))))
+        self._set_scale(self.doc.view_scale(self.sheet, view))
+        self.name.setText(view.name)
 
     # -- reading it -----------------------------------------------------------
 
@@ -1532,16 +1668,33 @@ class BaseViewSession(QtCore.QObject):
     """
 
     def __init__(self, controller: DrawingController, sheet: Sheet,
-                 dialog: BaseViewDialog) -> None:
+                 dialog: BaseViewDialog,
+                 editing: Optional[View] = None) -> None:
         super().__init__(controller)
         self.controller = controller
         self.sheet = sheet
         self.dialog: Optional[BaseViewDialog] = dialog
+        self.editing = editing
         self.direction, self.up = hlr.ORIENTATIONS["front"]
-        self.cube = OrientationCube()
-        self.cube.set_view(self.direction, self.up)
         self.x, self.y = self._middle()
         self.children: List[List[float]] = []
+        # which view on the sheet each child is, 0 for one not made yet
+        self.child_ids: List[int] = []
+        # views on the sheet left out while their preview stands in
+        self.hidden: set = set()
+        if editing is not None:
+            doc = controller.document
+            pd, pu = controller.generator.orientation(doc, sheet, editing)
+            self.direction = tuple(float(c) for c in pd)
+            self.up = tuple(float(c) for c in pu)
+            self.x, self.y = editing.x, editing.y
+            for child in sheet.children_of(editing.id):
+                if child.kind == PROJECTED:
+                    self.children.append([child.x, child.y])
+                    self.child_ids.append(child.id)
+            self.hidden = {editing.id} | set(self.child_ids)
+        self.cube = OrientationCube()
+        self.cube.set_view(self.direction, self.up)
         self.cursor: Optional[Tuple[float, float]] = None
         self.placed: List[int] = []
         self._press = None
@@ -1582,7 +1735,8 @@ class BaseViewSession(QtCore.QObject):
         doc = self.controller.document
         dx, dy = cx - self.x, cy - self.y
         if abs(dx) > 1e-6 and abs(dy) > 1e-6:
-            direction, up = hlr.ORIENTATIONS["iso"]
+            direction, up = viewgen.iso_orientation(self.direction, self.up,
+                                                    dx, dy)
             return direction, up, "Isometric", True
         direction, up = viewgen.projected_orientation(
             self.direction, self.up, dx, dy, doc.angle if doc else
@@ -1688,11 +1842,13 @@ class BaseViewSession(QtCore.QObject):
         spot = self._spot(point)
         if spot is not None:
             self.children.append([spot[0], spot[1]])
+            self.child_ids.append(0)
 
     def right_click(self, point, device: QtCore.QPointF) -> bool:
         key = self._view_at(point)
         if isinstance(key, int) and key < len(self.children):
             del self.children[key]
+            del self.child_ids[key]
         return True
 
     def cursor_shape(self, point, device: QtCore.QPointF):
@@ -1721,16 +1877,31 @@ class BaseViewSession(QtCore.QObject):
                          "up": up, "projection": None}
                 paint_boxes(painter, layout,
                             [(self._box(ghost), label)])
-        # off the view's top right corner, clear of where a side view or a
-        # top view goes, which is where the next clicks are wanted
-        base_box = self._box(views[0])
-        right, top = layout.to_device(base_box[2], base_box[3])
+        # Off the view's top right corner, clear of where a side view or a
+        # top view goes.  Measured from the model's whole size, which no
+        # turn changes, not from the view as it is now: a cube that jumped
+        # every time it was clicked would leave the cursor off the arrow
+        # that was being clicked through the faces.
+        reach_mm = self._radius()
+        corner_x, corner_y = layout.to_device(self.x + reach_mm,
+                                              self.y + reach_mm)
         canvas = self.controller.canvas
         reach = OrientationCube.SIZE + 40.0
         centre = QtCore.QPointF(
-            max(reach, min(canvas.width() - reach, right + reach)),
-            max(reach, min(canvas.height() - reach, top - reach)))
+            max(reach, min(canvas.width() - reach, corner_x + reach * 0.6)),
+            max(reach, min(canvas.height() - reach, corner_y - reach * 0.6)))
         self.cube.draw(painter, centre)
+
+    def _radius(self) -> float:
+        """Half the model's diagonal on the sheet: as big as any view of
+        it can be, whichever way it is turned."""
+        path = self.settings().get("path") or ""
+        box = self.controller.model_box(path) if path else None
+        if box is None:
+            return 20.0
+        diagonal = math.sqrt(sum((box[i + 3] - box[i]) ** 2
+                                 for i in range(3)))
+        return diagonal / 2.0 * self._scale()
 
     def _paint_view(self, painter: QtGui.QPainter, layout,
                     view: Dict[str, Any]) -> None:
@@ -1804,6 +1975,12 @@ class BaseViewSession(QtCore.QObject):
         if not settings.get("path"):
             self.controller._complain(
                 "Pick a part or assembly to draw first.")
+            return
+        if self.editing is not None:
+            self.controller.apply_view_edit(
+                self.editing, settings, self.direction, self.up, self.x,
+                self.y, [tuple(c) for c in self.children], self.child_ids)
+            self.controller.end_placement()
             return
         base = self.controller.create_views(
             settings, self.direction, self.up, self.x, self.y,
@@ -1906,10 +2083,10 @@ class ViewPlacer:
         if spot is None:
             return None
         dx, dy = spot[0] - parent.x, spot[1] - parent.y
-        if abs(dx) > 1e-6 and abs(dy) > 1e-6:
-            direction, up = hlr.ORIENTATIONS["iso"]
-            return (spot, direction, up, "Isometric")
         pd, pu = self.controller.generator.orientation(doc, self.sheet, parent)
+        if abs(dx) > 1e-6 and abs(dy) > 1e-6:
+            direction, up = viewgen.iso_orientation(pd, pu, dx, dy)
+            return (spot, direction, up, "Isometric")
         direction, up = viewgen.projected_orientation(pd, pu, dx, dy,
                                                       doc.angle)
         name = viewgen.named_orientation(direction)
@@ -1966,3 +2143,15 @@ def _box_at(centre: Sequence[float], size: Sequence[float]
     half_w, half_h = size[0] / 2.0, size[1] / 2.0
     return (centre[0] - half_w, centre[1] - half_h,
             centre[0] + half_w, centre[1] + half_h)
+
+
+def _descendants(sheet: Sheet, view_id: int) -> List[View]:
+    """Every view that comes from this one, however indirectly."""
+    out: List[View] = []
+    queue = [view_id]
+    while queue:
+        current = queue.pop()
+        for child in sheet.children_of(current):
+            out.append(child)
+            queue.append(child.id)
+    return out

@@ -55,6 +55,7 @@ class SheetCanvas(QtWidgets.QWidget):
         self._drag_from: Optional[Tuple[float, float]] = None
         self._origin: Optional[Tuple[float, float]] = None
         self._panning = False
+        self._moved = False
         self._last_pos = QtCore.QPoint()
         # views being placed with the cursor: the left button places, the
         # right one or Esc stops; see drawing_ui.ViewPlacer
@@ -138,7 +139,8 @@ class SheetCanvas(QtWidgets.QWidget):
                          with_paper=True,
                          selection=self.selected_views
                          + self.selected_annotations,
-                         on_screen=True)
+                         on_screen=True,
+                         hidden=getattr(self.placer, "hidden", ()) or ())
         if self.placer is not None:
             self.placer.paint(painter, self.layout())
         painter.end()
@@ -176,7 +178,23 @@ class SheetCanvas(QtWidgets.QWidget):
                     distance = _point_to_segment(local, a, b)
                     if distance < best_distance:
                         best, best_distance = view.id, distance
-        return best
+        if best is not None:
+            return best
+        # Nothing drawn right under the cursor: the view whose box it is
+        # in, the smallest if several, so a view can be taken hold of
+        # anywhere inside it, as in Inventor, not only on its lines
+        smallest = None
+        for view in sheet.views:
+            projection = view.projection
+            if projection is None or not projection.box:
+                continue
+            box = projection.box
+            local = (point[0] - view.x, point[1] - view.y)
+            if box[0] <= local[0] <= box[2] and box[1] <= local[1] <= box[3]:
+                area = (box[2] - box[0]) * (box[3] - box[1])
+                if smallest is None or area < smallest[0]:
+                    smallest = (area, view.id)
+        return smallest[1] if smallest else None
 
     def annotation_at(self, x: float, y: float) -> Optional[int]:
         sheet = self.sheet()
@@ -274,6 +292,7 @@ class SheetCanvas(QtWidgets.QWidget):
             self._drag_view = view_id
             self._origin = (view.x, view.y)
         self._drag_from = layout.to_sheet(pos.x(), pos.y())
+        self._moved = False
         self.selection_changed.emit()
         self.update()
 
@@ -304,6 +323,8 @@ class SheetCanvas(QtWidgets.QWidget):
         now = self.layout().to_sheet(pos.x(), pos.y())
         dx = now[0] - self._drag_from[0]
         dy = now[1] - self._drag_from[1]
+        if dx or dy:
+            self._moved = True
 
         if self._drag_view is not None and self._origin is not None:
             view = sheet.view(self._drag_view)
@@ -363,9 +384,10 @@ class SheetCanvas(QtWidgets.QWidget):
                                     QtCore.QPointF(pos))
                 self.update()
             return
-        moved = (self._drag_view is not None or self._drag_note is not None
-                 or self._drag_table is not None)
-        dragged = self._drag_from is not None and moved
+        # a click that picks something moves nothing, and is not a change
+        grabbed = (self._drag_view is not None or self._drag_note is not None
+                   or self._drag_table is not None)
+        dragged = self._drag_from is not None and grabbed and self._moved
         self._drag_view = None
         self._drag_note = None
         self._drag_table = None
@@ -375,7 +397,18 @@ class SheetCanvas(QtWidgets.QWidget):
             self.changed.emit()
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        # the wheel clicked twice fits the sheet, as Inventor's does
+        if event.button() == QtCore.Qt.MiddleButton:
+            self.fit()
+            return
         if self.placer is not None:
+            # the second of two quick clicks is still a click: the cube's
+            # arrow pressed four times turns the view four times
+            if event.button() == QtCore.Qt.LeftButton:
+                pos = event.position().toPoint()
+                self.placer.press(self.layout().to_sheet(pos.x(), pos.y()),
+                                  QtCore.QPointF(pos))
+                self.update()
             return
         pos = event.position().toPoint()
         view_id = self.view_at(pos.x(), pos.y())

@@ -297,8 +297,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_file_menu()
 
         # quick access toolbar, on its own row above the tabs
-        r.add_quick_action("new", "New part (Ctrl+N)").clicked.connect(
-            lambda: self.new_document())
+        # New asks what to make, as Inventor's does, rather than always
+        # making a part
+        r.add_quick_action("new", "New (Ctrl+N)").clicked.connect(
+            self.new_any)
         r.add_quick_action("open", "Open (Ctrl+O)").clicked.connect(
             self.open_document)
         r.add_quick_action("save", "Save (Ctrl+S)").clicked.connect(
@@ -1189,7 +1191,7 @@ class MainWindow(QtWidgets.QMainWindow):
             action.triggered.connect(slot)
             self.addAction(action)
 
-        add("Ctrl+N", lambda: self.new_document())
+        add("Ctrl+N", self.new_any)
         add("Ctrl+O", self.open_document)
         add("Ctrl+S", self.save_document)
         add("Ctrl+Shift+S", lambda: self.save_document(as_new=True))

@@ -28,7 +28,13 @@ from .theme import C
 LIVE_FIELDS = {
     "rect": ("W", "H"),
     "circle": ("ø",),
-    "line": ("L",),
+    "line": ("L", "∠"),
+}
+
+# the heads-up fields that are angles, in degrees from the sketch's
+# horizontal, rather than lengths in the part's units
+LIVE_ANGLES = {
+    "line": (1,),
 }
 
 # What each constraint shows as when its geometry is selected.  Short and
@@ -57,6 +63,11 @@ BADGE_PICK_PIXELS = 11.0     # how near the cursor has to be to grab one
 SNAP_PIXELS = 10.0
 PICK_PIXELS = 8.0
 AXIS_SNAP_DEG = 2.5
+
+# other sketches left visible: drawn faintly, and their dimensions with them
+REFERENCE_LINE = "#7f8894"
+REFERENCE_DIM = "#95a0ad"
+REFERENCE_PICK_PIXELS = 14.0
 
 # Inventor folds the rectangle, slot and polygon variants into one
 # drop-down.  Each variant is its own tool here, dispatched by name.
@@ -140,6 +151,11 @@ def _circle_through(a, b, c):
     return ((ux, uy), math.dist((ux, uy), a))
 
 
+def _heading(a, b) -> float:
+    """The direction from a to b in degrees, 0 to 360, from the horizontal."""
+    return math.degrees(math.atan2(b[1] - a[1], b[0] - a[0])) % 360.0
+
+
 def _dist_point_segment(p, a, b) -> float:
     ax, ay = a
     bx, by = b
@@ -169,7 +185,6 @@ class SketchEditor(QtCore.QObject):
 
         self.tool = "select"
         self.polygon_sides = 6
-        self.grid_step = 5.0
         self.snap_grid = True
         self.show_grid = False
         self.construction = False
@@ -227,6 +242,14 @@ class SketchEditor(QtCore.QObject):
         self._magnet: Optional[int] = None
         self._drag_dimension: Optional[int] = None
 
+        # the part's other visible sketches, drawn faintly behind this one,
+        # and where their dimension labels landed, so one can be clicked
+        self.references: List[Sketch] = []
+        self._reference_labels: List[Tuple[str, Tuple[float, float, float],
+                                           str]] = []
+        # the unit a reference sketch is drawn in from outside a sketch
+        self._units_override: Optional[str] = None
+
         viewport.plane_point_clicked.connect(self._on_click)
         viewport.plane_point_moved.connect(self._on_move)
         viewport.plane_drag_started.connect(self._on_drag_start)
@@ -267,6 +290,7 @@ class SketchEditor(QtCore.QObject):
         self._dim_target = None
         self._dim_picks = []
         self.set_tool("select")
+        self.viewport.grid_unit = self.units
         self.viewport.enter_plane_mode(sketch.plane, self.grid_step,
                                        self.show_grid)
         self.solve()
@@ -276,6 +300,8 @@ class SketchEditor(QtCore.QObject):
         if self.sketch is not None:
             self.sketch.name_pool = None
         self.sketch = None
+        self.references = []
+        self._reference_labels = []
         self._pending = []
         self._dim_target = None
         self._dim_picks = []
@@ -287,6 +313,22 @@ class SketchEditor(QtCore.QObject):
         self.show_grid = visible
         if self.active:
             self.viewport.set_grid(visible, self.sketch.plane, self.grid_step)
+
+    @property
+    def grid_step(self) -> float:
+        """The grid spacing snapped to, in millimetres.
+
+        The viewport's own, which follows the zoom and the part's units, so
+        the grid drawn and the grid snapped to can never disagree.
+        """
+        return getattr(self.viewport, "grid_step", 0.0) or 5.0
+
+    def units_changed(self) -> None:
+        """The part's units changed while the sketch is open: re-space."""
+        if self.active:
+            self.viewport.grid_unit = self.units
+            self.viewport.refresh_grid()
+            self.render()
 
     @property
     def active(self) -> bool:
@@ -401,34 +443,86 @@ class SketchEditor(QtCore.QObject):
                 count += 1
         return count
 
+    def _snap_candidate(self, u: float, v: float, tol: float
+                        ) -> Optional[Tuple[str, int, Tuple[float, float]]]:
+        """The one thing a cursor at (u, v) latches onto, or None.
+
+        (kind, id, position): a point, a line's midpoint, a circle's centre,
+        a spot on a curve, or the origin.  Snapping the cursor and
+        constraining to what it snapped to both ask this, so what gets
+        constrained is always what the cursor visibly latched onto.
+        """
+        best: Optional[Tuple[str, int, Tuple[float, float]]] = None
+        best_score = tol
+
+        # Existing points beat anything else, and a point several pieces of
+        # geometry already meet at beats a lone one - so a line drawn across
+        # a circle latches onto the endpoint that is already joined to it
+        # rather than to some arbitrary spot on the circumference.
+        for p in self.sketch.points.values():
+            d = math.hypot(p.x - u, p.y - v)
+            if d > tol:
+                continue
+            score = d * 0.55 - min(0.35 * tol, 0.12 * tol * self._degree(p.id))
+            if score < best_score:
+                best, best_score = ("point", p.id, (p.x, p.y)), score
+
+        for eid, ent in self.sketch.entities.items():
+            if ent.kind == "line":
+                a = self.sketch.points[ent.points[0]]
+                b = self.sketch.points[ent.points[1]]
+                mid = ((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
+                d = math.hypot(mid[0] - u, mid[1] - v)
+                if d <= tol and d * 0.8 < best_score:
+                    best, best_score = ("midpoint", eid, mid), d * 0.8
+            elif ent.kind in ("circle", "arc"):
+                c = self.sketch.points[ent.points[0]]
+                d = math.hypot(c.x - u, c.y - v)
+                if d <= tol and d * 0.7 < best_score:
+                    best, best_score = ("centre", c.id, (c.x, c.y)), d * 0.7
+                on = math.hypot(u - c.x, v - c.y)
+                if on > 1e-9:
+                    k = ent.radius / on
+                    cand = (c.x + (u - c.x) * k, c.y + (v - c.y) * k)
+                    dd = math.hypot(cand[0] - u, cand[1] - v)
+                    # on-curve is the weakest kind of snap: it is a whole
+                    # curve's worth of candidates, so it must not outrank a
+                    # real point that is nearly as close
+                    if dd <= tol and dd * 1.6 < best_score:
+                        best, best_score = ("on curve", eid, cand), dd * 1.6
+
+        # origin gets its own, slightly stickier, snap
+        if math.hypot(u, v) < tol * 1.2:
+            origin = next((p.id for p in self.sketch.points.values()
+                           if p.origin), -1)
+            best = ("origin", origin, (0.0, 0.0))
+        return best
+
     def _snap_target(self, u: float, v: float
                      ) -> Optional[Tuple[str, int, Tuple[float, float]]]:
         """What the last snap latched onto, so it can be constrained to.
 
         Snapping and constraining are the same intent: if the cursor locked
-        to a point or an edge, the geometry drawn there should stay attached
-        to it rather than merely starting at the same coordinates.
+        to a point, the middle of a line or an edge, the geometry drawn
+        there should stay attached to it rather than merely starting at the
+        same coordinates.
         """
         if self.sketch is None:
             return None
         tol = SNAP_PIXELS * self.viewport.pixel_scale()
 
-        # scored the same way as _snap, so what gets constrained is always
-        # what the cursor visibly latched onto
+        hit = self._snap_candidate(u, v, tol)
+        if hit is not None:
+            kind, oid, position = hit
+            if kind in ("point", "centre", "origin"):
+                return ("point", oid, position) if oid in self.sketch.points \
+                    else None
+            if kind == "midpoint":
+                return ("midpoint", oid, position)
+            return ("entity", oid, position)
+
         best = None
         best_score = tol
-        for point in self.sketch.points.values():
-            distance = math.hypot(point.x - u, point.y - v)
-            if distance > tol:
-                continue
-            score = distance * 0.55 - min(0.35 * tol,
-                                          0.12 * tol * self._degree(point.id))
-            if score < best_score:
-                best = ("point", point.id, (point.x, point.y))
-                best_score = score
-        if best is not None:
-            return best
-
         for eid in self.sketch.entities:
             polyline = self.sketch.entity_polyline(eid, 48)
             for i in range(len(polyline) - 1):
@@ -450,6 +544,10 @@ class SketchEditor(QtCore.QObject):
             if oid == point_id or oid not in s.points:
                 return
             s.add_constraint("coincident", points=[point_id, oid])
+        elif kind == "midpoint" and oid in s.entities:
+            if point_id in s.entities[oid].points:
+                return
+            s.add_constraint("midpoint", points=[point_id], entities=[oid])
         elif kind == "entity" and oid in s.entities:
             if point_id in s.entities[oid].points:
                 return
@@ -481,53 +579,10 @@ class SketchEditor(QtCore.QObject):
         if modifiers & QtCore.Qt.AltModifier:
             return (u, v)   # Alt suspends every snap
 
-        best: Optional[Tuple[float, float]] = None
-        best_score = tol
-        best_kind = ""
-
-        # Existing points beat anything else, and a point several pieces of
-        # geometry already meet at beats a lone one - so a line drawn across
-        # a circle latches onto the endpoint that is already joined to it
-        # rather than to some arbitrary spot on the circumference.
-        for p in self.sketch.points.values():
-            d = math.hypot(p.x - u, p.y - v)
-            if d > tol:
-                continue
-            score = d * 0.55 - min(0.35 * tol, 0.12 * tol * self._degree(p.id))
-            if score < best_score:
-                best, best_score, best_kind = (p.x, p.y), score, "point"
-
-        for eid, ent in self.sketch.entities.items():
-            if ent.kind == "line":
-                a = self.sketch.points[ent.points[0]]
-                b = self.sketch.points[ent.points[1]]
-                mid = ((a.x + b.x) / 2.0, (a.y + b.y) / 2.0)
-                d = math.hypot(mid[0] - u, mid[1] - v)
-                if d <= tol and d * 0.8 < best_score:
-                    best, best_score, best_kind = mid, d * 0.8, "midpoint"
-            elif ent.kind in ("circle", "arc"):
-                c = self.sketch.points[ent.points[0]]
-                d = math.hypot(c.x - u, c.y - v)
-                if d <= tol and d * 0.7 < best_score:
-                    best, best_score, best_kind = (c.x, c.y), d * 0.7, "centre"
-                on = math.hypot(u - c.x, v - c.y)
-                if on > 1e-9:
-                    k = ent.radius / on
-                    cand = (c.x + (u - c.x) * k, c.y + (v - c.y) * k)
-                    dd = math.hypot(cand[0] - u, cand[1] - v)
-                    # on-curve is the weakest kind of snap: it is a whole
-                    # curve's worth of candidates, so it must not outrank a
-                    # real point that is nearly as close
-                    if dd <= tol and dd * 1.6 < best_score:
-                        best, best_score, best_kind = cand, dd * 1.6, "on curve"
-
-        # origin gets its own, slightly stickier, snap
-        if math.hypot(u, v) < tol * 1.2:
-            best, best_kind = (0.0, 0.0), "origin"
-
-        if best is not None:
-            self._snap_info = best_kind
-            return best
+        hit = self._snap_candidate(u, v, tol)
+        if hit is not None:
+            self._snap_info = hit[0]
+            return hit[2]
 
         # axis alignment against the chain start
         if self._pending:
@@ -540,6 +595,8 @@ class SketchEditor(QtCore.QObject):
                 u = ax
 
         if self.snap_grid and not (modifiers & QtCore.Qt.ControlModifier):
+            # the grid on screen and the grid snapped to are the same one,
+            # in the part's own units, so 0.1 in reads 0.1 and not 0.0984
             step = self.grid_step
             gu = round(u / step) * step
             gv = round(v / step) * step
@@ -620,7 +677,8 @@ class SketchEditor(QtCore.QObject):
     @property
     def units(self) -> str:
         """The part's length unit: what dimensions read in and are typed in."""
-        return unitlib.known(getattr(self.params, "units", "mm") or "mm")
+        return unitlib.known(self._units_override
+                             or getattr(self.params, "units", "mm") or "mm")
 
     def _shown(self, c_kind: str, value: float) -> str:
         """A dimension's value as the part's units write it, no unit."""
@@ -790,8 +848,10 @@ class SketchEditor(QtCore.QObject):
             self.live.configure(captions)
         values = self._live_values(self._resolved_cursor(self._cursor))
         if values:
-            # every heads-up field is a length, shown in the part's units
-            self.live.track([unitlib.to_unit(v, self.units) for v in values],
+            # lengths show in the part's units, angles in degrees
+            angles = LIVE_ANGLES.get(self.tool, ())
+            self.live.track([v if i in angles else unitlib.to_unit(v, self.units)
+                             for i, v in enumerate(values)],
                             QtGui.QCursor.pos())
 
     def _on_click(self, u: float, v: float, modifiers) -> None:
@@ -806,6 +866,10 @@ class SketchEditor(QtCore.QObject):
         if self.value_popup.isVisible():
             cid = self.pick_dimension(u, v)
             if cid is not None and self._insert_dimension_name(cid):
+                return
+            # or on one of another visible sketch's, so a new sketch can
+            # take a size from an old one
+            if self._insert_reference_name(u, v):
                 return
 
         point = self._snap(u, v, modifiers)
@@ -1079,7 +1143,8 @@ class SketchEditor(QtCore.QObject):
         if self.tool == "circle":
             return [2.0 * math.dist(start, cursor)]
         if self.tool == "line":
-            return [math.dist(self._pending[-1], cursor)]
+            anchor = self._pending[-1]
+            return [math.dist(anchor, cursor), _heading(anchor, cursor)]
         return None
 
     def _resolved_cursor(self, cursor) -> Tuple[float, float]:
@@ -1088,9 +1153,10 @@ class SketchEditor(QtCore.QObject):
             return cursor
         scope = self.params.scope() if self.params else {}
 
-        def number(text, fallback):
+        def number(text, fallback, kind=unitlib.LENGTH):
             try:
-                return evaluate(unitlib.for_storage(text, self.units), scope)
+                return evaluate(unitlib.for_storage(text, self.units, kind),
+                                scope)
             except (ExpressionError, TypeError):
                 return fallback
 
@@ -1111,13 +1177,24 @@ class SketchEditor(QtCore.QObject):
             length = math.hypot(dx, dy) or 1.0
             return (start[0] + dx / length * radius,
                     start[1] + dy / length * radius)
-        if self.tool == "line" and locked[0]:
+        typed_angle = locked[1] if len(locked) > 1 else None
+        if self.tool == "line" and (locked[0] or typed_angle):
+            # a typed angle fixes the direction and the line runs along it
+            # as far as the cursor reaches; a typed length fixes how far
             anchor = self._pending[-1]
-            length_wanted = number(locked[0], math.dist(anchor, cursor))
             dx, dy = cursor[0] - anchor[0], cursor[1] - anchor[1]
-            length = math.hypot(dx, dy) or 1.0
-            return (anchor[0] + dx / length * length_wanted,
-                    anchor[1] + dy / length * length_wanted)
+            reach = math.hypot(dx, dy)
+            if typed_angle:
+                angle = math.radians(number(typed_angle,
+                                            _heading(anchor, cursor),
+                                            unitlib.ANGLE))
+                ux, uy = math.cos(angle), math.sin(angle)
+                reach = max(0.0, dx * ux + dy * uy)
+            else:
+                ux, uy = (dx / reach, dy / reach) if reach > 1e-12 else (1.0, 0.0)
+            if locked[0]:
+                reach = number(locked[0], reach)
+            return (anchor[0] + ux * reach, anchor[1] + uy * reach)
         return cursor
 
     def _commit_live(self) -> None:
@@ -1164,6 +1241,36 @@ class SketchEditor(QtCore.QObject):
             if locked and locked[0]:
                 self._add_dimension("distance", [pts[0], pts[1]], [],
                                     math.dist(start, end), locked[0])
+            if len(locked) > 1 and locked[1]:
+                self._dimension_line_angle(created[0], locked[1])
+
+    def _dimension_line_angle(self, eid: int, text: str) -> None:
+        """Hold a just-drawn line at the angle typed for it.
+
+        Measured from the sketch's horizontal.  A plain 0, 90, 180 or 270
+        is already held by the horizontal or vertical constraint drawing it
+        gave the line, so that is left to do the job.  Anything else drops
+        that constraint, which drawing may have guessed from a line only a
+        degree or two off square, before the angle goes on.
+        """
+        s = self.sketch
+        unit_kind = unitlib.ANGLE
+        plain = unitlib.plain_value(text, self.units, unit_kind)
+        if plain is not None and abs((plain + 45.0) % 90.0 - 45.0) < 1e-9:
+            return
+        for cid, c in list(s.constraints.items()):
+            if c.kind in ("horizontal", "vertical") and c.entities == [eid]:
+                s.remove_constraint(cid)
+        cid = self._add_dimension("angle", [], [eid],
+                                  plain if plain is not None else 0.0, text)
+        if cid is None:
+            return
+        # the label sits inside the angle, a little way out from the corner
+        a, b = (s.points[pid] for pid in s.entities[eid].points)
+        reach = 0.45 * math.hypot(b.x - a.x, b.y - a.y)
+        half = math.radians(_heading((a.x, a.y), (b.x, b.y))) / 2.0
+        s.constraints[cid].label_offset = (reach * math.cos(half),
+                                           reach * math.sin(half))
 
     def _on_drag_end(self) -> None:
         if self._box_start is not None:
@@ -2612,6 +2719,7 @@ class SketchEditor(QtCore.QObject):
             vp.redraw()
             return
 
+        self._render_references()
         s = self.sketch
         conflicting = set()
         for cid in s.conflicting:
@@ -2744,6 +2852,9 @@ class SketchEditor(QtCore.QObject):
                 return abs(self._perpendicular(c.points[0], c.points[1],
                                                c.points[2]))
             if c.kind == "angle":
+                if len(c.entities) == 1:
+                    ux, uy = self._line_direction(c.entities[0])
+                    return math.degrees(math.atan2(uy, ux)) % 360.0
                 return self._angle_between(c.entities[0], c.entities[1])
             a = s.points[c.points[0]]
             b = s.points[c.points[1]]
@@ -2756,15 +2867,17 @@ class SketchEditor(QtCore.QObject):
             return c.value
 
     def _render_dimension(self, c: Constraint, offset=None,
-                          preview: bool = False) -> None:
+                          preview: bool = False,
+                          colour: Optional[str] = None):
+        """Draw one dimension; returns where its label went, in 3D."""
         s = self.sketch
         vp = self.viewport
         anchor = self._dimension_anchor(c)
         if anchor is None:
-            return
+            return None
         off = offset if offset is not None else c.label_offset
         label_pos = (anchor[0] + off[0], anchor[1] + off[1])
-        colour = C.sketch_preview if preview else C.sketch_dim
+        colour = colour or (C.sketch_preview if preview else C.sketch_dim)
 
         if c.kind in ("radius", "diameter"):
             ent = s.entities[c.entities[0]]
@@ -2802,12 +2915,19 @@ class SketchEditor(QtCore.QObject):
                 ent = s.entities[c.entities[0]]
                 corner = s.points[ent.points[0]]
             except (KeyError, IndexError):
-                return
+                return None
             for eid in c.entities:
                 other = s.entities[eid]
                 p1, p2 = s.points[other.points[0]], s.points[other.points[1]]
                 vp.draw_edge(self._to3d((p1.x, p1.y)), self._to3d((p2.x, p2.y)),
                              colour, 0.9, preview=preview, dashed=True)
+                if len(c.entities) == 1:
+                    # what a lone line's angle is measured from: the
+                    # horizontal through its start, as long as the line
+                    reach = math.hypot(p2.x - p1.x, p2.y - p1.y)
+                    vp.draw_edge(self._to3d((p1.x, p1.y)),
+                                 self._to3d((p1.x + reach, p1.y)),
+                                 colour, 0.9, preview=preview, dashed=True)
             vp.draw_edge(self._to3d((corner.x, corner.y)),
                          self._to3d(label_pos), colour, 1.1, preview=preview,
                          dashed=True)
@@ -2823,7 +2943,7 @@ class SketchEditor(QtCore.QObject):
                     b = s.points[c.points[1]]
                     ax, ay, bx, by = a.x, a.y, b.x, b.y
             except (KeyError, IndexError):
-                return
+                return None
 
             # A horizontal or vertical dimension is not drawn along the line
             # between the two points - it is drawn along the axis it
@@ -2855,8 +2975,74 @@ class SketchEditor(QtCore.QObject):
             text = "%s  (%s)" % (text, unitlib.for_display(
                 c.expression, self.units,
                 unitlib.ANGLE if c.kind == "angle" else unitlib.LENGTH))
-        vp.draw_text(text, self._to3d(label_pos), colour, 15.0,
-                     preview=preview)
+        where = self._to3d(label_pos)
+        vp.draw_text(text, where, colour, 15.0, preview=preview)
+        return where
+
+    # -- other sketches, shown for reference -------------------------------
+
+    def draw_reference(self, sketch: Sketch, units: Optional[str] = None
+                       ) -> List[Tuple[str, Tuple[float, float, float], str]]:
+        """Draw another sketch faintly, dimensions and all.
+
+        A sketch left visible keeps its dimensions on show, as in Inventor,
+        so a size can be read straight off it, or clicked while typing a
+        value in the sketch being edited to reuse it.  Drawn with the
+        editor's own dimension code, on the other sketch's own plane, by
+        lending it that sketch for the length of the call.
+
+        Returns (name, label position in 3D, value as text) for each
+        dimension drawn, which is what clicking one needs.
+        """
+        vp = self.viewport
+        for eid, ent in sketch.entities.items():
+            edge = kernel._sketch_edge(sketch, eid)
+            if edge is not None:
+                vp.draw_shape(edge, C.sketch_construction if ent.construction
+                              else REFERENCE_LINE, 1.2, dashed=ent.construction)
+
+        labels = []
+        own, own_units = self.sketch, self._units_override
+        self.sketch = sketch
+        if units:
+            self._units_override = units
+        try:
+            for c in sketch.constraints.values():
+                if not c.is_dimension:
+                    continue
+                try:
+                    where = self._render_dimension(c, colour=REFERENCE_DIM)
+                    text = self._dimension_text(c)
+                except (KeyError, IndexError):
+                    continue
+                if where is not None and c.name:
+                    labels.append((c.name, where, text))
+        finally:
+            self.sketch = own
+            self._units_override = own_units
+        return labels
+
+    def _render_references(self) -> None:
+        self._reference_labels = []
+        for sketch in self.references:
+            if sketch is not self.sketch:
+                self._reference_labels += self.draw_reference(sketch)
+
+    def _insert_reference_name(self, u: float, v: float) -> bool:
+        """Put the name of another sketch's dimension, clicked, in the box."""
+        if not self._reference_labels:
+            return False
+        vp = self.viewport
+        x, y = vp.project(self._to3d((u, v)))
+        for name, where, text in self._reference_labels:
+            lx, ly = vp.project(where)
+            if math.hypot(lx - x, ly - y) <= REFERENCE_PICK_PIXELS:
+                self.value_popup.insert(name)
+                self.hint_changed.emit(
+                    "%s is %s. Finish the expression and press Enter."
+                    % (name, text))
+                return True
+        return False
 
     def _render_preview(self) -> None:
         vp = self.viewport
@@ -2930,13 +3116,13 @@ class SketchEditor(QtCore.QObject):
                 vp.draw_edge(self._to3d(pts[i]), self._to3d(pts[i + 1]),
                              colour, 1.4, preview=True, dashed=True)
 
-        # No marker rides along with the cursor: the cursor is the cursor,
-        # and what it is about to take lights up instead.  The one exception
-        # is a snap onto something that is not geometry you can see - a
-        # midpoint, a point on a curve - where there would otherwise be
-        # nothing at all to show for it.
+        # A snap is shown by a small cross on the exact spot it took, which
+        # matters most for what is not geometry you can see - a midpoint, a
+        # point on a curve, a grid point.  Small, because a ring the size of
+        # a fingertip hides the very spot it is pointing at.
         if self._snap_info:
-            vp.draw_point(self._to3d(cur), C.sketch_hover, 5.0, preview=True)
+            vp.draw_point(self._to3d(cur), C.sketch_hover, 2.6, preview=True,
+                          marker=Aspect_TypeOfMarker.Aspect_TOM_X)
         vp.redraw()
 
     def _preview_box(self) -> None:

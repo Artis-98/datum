@@ -1054,8 +1054,10 @@ class MainWindow(QtWidgets.QMainWindow):
         document.modified = True
         self._sync_units()
         self._update_title()
-        if self.editor.active:
-            self.editor.render()
+        self.editor.units_changed()
+        if self.in_part:
+            # the dimensions on visible sketches read in the new unit too
+            self._draw_visible_sketches()
         self.properties.update_from(document)
         self.status_message.setStyleSheet("")
         self.status_message.setText(
@@ -2258,24 +2260,48 @@ class MainWindow(QtWidgets.QMainWindow):
                                   self._picker_size())
 
     def _draw_visible_sketches(self) -> None:
-        """Show finished sketches faintly, the way Inventor keeps them around."""
+        """Show finished sketches faintly, the way Inventor keeps them around.
+
+        With their dimensions: making a sketch visible is how its sizes are
+        brought back on screen.
+        """
         if self.editor.active:
+            # a sketch switched on or off from the tree mid-edit shows up,
+            # or goes, behind the one being edited
+            editing = getattr(self, "_sketch_feature_id", None)
+            if editing is not None:
+                self.editor.references = self._reference_sketches(editing)
+                self.editor.render()
             return
         self.viewport.clear_overlay()
+        units = getattr(self.document, "units", "mm") or "mm"
         for feature in self.document.sketch_features():
             if self.browser.is_sketch_hidden(feature.id, self.document):
                 continue
             if feature.suppressed:
                 continue
-            sketch = feature.sketch
-            for eid, ent in sketch.entities.items():
-                edge = kernel._sketch_edge(sketch, eid)
-                if edge is not None:
-                    self.viewport.draw_shape(
-                        edge, C.sketch_construction if ent.construction
-                        else "#7f8894", 1.2, dashed=ent.construction)
+            self.editor.draw_reference(feature.sketch, units)
         self._draw_work_axes()
         self.viewport.redraw()
+
+    def _reference_sketches(self, feature_id: int) -> list:
+        """The visible sketches above the one being edited, to show with it.
+
+        Only those above: what comes later in the tree is rolled back while
+        a sketch is edited, and a size taken from it would be a size taken
+        from the future.
+        """
+        upto = self.document.index_of(feature_id)
+        out = []
+        for feature in self.document.sketch_features():
+            if feature.id == feature_id or feature.suppressed:
+                continue
+            if self.document.index_of(feature.id) > upto:
+                continue
+            if self.browser.is_sketch_hidden(feature.id, self.document):
+                continue
+            out.append(feature.sketch)
+        return out
 
     def _draw_work_axes(self) -> None:
         """Each work axis as a long dashed line through the model, named."""
@@ -2903,6 +2929,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # where the camera was, to go back to when the sketch is finished
         # rather than to a fixed view the person never chose
         self._camera_before_sketch = self.viewport.camera_state()
+        self.editor.references = self._reference_sketches(feature_id)
         self.editor.begin(feature.sketch, self.document.parameter_view())
         self._draw_visible_planes()      # clears them while sketching
         # swing round to the plane rather than snapping, so it stays obvious
@@ -2910,7 +2937,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.viewport.look_at_plane(feature.sketch.plane, fit=True,
                                     animate=True)
         self.viewport.refresh_grid()
-        self.editor.grid_step = self.viewport.grid_step
         self.ribbon.set_tab_visible(TAB_SKETCH, True)
         self.ribbon.show_tab(TAB_SKETCH)
         self.browser.refresh()

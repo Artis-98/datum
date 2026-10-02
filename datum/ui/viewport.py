@@ -228,6 +228,10 @@ class Viewport(QtWidgets.QWidget):
         self.selection_mode = "face"
         self.show_origin = True
         self.grid_visible = False
+        # the sketch grid's spacing in millimetres, and the unit it is made
+        # a round number in: 0.1 in for a part in inches, not 2.54 mm
+        self.grid_step = 5.0
+        self.grid_unit = "mm"
 
         # sketch interaction
         self.sketch_plane: Optional[SketchPlane] = None
@@ -1929,8 +1933,6 @@ class Viewport(QtWidgets.QWidget):
         self.plane_mode = True
         # the grid is off by default - snapping does not need it drawn
         self.set_grid(show_grid, plane, grid_step)
-        if not show_grid:
-            self.grid_step = grid_step
         self.set_selection_mode("none")
 
     def leave_plane_mode(self) -> None:
@@ -1950,22 +1952,16 @@ class Viewport(QtWidgets.QWidget):
         if not self._ready:
             return
         self.grid_visible = visible
+        # worked out whether the grid is drawn or not: the points snapped to
+        # are the grid's points, so switching it on shows where they were
+        step = self.update_grid_step()
         if visible:
             plane = plane or self.sketch_plane
             if plane is not None:
                 ax = gp_Ax3(gp_Pnt(*plane.origin), gp_Dir(*plane.normal),
                             gp_Dir(*plane.xdir))
                 self.viewer.SetPrivilegedPlane(ax)
-            # keep the grid readable: roughly 30 divisions across the view,
-            # rounded to a 1/2/5 step so the numbers stay familiar
             span = max(20.0, self.view_span())
-            raw = span / 30.0
-            magnitude = 10.0 ** math.floor(math.log10(raw))
-            for nice in (1.0, 2.0, 5.0, 10.0):
-                if raw <= nice * magnitude:
-                    step = nice * magnitude
-                    break
-            self.grid_step = step
             self.viewer.SetRectangularGridValues(0.0, 0.0, step, step, 0.0)
             self.viewer.SetRectangularGridGraphicValues(span * 1.5, span * 1.5,
                                                         0.0)
@@ -1975,10 +1971,33 @@ class Viewport(QtWidgets.QWidget):
             self.viewer.DeactivateGrid()
         self.redraw()
 
+    def update_grid_step(self) -> float:
+        """The grid spacing for the view as it is now, in millimetres.
+
+        Roughly 30 divisions across the view, rounded to a 1, 2 or 5 step
+        in the part's own unit so the numbers stay familiar: 5 mm, or 0.1
+        in for a part in inches, never the 0.197 in that 5 mm comes to.
+        """
+        from ..core import units as unitlib
+
+        unit = unitlib.known(self.grid_unit)
+        span = unitlib.to_unit(max(20.0, self.view_span()), unit)
+        raw = span / 30.0
+        magnitude = 10.0 ** math.floor(math.log10(raw))
+        step = 10.0 * magnitude
+        for nice in (1.0, 2.0, 5.0):
+            if raw <= nice * magnitude:
+                step = nice * magnitude
+                break
+        self.grid_step = unitlib.to_mm(step, unit)
+        return self.grid_step
+
     def refresh_grid(self) -> None:
-        """Re-space the grid after the zoom level changed."""
+        """Re-space the grid after the zoom level or the units changed."""
         if self.grid_visible:
             self.set_grid(True, self.sketch_plane)
+        elif self.plane_mode:
+            self.update_grid_step()
 
     # -- dragging along an axis (work planes pulled off a face) -------------
 

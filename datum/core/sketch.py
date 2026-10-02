@@ -907,9 +907,16 @@ class Sketch:
                             d = math.hypot(bx - ax, by - ay)
                             out.append(d - abs(R(x, e1.id) + R(x, e2.id)))
                     elif kind == "angle":
-                        (a, b) = line_pts(x, c.entities[0])
-                        (p, q) = line_pts(x, c.entities[1])
-                        a1 = math.atan2(b[1] - a[1], b[0] - a[0])
+                        # one line alone is measured from the sketch's own
+                        # horizontal, which is what typing an angle while
+                        # drawing a line asks for
+                        if len(c.entities) == 1:
+                            a1 = 0.0
+                            (p, q) = line_pts(x, c.entities[0])
+                        else:
+                            (a, b) = line_pts(x, c.entities[0])
+                            (p, q) = line_pts(x, c.entities[1])
+                            a1 = math.atan2(b[1] - a[1], b[0] - a[0])
                         a2 = math.atan2(q[1] - p[1], q[0] - p[0])
                         diff = math.degrees(a2 - a1) % 360.0
                         target = val % 360.0

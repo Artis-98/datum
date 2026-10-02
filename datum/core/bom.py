@@ -221,15 +221,139 @@ def _property(document, name: str, fallback: str) -> str:
     return fallback
 
 
+class _Peeked:
+    """What a parts list needs of a part, read from its file, not built.
+
+    Opening a part as a document rebuilds it, every feature, and a list
+    of what an assembly is made of only wants its properties and its
+    material: on a 48 part machine that was the difference between the
+    table coming up at once and coming up in half a minute.
+    """
+
+    def __init__(self, path: str, geometry: Dict[str, Any]) -> None:
+        self.path = path
+        self.properties = {str(k): str(v) for k, v
+                           in (geometry.get("properties") or {}).items()}
+        self.material = str(geometry.get("material", "Generic") or "Generic")
+        self.units = str(geometry.get("units", "mm") or "mm")
+        stored = geometry.get("density")
+        density = None
+        try:
+            from . import materials
+            known = materials.library().materials.get(self.material)
+            density = known.density if known is not None else None
+        except Exception:
+            density = None
+        self.density = float(stored) if stored is not None else (
+            density if density is not None else 1.0)
+
+
 def _open(path: str, library) -> Optional[Any]:
-    """The document at a path, without insisting on it being there."""
+    """The document at a path, without insisting on it being there.
+
+    An assembly is opened, since what it holds is wanted; a part is only
+    read, since only what it says about itself is.
+    """
     if not path or not os.path.exists(path):
         return None
     try:
-        from . import assembly
+        from . import assembly, fileformat
+        if fileformat.peek(path).type == fileformat.PART:
+            return _Peeked(path, fileformat.read(path).geometry)
         return assembly.open_any(path)
     except Exception:
         return None
+
+
+# ----------------------------------------------------------------- mass
+
+_MASSES: Dict[str, Any] = {}
+
+
+def mass_grams(path: str, library, density_of=None) -> Optional[float]:
+    """What one of the file at ``path`` weighs, in grams, or None.
+
+    A part is its body's volume times its material's density; an assembly
+    is what its parts weigh, each as many times as it is used.  Worked out
+    once per file as it stands on disk.
+    """
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        stamp = os.stat(path)
+    except OSError:
+        return None
+    key = (key_for(path), stamp.st_mtime_ns, stamp.st_size)
+    if key in _MASSES:
+        return _MASSES[key]
+    found = None
+    document = _open(path, library)
+    if document is not None and getattr(document, "occurrences", None)             is not None:
+        total = 0.0
+        for row in rows_for(document, os.path.dirname(os.path.abspath(path)),
+                            library, recurse=True):
+            each = mass_grams(row.path, library)
+            if each is None:
+                total = None
+                break
+            total += each * row.quantity
+        found = total
+    elif document is not None and library is not None:
+        try:
+            from . import kernel
+            shape = library.shape(path)
+            if shape is not None:
+                found = kernel.volume(shape) / 1000.0 * float(
+                    getattr(document, "density", 1.0) or 1.0)
+        except Exception:
+            found = None
+    _MASSES[key] = found
+    return found
+
+
+# --------------------------------------------------------------- writing
+
+def write_properties(path: str, changes: Dict[str, str]) -> None:
+    """Change some of a closed file's properties, and nothing else in it.
+
+    The file is copied member by member with only its properties changed,
+    so whatever else it holds, its thumbnail and anything a later version
+    adds, comes through untouched.  An empty value takes a property away.
+    """
+    import json
+    import zipfile
+    from . import fileformat
+
+    if not changes:
+        return
+    with zipfile.ZipFile(path, "r") as archive:
+        members = [(info, archive.read(info.filename))
+                   for info in archive.infolist()]
+    temporary = path + ".saving"
+    try:
+        with zipfile.ZipFile(temporary, "w") as archive:
+            for info, payload in members:
+                if info.filename == fileformat.GEOMETRY_NAME:
+                    geometry = json.loads(payload.decode("utf-8"))
+                    held = {str(k): str(v) for k, v
+                            in (geometry.get("properties") or {}).items()}
+                    for name, value in changes.items():
+                        if str(value).strip():
+                            held[name] = str(value)
+                        else:
+                            held.pop(name, None)
+                    geometry["properties"] = held
+                    payload = json.dumps(geometry, indent=1).encode("utf-8")
+                archive.writestr(info, payload,
+                                 compress_type=info.compress_type)
+        os.replace(temporary, path)
+    except Exception:
+        if os.path.exists(temporary):
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+        raise
 
 
 def row_for_key(rows: Sequence[Row], key: str) -> Optional[Row]:

@@ -340,6 +340,9 @@ class AssemblyDocument:
         self.thumbnail: Optional[bytes] = None
         self.migrated_from: Optional[int] = None
         self.properties: Dict[str, str] = prefs.prefs().stamp({})
+        # the columns its Bill of Materials shows, picked there and kept
+        # with the assembly; empty is the usual set
+        self.bom_columns: List[str] = []
         self.rules = RuleSet()
         self.material = "Generic"
         # "" means "whatever the material comes in", which is what somebody
@@ -818,6 +821,7 @@ class AssemblyDocument:
             "material": self.material,
             "appearance": self.appearance,
             "density": self.density,
+            "bom_columns": list(self.bom_columns),
             # a mirror of the occurrence list in the plain reference form, so
             # anything that only wants to know what this file depends on can
             # read it without understanding placements
@@ -828,6 +832,7 @@ class AssemblyDocument:
         self.units = data.get("units", "mm")
         self.properties = {str(k): str(v)
                            for k, v in (data.get("properties") or {}).items()}
+        self.bom_columns = [str(c) for c in data.get("bom_columns") or []]
         trusted = self.rules.trusted
         self.rules.load(data.get("rules"))
         self.rules.trusted = trusted

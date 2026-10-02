@@ -524,6 +524,10 @@ class MainWindow(QtWidgets.QMainWindow):
             lambda: self.assembly_ui.save_and_replace())
 
         panel = assemble.add_panel("Manage")
+        panel.add_big("material", "Bill of\nMaterials",
+                      "What the assembly is made of: its parts, counted, "
+                      "with their properties to read and change"
+                      ).clicked.connect(self.show_bom)
         panel.add_small("rollback", "Update All",
                         "Reload every component from disk"
                         ).clicked.connect(self.reload_components)
@@ -3285,6 +3289,19 @@ class MainWindow(QtWidgets.QMainWindow):
             self.measure_dialog = MeasureDialog(self, self)
         self.measure_dialog.show()
         self.measure_dialog.raise_()
+
+    def show_bom(self) -> None:
+        """The assembly's Bill of Materials, Model Data and Parts Only."""
+        from .bom_ui import BomDialog
+
+        if self.assembly is None:
+            return
+        dialog = BomDialog(self, self.assembly, self.session,
+                           getattr(self.assembly, "library", None))
+        if dialog.exec() == QtWidgets.QDialog.Accepted:
+            self._update_title()
+            self.status_message.setStyleSheet("")
+            self.status_message.setText("Bill of Materials updated.")
 
     def show_properties(self) -> None:
         """dProperties: what a document says about itself, its units, and

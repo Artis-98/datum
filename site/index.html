@@ -44,7 +44,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="badge-version">Version 0.2.5 · free · open source</span>
+        <span id="badge-version">Version 0.2.6 · free · open source</span>
       </div>
       <h1>Parametric CAD<br><span class="quiet">that fits on a laptop.</span></h1>
       <p class="lede">
@@ -54,7 +54,7 @@
       </p>
       <div class="cta-row">
         <a class="btn primary" id="download-btn"
-           href="https://api.iiteg.com/datum/0.2.5/DATUM-0.2.5-setup.exe">
+           href="https://api.iiteg.com/datum/0.2.6/DATUM-0.2.6-setup.exe">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
                stroke-width="2" stroke-linecap="round"
                stroke-linejoin="round" aria-hidden="true">
@@ -241,6 +241,24 @@
 
       <div class="shot flip">
         <div class="copy">
+          <span class="tag">Assemble</span>
+          <h3>A Bill of Materials that stays true</h3>
+          <p>Model Data lists what the assembly places, Parts Only every
+            part counted right through the sub-assemblies, with what each
+            weighs from its material. Pick the columns from every
+            dProperties field, and change a part number or a description in
+            the table: it goes back into the part.</p>
+        </div>
+        <div class="frame">
+          <img src="img/bom.png" width="1600" height="958" loading="lazy"
+               alt="The Bill of Materials of an excavator in DATUM, parts
+                    only, with thumbnails, part numbers, descriptions,
+                    materials and masses, beside the machine itself.">
+        </div>
+      </div>
+
+      <div class="shot">
+        <div class="copy">
           <span class="tag">Automate</span>
           <h3>Models that build themselves</h3>
           <p>dLogic drives a model from Python, the language DATUM itself
@@ -261,14 +279,33 @@
         </div>
       </div>
 
+      <div class="shot flip">
+        <div class="copy">
+          <span class="tag">Draw</span>
+          <h3>Set the views up, then press OK</h3>
+          <p>Base View puts the part on the sheet at once, drawn, with a
+            view cube beside it to point it. Drag it where it goes and click
+            round it for its projections, an isometric off a corner. Nothing
+            is made until OK, and a double-click brings it all back.</p>
+        </div>
+        <div class="frame">
+          <img src="img/baseview.png" width="1600" height="958"
+               loading="lazy"
+               alt="A base view of a bearing housing being set up on a DATUM
+                    sheet, with the view cube beside it, its projections
+                    round it and the Drawing View box open.">
+        </div>
+      </div>
+
       <div class="shot">
         <div class="copy">
           <span class="tag">Draw</span>
           <h3>Drawings you can hand to a workshop</h3>
           <p>Views generate from the model and know when it has changed.
-            Sections hatch their cut faces according to the material,
-            parts lists count the assembly, and balloons renumber
-            themselves when the list does.</p>
+            Dimensions are picked on the view and follow the model when it
+            changes, sections hatch their cut faces according to the
+            material, parts lists count the assembly, and balloons
+            renumber themselves when the list does.</p>
         </div>
         <div class="frame">
           <img src="img/drawing.png" width="1600" height="958" loading="lazy"
@@ -333,7 +370,7 @@
         </div>
         <div class="note" style="border-left-color:var(--silver-deep)">
           <strong>It is young software.</strong>
-          DATUM is at version 0.2.5 and is used daily for real work at
+          DATUM is at version 0.2.6 and is used daily for real work at
           IITEG, but it has not been through thousands of hands yet.
           Keep backups of anything that matters, and please tell me when
           something breaks.
@@ -365,17 +402,17 @@
         Free, no account, no licence key. It updates itself from then on.
       </p>
       <a class="btn primary" id="download-btn-2"
-         href="https://api.iiteg.com/datum/0.2.5/DATUM-0.2.5-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.6/DATUM-0.2.6-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>
         </svg>
-        DATUM <span id="btn-version">0.2.5</span> for Windows
+        DATUM <span id="btn-version">0.2.6</span> for Windows
       </a>
       <div class="meta-row">
         <span>Windows 10 / 11, 64-bit</span>
         <span id="meta-size">106 MB installer</span>
-        <span id="meta-date">Released 23 September 2026</span>
+        <span id="meta-date">Released 2 October 2026</span>
         <span><a href="changelog.html">What's new</a></span>
       </div>
     </div>

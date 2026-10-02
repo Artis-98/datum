@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.5</span></div>
+        <span id="live-version">Latest: 0.2.6</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.5/DATUM-0.2.5-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.6/DATUM-0.2.6-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -72,9 +72,53 @@
 
     <div class="release current">
       <div class="head">
+        <span class="ver">0.2.6</span>
+        <span class="when">2 October 2026</span>
+        <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        Drawings the Inventor way, a Bill of Materials, and units in
+        dProperties.
+      </p>
+      <ul>
+        <li><strong>Base View, as in Inventor.</strong> The Drawing View box
+          offers the parts and assemblies open in tabs, the last one used
+          first, or any file from a folder. The view is on the sheet at
+          once, drawn, with a view cube beside it to point it: a face, an
+          edge or a corner, or its arrows. Drag it where it goes, click
+          beside, above or below it for projections and off a corner for an
+          isometric, which follows the view it comes from. Nothing is made
+          until OK.</li>
+        <li><strong>Views stay quick.</strong> Moving a view redraws nothing
+          unless it turned. Double-click a view to change it: the base view
+          gets its box and cube back, any other view its own box, its scale
+          locked to the base view's unless it is given one. The mouse wheel
+          clicked twice fits the sheet.</li>
+        <li><strong>Dimensions picked on the view:</strong> a line's length,
+          two points, a point to a line, two parallel lines, the angle
+          between two lines, a hole's diameter. Placed above or beside it,
+          a dimension reads across or up the page. Tied to the model, it
+          follows the part when the part changes; drag it by its label, or
+          its legs onto other points.</li>
+        <li><strong>Bill of Materials</strong> for assemblies: Model Data
+          and Parts Only, columns picked from every dProperties field, with
+          thumbnails and mass. Change properties in the table and they go
+          back into the parts. Exports to CSV.</li>
+        <li><strong>Units in dProperties.</strong> Changing a part's unit
+          asks whether to convert it, keeping its size, or keep the numbers
+          and rescale it, imported bodies included.</li>
+        <li><strong>Sketching:</strong> the grid in the part's own unit,
+          a midpoint snap that holds the point to the midpoint, the angle
+          beside the length while a line is drawn, and a visible sketch's
+          dimensions shown and clickable from a new sketch.</li>
+        <li><strong>New</strong> asks what to make.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
         <span class="ver">0.2.5</span>
         <span class="when">1 October 2026</span>
-        <span class="badge">current</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         Twenty eight requests in one release, from the Reddit thread and
@@ -403,7 +447,7 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.5/DATUM-0.2.5-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.6/DATUM-0.2.6-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>

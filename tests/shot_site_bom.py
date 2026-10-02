@@ -93,20 +93,30 @@ def go():
         win.close_entry(win.session.active)
         settle(100)
     win.open_path(os.path.join(work, "Excavator.adat"))
-    settle(2500)
+    settle(6000)
     win.viewport.set_view("iso")
     win.viewport.fit_all()
+    settle(1500)
+    win.viewport.fit_all()
+    settle(500)
+    # the machine to the left of the middle, beside the table, not behind it
+    win.viewport.view.SetZoom(0.82)
+    win.viewport.view.Pan(-330, 0)
+    win.viewport.view.Redraw()
     settle(800)
 
     dialog = bom_ui.BomDialog(win, win.assembly, win.session,
                               win.assembly.library)
     dialog.tabs.setCurrentIndex(1)
-    dialog.resize(1080, 640)
+    dialog.resize(930, 600)
     dialog.show()
     settle(400)
+    # to the right, so the machine it lists shows beside it
     dialog.move(win.mapToGlobal(QtCore.QPoint(
-        (win.width() - dialog.width()) // 2 + 120,
-        (win.height() - dialog.height()) // 2 + 30)))
+        win.width() - dialog.width() - 24, 196)))
+    win.status_message.setText("Excavator.adat: 48 components, "
+                               "26 different parts")
+    win.status_build.setText("")
     settle(400)
 
     # the 3D view renders on its own; the window's grab leaves it black

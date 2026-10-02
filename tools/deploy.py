@@ -244,6 +244,9 @@ class Link:
 
 # --------------------------------------------------------------- uploading
 
+# Small, name-stable, content-changing: never trust their size.
+ALWAYS_SEND = (".html", ".htm", ".json", ".xml", ".txt", ".htaccess")
+
 
 def upload_set(link: Link, pairs: List[Tuple[str, str]],
                force: bool = False) -> Tuple[int, int, int]:
@@ -254,13 +257,21 @@ def upload_set(link: Link, pairs: List[Tuple[str, str]],
     file it did send is the right size and every one it did not is
     absent, so size is enough to tell them apart. ``--force`` re-sends
     everything regardless.
+
+    Size is the wrong test for a file whose name never changes while its
+    contents do, and a hashed-asset build makes exactly one of those:
+    ``index.html``, where only the hash inside the script tag moves and
+    the length does not. Skipping it published a page still pointing at
+    the previous bundle, which looks like a successful deploy and serves
+    the old site. So ALWAYS_SEND goes up every time.
     """
     sent = skipped = failed = 0
     moved = 0
     total = len(pairs)
     for index, (local, relative) in enumerate(pairs, 1):
         want = os.path.getsize(local)
-        if not force and link.size(relative) == want:
+        always = os.path.basename(relative).lower().endswith(ALWAYS_SEND)
+        if not force and not always and link.size(relative) == want:
             skipped += 1
         else:
             for attempt in range(3):

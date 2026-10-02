@@ -38,7 +38,13 @@ jobs:
       - name: System libraries for Qt and OpenGL
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends             xvfb xauth libgl1 libegl1 libglu1-mesa libopengl0             libxkbcommon0 libxkbcommon-x11-0 libxcb1 libxcb-cursor0             libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0             libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1             libxcb-xfixes0 libxcb-sync1 libxrender1 libxi6 libsm6 libice6             libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0 gdb
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgl1 libegl1 libglu1-mesa libopengl0 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb1 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb-xfixes0 libxcb-sync1 libxrender1 libxi6 libsm6 libice6 \
+            libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0 gdb
       - name: Python packages
         run: |
           python -m pip install --upgrade pip
@@ -50,7 +56,9 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: |
           fc-list | head -5 || true
-          xvfb-run -a -s "-screen 0 1600x1000x24"             python -X faulthandler -u "tests/${{ inputs.diagnose }}.py" ||             echo "exit code $?"
+          xvfb-run -a -s "-screen 0 1600x1000x24" \
+            python -X faulthandler -u "tests/${{ inputs.diagnose }}.py" || \
+            echo "exit code $?"
 
   linux:
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.diagnose == '' }}

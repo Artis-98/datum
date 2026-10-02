@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ctypes
 import math
+import os
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -103,6 +104,35 @@ _PyCapsule_New.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
 def _capsule(handle) -> Any:
     """Wrap a Win32 HWND from Qt into the PyCapsule that OCCT expects."""
     return _PyCapsule_New(ctypes.c_void_p(int(handle)), None, None)
+
+
+def _msaa_samples() -> int:
+    """How many samples to smooth the edges with: 8, or none on software GL.
+
+    A software OpenGL, Mesa's llvmpipe or swrast on a virtual machine or a
+    desktop with no driver, is slow at multisampling at best, and swrast
+    crashed copying OpenCASCADE's multisampled picture to the window. So
+    off Windows the renderer is asked first, and a software one draws
+    without. DATUM_MSAA sets it outright.
+    """
+    forced = os.environ.get("DATUM_MSAA", "").strip()
+    if forced.isdigit():
+        return int(forced)
+    if sys.platform == "win32":
+        return 8
+    try:
+        from PySide6.QtGui import QOffscreenSurface, QOpenGLContext
+        surface = QOffscreenSurface()
+        surface.create()
+        context = QOpenGLContext()
+        if not context.create() or not context.makeCurrent(surface):
+            return 8
+        renderer = str(context.functions().glGetString(0x1F01) or "")
+        context.doneCurrent()
+    except Exception:
+        return 8
+    software = ("llvmpipe", "softpipe", "swrast", "software")
+    return 0 if any(word in renderer.lower() for word in software) else 8
 
 
 def _vec3(point) -> Tuple[float, float, float]:
@@ -356,7 +386,7 @@ class Viewport(QtWidgets.QWidget):
 
         try:
             params = self.view.ChangeRenderingParams()
-            params.NbMsaaSamples = 8
+            params.NbMsaaSamples = _msaa_samples()
             params.IsAntialiasingEnabled = True
         except Exception:
             pass

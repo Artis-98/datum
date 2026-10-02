@@ -193,6 +193,11 @@ def main(argv=None) -> int:
     QtCore.QCoreApplication.setAttribute(
         QtCore.Qt.AA_UseHighDpiPixmaps, True)
 
+    if sys.platform.startswith("linux"):
+        # OpenCASCADE draws into an X11 window, so on a Wayland desktop
+        # DATUM runs through XWayland unless told otherwise
+        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+
     app = QtWidgets.QApplication(argv)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)

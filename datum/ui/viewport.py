@@ -336,7 +336,13 @@ class Viewport(QtWidgets.QWidget):
         self._style_highlights()
 
         self.view = self.viewer.CreateView()
-        self._window = _NativeWindow(_capsule(self.winId()))
+        if sys.platform.startswith("linux"):
+            # an X11 window is the display it lives on and its number, not
+            # a handle in a capsule as on Windows and macOS
+            self._window = _NativeWindow(self._display_connection,
+                                         int(self.winId()))
+        else:
+            self._window = _NativeWindow(_capsule(self.winId()))
         self.view.SetWindow(self._window)
         if not self._window.IsMapped():
             self._window.Map()

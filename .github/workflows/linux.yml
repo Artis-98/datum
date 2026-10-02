@@ -1,0 +1,102 @@
+# DATUM for Linux, the preview build.
+#
+# Built on Ubuntu 22.04, so it runs on that and anything newer: the
+# OpenCASCADE wheels need glibc 2.31 or later.  A tag v* builds it and
+# attaches it to that tag's GitHub release, making the release if there is
+# none yet; run by hand, it builds and keeps the tarball as an artifact.
+#
+# The gate is the core tests and the build's own self test, which loads
+# OpenCASCADE, starts a worker process, translates a STEP file, draws a
+# view and writes a PDF.  The window tests run too, for what they show,
+# but do not stop the build: a virtual screen is not a desktop.
+
+name: Linux build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: System libraries for Qt and OpenGL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb xauth libgl1 libegl1 libglu1-mesa libopengl0 \
+            libxkbcommon0 libxkbcommon-x11-0 libxcb1 libxcb-cursor0 \
+            libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 \
+            libxcb-render-util0 libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 \
+            libxcb-xfixes0 libxcb-sync1 libxrender1 libxi6 libsm6 libice6 \
+            libfontconfig1 libfreetype6 libdbus-1-3 libglib2.0-0
+
+      - name: Python packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install cadquery-ocp==7.9.3.1.1 PySide6==6.11.2 numpy \
+            cryptography pyinstaller
+          pip install hidapi || echo "no hidapi: SpaceMouse support left out"
+
+      - name: Version
+        id: version
+        run: |
+          version=$(python -c "import datum; print(datum.__version__)")
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "DATUM $version"
+
+      - name: Core tests
+        run: python tests/run.py --fast
+
+      - name: Window tests (for information)
+        continue-on-error: true
+        env:
+          QT_QPA_PLATFORM: xcb
+        run: xvfb-run -a -s "-screen 0 1600x1000x24" python tests/run.py -j 2
+
+      - name: Build
+        run: pyinstaller --noconfirm --distpath dist --workpath build/linux tools/datum_linux.spec
+
+      - name: Self test
+        run: |
+          xvfb-run -a -s "-screen 0 1600x1000x24" dist/DATUM/DATUM --selftest selftest.txt || true
+          cat selftest.txt
+          grep -q "PASS" selftest.txt
+
+      - name: Pack
+        id: pack
+        run: |
+          name="DATUM-${{ steps.version.outputs.version }}-linux-x86_64-preview.tar.gz"
+          cp docs/LINUX.md dist/DATUM/README-LINUX.md
+          tar -czf "$name" -C dist DATUM
+          ls -l "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}
+          path: ${{ steps.pack.outputs.name }}
+          retention-days: 14
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "DATUM ${tag#v}" \
+              --notes "See https://datum.iiteg.com/changelog.html"
+          fi
+          gh release upload "$tag" "${{ steps.pack.outputs.name }}" --clobber

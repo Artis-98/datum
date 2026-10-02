@@ -121,6 +121,11 @@ def can_update() -> Tuple[bool, str]:
     """Whether updating makes sense here, and why not when it does not."""
     if not frozen():
         return (False, "DATUM is running from source; use git instead")
+    if sys.platform != "win32":
+        # the feed carries Windows builds, which a Linux build must never
+        # take in; a new one is downloaded the way this one was
+        return (False, "the update feed is for Windows; download the new "
+                       "build from datum.iiteg.com")
     target = install_dir()
     if not os.access(target, os.W_OK):
         return (False, "%s is not writable by this account" % target)

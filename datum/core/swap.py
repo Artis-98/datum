@@ -21,6 +21,7 @@ which is safe because everything in there has already been checked.
 
 from __future__ import annotations
 
+import ntpath
 import os
 import subprocess
 import sys
@@ -88,13 +89,14 @@ def script_for(target: str, staging: str, executable: str, pid: int,
     if delete:
         lines.append("rem Files this release no longer has.")
         for relative in delete:
-            full = os.path.join(target, relative.replace("/", os.sep))
+            # a batch file's paths are Windows paths wherever it is written
+            full = ntpath.join(target, relative.replace("/", "\\"))
             lines.append('del /f /q "%s" 2>nul' % full)
         lines.append("")
 
     lines += [
         "rem The staged files, checked already, moved over in one pass.",
-        'del /f /q "%s" 2>nul' % os.path.join(staging, update.PLAN_FILE),
+        'del /f /q "%s" 2>nul' % ntpath.join(staging, update.PLAN_FILE),
         'robocopy "%s" "%s" /E /MOVE /NFL /NDL /NP /R:2 /W:1 '
         '/LOG+:"%%LOG%%"'
         % (staging.rstrip("\\/"), target.rstrip("\\/")),

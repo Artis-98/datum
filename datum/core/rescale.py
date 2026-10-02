@@ -81,7 +81,9 @@ def _scale_feature(feature: Any, old: str, new: str, f: float) -> None:
         if isinstance(value, str):
             setattr(feature, attr, units.rescaled(value, old, new))
     if kind == "primitive":
-        feature.origin = tuple(o * f for o in feature.origin)
+        # its corner is three expressions, lengths like any other
+        feature.origin = tuple(units.rescaled(str(o), old, new)
+                               for o in feature.origin)
     if kind == "import":
         feature.scale *= f
     # whatever references, picks and regions the feature keeps

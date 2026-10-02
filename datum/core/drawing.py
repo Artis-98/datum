@@ -733,6 +733,9 @@ class Annotation:
     component: str = ""
     item: int = 0
     shape: str = ""             # "" is round; "hex" and "square" also exist
+    # a linear dimension: "x" reads across the page, "y" up it, and "" lets
+    # the points decide, as every dimension did before it could be chosen
+    axis: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {"id": self.id, "kind": self.kind, "view": self.view,
@@ -743,7 +746,7 @@ class Annotation:
                 "prefix": self.prefix, "suffix": self.suffix,
                 "value": self.value, "sick": self.sick,
                 "component": self.component, "item": self.item,
-                "shape": self.shape}
+                "shape": self.shape, "axis": self.axis}
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "Annotation":
@@ -760,7 +763,8 @@ class Annotation:
                    sick=bool(d.get("sick", False)),
                    component=str(d.get("component", "")),
                    item=int(d.get("item", 0)),
-                   shape=str(d.get("shape", "")))
+                   shape=str(d.get("shape", "")),
+                   axis=str(d.get("axis", "")))
 
     @property
     def anchored(self) -> bool:
@@ -774,6 +778,10 @@ class Annotation:
             dx, dy = p[1][0] - p[0][0], p[1][1] - p[0][1]
             if self.kind == ALIGNED:
                 return math.hypot(dx, dy)
+            if self.axis == "x":
+                return abs(dx)
+            if self.axis == "y":
+                return abs(dy)
             # linear measures along whichever axis the pair is spread on,
             # which is what the person placing it meant by dragging that way
             return abs(dx) if abs(dx) >= abs(dy) else abs(dy)
@@ -785,6 +793,9 @@ class Annotation:
         if self.kind in (RADIUS, DIAMETER) and len(p) >= 2:
             r = math.hypot(p[1][0] - p[0][0], p[1][1] - p[0][1])
             return r * (2.0 if self.kind == DIAMETER else 1.0)
+        if self.kind == ANGULAR and len(p) >= 4:
+            found = between_lines(p, self.offset)
+            return found[3] if found else 0.0
         if self.kind == ANGULAR and len(p) >= 3:
             ax, ay = p[0][0] - p[1][0], p[0][1] - p[1][1]
             bx, by = p[2][0] - p[1][0], p[2][1] - p[1][1]
@@ -804,6 +815,94 @@ class Annotation:
                                        self.suffix)
         symbol = {RADIUS: "R", DIAMETER: "⌀"}.get(self.kind, "")
         return "%s%s%s%s" % (self.prefix, symbol, _trim(raw), self.suffix)
+
+
+def between_lines(points: Sequence[Sequence[float]],
+                  offset: Sequence[float]):
+    """The angle between two lines, on the side the label is on.
+
+    ``points`` are the two lines, two points each; ``offset`` is where the
+    label sits from where they meet.  Two lines make two angles that add
+    up to 180 degrees, and the one meant is the one the label was put in,
+    as in Inventor.  Returns (vertex, first ray, second ray, degrees), the
+    rays as unit vectors, or None for lines that never meet.
+    """
+    (ax, ay), (bx, by), (cx, cy), (dx, dy) = [p[:2] for p in points[:4]]
+    ux, uy = bx - ax, by - ay
+    vx, vy = dx - cx, dy - cy
+    cross = ux * vy - uy * vx
+    if abs(cross) < 1e-12:
+        return None
+    t = ((cx - ax) * vy - (cy - ay) * vx) / cross
+    vertex = (ax + ux * t, ay + uy * t)
+    off = (list(offset) + [0.0, 0.0])[:2]
+    rays = []
+    for x, y in ((ux, uy), (vx, vy)):
+        length = math.hypot(x, y) or 1.0
+        x, y = x / length, y / length
+        if x * off[0] + y * off[1] < 0:
+            x, y = -x, -y
+        rays.append((x, y))
+    (r1x, r1y), (r2x, r2y) = rays
+    degrees = abs(math.degrees(math.atan2(r1x * r2y - r1y * r2x,
+                                          r1x * r2x + r1y * r2y)))
+    return vertex, rays[0], rays[1], degrees
+
+
+def dimension_line(note: "Annotation"):
+    """Where a linear or aligned dimension's line runs, and its label sits.
+
+    (a, b, label): the two ends of the dimension line and the middle of
+    its value, all in the view's own millimetres.  The painter draws from
+    this and the sheet picks the label up by it, so they cannot disagree.
+    """
+    p1, p2 = note.points[0], note.points[1]
+    ox, oy = (list(note.offset) + [0.0, 0.0])[:2]
+    along = 0.0
+    if note.kind == LINEAR:
+        across = (note.axis == "x" if note.axis else
+                  abs(p2[0] - p1[0]) >= abs(p2[1] - p1[1]))
+        if across:
+            a, b = (p1[0], p1[1] + oy), (p2[0], p1[1] + oy)
+            along = ox if note.axis else 0.0
+        else:
+            a, b = (p1[0] + ox, p1[1]), (p1[0] + ox, p2[1])
+            along = oy if note.axis else 0.0
+    else:
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        length = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / length, dx / length
+        a = (p1[0] + nx * oy, p1[1] + ny * oy)
+        b = (p2[0] + nx * oy, p2[1] + ny * oy)
+        along = ox if note.axis == "aligned" else 0.0
+    span = math.hypot(b[0] - a[0], b[1] - a[1]) or 1.0
+    label = ((a[0] + b[0]) / 2.0 + (b[0] - a[0]) / span * along,
+             (a[1] + b[1]) / 2.0 + (b[1] - a[1]) / span * along)
+    return a, b, label
+
+
+def label_at(note: "Annotation") -> Tuple[float, float]:
+    """Where an annotation's text is, in its view's own millimetres."""
+    p = note.points
+    off = (list(note.offset) + [0.0, 0.0])[:2]
+    if note.kind in (LINEAR, ALIGNED) and len(p) >= 2:
+        return dimension_line(note)[2]
+    if note.kind == ANGULAR and len(p) >= 4:
+        found = between_lines(p, note.offset)
+        if found is not None:
+            vertex, first, second, _degrees = found
+            radius = max(4.0, math.hypot(off[0], off[1]))
+            start = math.atan2(first[1], first[0])
+            sweep = math.atan2(first[0] * second[1] - first[1] * second[0],
+                               first[0] * second[0] + first[1] * second[1])
+            middle = start + sweep / 2.0
+            return (vertex[0] + math.cos(middle) * (radius + 3.5),
+                    vertex[1] + math.sin(middle) * (radius + 3.5))
+    if note.kind in (RADIUS, DIAMETER) and len(p) >= 2:
+        return (p[1][0] + off[0], p[1][1] + off[1])
+    if not p:
+        return (off[0], off[1])
+    return (p[0][0] + off[0], p[0][1] + off[1])
 
 
 def _trim(value: float) -> str:

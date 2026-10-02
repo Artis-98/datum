@@ -230,8 +230,13 @@ def _em_for(font: QtGui.QFont, cap_height: float) -> float:
 
 def _text(painter: QtGui.QPainter, layout: Layout, text: str,
           x: float, y: float, height_mm: float, bold: bool = False,
-          align: str = "left", colour: Optional[str] = None) -> None:
-    """Text placed by its baseline-left corner, in sheet millimetres."""
+          align: str = "left", colour: Optional[str] = None,
+          turn: float = 0.0) -> None:
+    """Text placed by its baseline-left corner, in sheet millimetres.
+
+    ``turn`` is how far round it is written, in degrees anticlockwise:
+    the value of a dimension up the page runs up the page with it.
+    """
     if not text:
         return
     device = layout.to_device(x, y)
@@ -254,6 +259,13 @@ def _text(painter: QtGui.QPainter, layout: Layout, text: str,
         dx = -metrics.horizontalAdvance(text) / 2.0
     elif align == "right":
         dx = -metrics.horizontalAdvance(text)
+    if turn:
+        painter.save()
+        painter.translate(device[0], device[1])
+        painter.rotate(-turn)
+        painter.drawText(QtCore.QPointF(dx, 0.0), text)
+        painter.restore()
+        return
     painter.drawText(QtCore.QPointF(device[0] + dx, device[1]), text)
 
 
@@ -678,29 +690,23 @@ def _linear(painter, doc, sheet, view, note, layout, at, colour) -> None:
         return
     style = doc.styles.get("dimension", dwg.Style())
     p1, p2 = note.points[0], note.points[1]
-    ox, oy = (note.offset + [0.0, 0.0])[:2]
-
-    if note.kind == dwg.LINEAR:
-        # a linear dimension is read along one axis; which one is whichever
-        # the two points are further apart on
-        if abs(p2[0] - p1[0]) >= abs(p2[1] - p1[1]):
-            a, b = (p1[0], p1[1] + oy), (p2[0], p1[1] + oy)
-            witness = ((p1[0], p1[1]), (p2[0], p2[1]))
-        else:
-            a, b = (p1[0] + ox, p1[1]), (p1[0] + ox, p2[1])
-            witness = ((p1[0], p1[1]), (p2[0], p2[1]))
-    else:
-        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
-        length = math.hypot(dx, dy) or 1.0
-        nx, ny = -dy / length, dx / length
-        push = oy
-        a = (p1[0] + nx * push, p1[1] + ny * push)
-        b = (p2[0] + nx * push, p2[1] + ny * push)
-        witness = ((p1[0], p1[1]), (p2[0], p2[1]))
+    a, b, label = dwg.dimension_line(note)
+    witness = ((p1[0], p1[1]), (p2[0], p2[1]))
 
     painter.drawLine(QtCore.QPointF(*at(a)), QtCore.QPointF(*at(b)))
+    # Extension lines, the way a drawing has them: a small gap off the
+    # part, so they do not read as part of it, and on a little past the
+    # dimension line, so the arrow has something to land on
+    gap, past = 1.0, 1.5
     for start, end in zip(witness, (a, b)):
-        painter.drawLine(QtCore.QPointF(*at(start)), QtCore.QPointF(*at(end)))
+        dx, dy = end[0] - start[0], end[1] - start[1]
+        length = math.hypot(dx, dy)
+        if length <= gap:
+            continue
+        ux, uy = dx / length, dy / length
+        painter.drawLine(
+            QtCore.QPointF(*at((start[0] + ux * gap, start[1] + uy * gap))),
+            QtCore.QPointF(*at((end[0] + ux * past, end[1] + uy * past))))
 
     size = layout.pen_width(style.arrow_size) * 1.4
     da = at(a)
@@ -709,12 +715,21 @@ def _linear(painter, doc, sheet, view, note, layout, at, colour) -> None:
     _arrow_head(painter, db, db[0] - da[0], db[1] - da[1], size)
 
     scale = doc.view_scale(sheet, view)
-    mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+    # the value sits along its line, just off it, the way it reads: across
+    # the page for one across it, up the page for one up it, and along a
+    # slanting one, never upside down
+    angle = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+    if angle > 90.0 + 1e-6:
+        angle -= 180.0
+    elif angle <= -90.0 + 1e-6:
+        angle += 180.0
+    lift = math.radians(angle + 90.0)
     # the points are in the view's own millimetres; text is placed on the
     # sheet, so it has to be carried across like every line above it
     _text(painter, layout, note.caption(scale),
-          view.x + mid[0], view.y + mid[1] + 1.2,
-          style.text_height, align="centre", colour=colour)
+          view.x + label[0] + math.cos(lift) * 1.2,
+          view.y + label[1] + math.sin(lift) * 1.2,
+          style.text_height, align="centre", colour=colour, turn=angle)
 
 
 def _radial(painter, doc, sheet, view, note, layout, at, colour) -> None:
@@ -735,6 +750,9 @@ def _radial(painter, doc, sheet, view, note, layout, at, colour) -> None:
 
 
 def _angular(painter, doc, sheet, view, note, layout, at, colour) -> None:
+    if len(note.points) >= 4:
+        _between_lines(painter, doc, view, note, layout, at, colour)
+        return
     if len(note.points) < 3:
         return
     style = doc.styles.get("dimension", dwg.Style())
@@ -766,6 +784,54 @@ def _angular(painter, doc, sheet, view, note, layout, at, colour) -> None:
     _text(painter, layout, note.caption(1.0),
           view.x + vertex[0] + math.cos(mid) * (radius + 3.0),
           view.y + vertex[1] + math.sin(mid) * (radius + 3.0),
+          style.text_height, align="centre", colour=colour)
+
+
+def _between_lines(painter, doc, view, note, layout, at, colour) -> None:
+    """The angle between two lines: an arc across it, at the label."""
+    found = dwg.between_lines(note.points, note.offset)
+    if found is None:
+        return
+    style = doc.styles.get("dimension", dwg.Style())
+    vertex, first, second, degrees = found
+    ox, oy = (note.offset + [0.0, 0.0])[:2]
+    radius = max(4.0, math.hypot(ox, oy))
+    start = math.atan2(first[1], first[0])
+    sweep = math.atan2(first[0] * second[1] - first[1] * second[0],
+                       first[0] * second[0] + first[1] * second[1])
+    steps = 32
+    path = QtGui.QPainterPath()
+    for i in range(steps + 1):
+        angle = start + sweep * i / steps
+        point = at((vertex[0] + math.cos(angle) * radius,
+                    vertex[1] + math.sin(angle) * radius))
+        if i == 0:
+            path.moveTo(QtCore.QPointF(*point))
+        else:
+            path.lineTo(QtCore.QPointF(*point))
+    painter.drawPath(path)
+    # each line carried out to the arc where it stops short of it
+    for (x, y), pair in ((first, note.points[0:2]), (second, note.points[2:4])):
+        reach = max(math.hypot(p[0] - vertex[0], p[1] - vertex[1])
+                    for p in pair)
+        if reach < radius:
+            near = max(pair, key=lambda p: (p[0] - vertex[0]) * x
+                       + (p[1] - vertex[1]) * y)
+            painter.drawLine(QtCore.QPointF(*at(near)), QtCore.QPointF(
+                *at((vertex[0] + x * (radius + 1.5),
+                     vertex[1] + y * (radius + 1.5)))))
+    size = layout.pen_width(style.arrow_size) * 1.4
+    for angle, turn in ((start, 1.0), (start + sweep, -1.0)):
+        tip = at((vertex[0] + math.cos(angle) * radius,
+                  vertex[1] + math.sin(angle) * radius))
+        # the arrow lies along the arc, pointing out at the line
+        tangent = (-math.sin(angle) * turn * math.copysign(1.0, sweep),
+                   math.cos(angle) * turn * math.copysign(1.0, sweep))
+        _arrow_head(painter, tip, -tangent[0], tangent[1], size)
+    middle = start + sweep / 2.0
+    _text(painter, layout, note.caption(1.0),
+          view.x + vertex[0] + math.cos(middle) * (radius + 3.5),
+          view.y + vertex[1] + math.sin(middle) * (radius + 3.5),
           style.text_height, align="centre", colour=colour)
 
 

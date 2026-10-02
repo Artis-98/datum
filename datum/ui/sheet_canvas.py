@@ -33,6 +33,8 @@ class SheetCanvas(QtWidgets.QWidget):
     view_activated = QtCore.Signal(int)     # double-clicked
     context_requested = QtCore.Signal(QtCore.QPoint)
     placing_finished = QtCore.Signal()      # right-click or Esc while placing
+    annotation_activated = QtCore.Signal(int)   # a dimension double-clicked
+    grip_moved = QtCore.Signal(int, int)        # a dimension's leg, moved
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -60,6 +62,10 @@ class SheetCanvas(QtWidgets.QWidget):
         # views being placed with the cursor: the left button places, the
         # right one or Esc stops; see drawing_ui.ViewPlacer
         self.placer = None
+        # a selected dimension's legs can be dragged to other points: the
+        # grip being dragged, and what finds a point to drop it on
+        self._drag_grip: Optional[Tuple[int, int]] = None
+        self.grip_snap = None
 
     def set_placer(self, placer) -> None:
         """Hand the mouse to something placing views, or take it back.
@@ -143,7 +149,51 @@ class SheetCanvas(QtWidgets.QWidget):
                          hidden=getattr(self.placer, "hidden", ()) or ())
         if self.placer is not None:
             self.placer.paint(painter, self.layout())
+        else:
+            self._paint_grips(painter)
         painter.end()
+
+    # -- a dimension's legs ---------------------------------------------------
+
+    GRIP_KINDS = (dwg.LINEAR, dwg.ALIGNED, dwg.ANGULAR, dwg.ORDINATE)
+
+    def _grip_note(self) -> Optional[Annotation]:
+        """The one dimension selected, if its legs can be taken hold of."""
+        sheet = self.sheet()
+        if sheet is None or len(self.selected_annotations) != 1:
+            return None
+        note = next((a for a in sheet.annotations
+                     if a.id == self.selected_annotations[0]), None)
+        if note is None or note.kind not in self.GRIP_KINDS \
+                or len(note.points) < 2:
+            return None
+        return note
+
+    def _grips(self):
+        note = self._grip_note()
+        sheet = self.sheet()
+        view = sheet.view(note.view) if note is not None else None
+        if view is None:
+            return []
+        layout = self.layout()
+        return [(note, index, QtCore.QPointF(*layout.to_device(
+            view.x + p[0], view.y + p[1])))
+            for index, p in enumerate(note.points)]
+
+    def _paint_grips(self, painter: QtGui.QPainter) -> None:
+        painter.save()
+        painter.setPen(QtGui.QPen(QtGui.QColor(sheetpaint.SELECTED), 1.0))
+        painter.setBrush(QtGui.QColor("#ffffff"))
+        for _note, _index, at in self._grips():
+            painter.drawRect(QtCore.QRectF(at.x() - 3.5, at.y() - 3.5,
+                                           7.0, 7.0))
+        painter.restore()
+
+    def _grip_at(self, pos: QtCore.QPoint) -> Optional[Tuple[int, int]]:
+        for note, index, at in self._grips():
+            if abs(at.x() - pos.x()) <= 6 and abs(at.y() - pos.y()) <= 6:
+                return (note.id, index)
+        return None
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -207,14 +257,30 @@ class SheetCanvas(QtWidgets.QWidget):
             view = sheet.view(note.view)
             if view is None or not note.points:
                 continue
-            offset = (list(note.offset) + [0.0, 0.0])[:2]
-            anchor = note.points[0]
-            where = (view.x + anchor[0] + offset[0],
-                     view.y + anchor[1] + offset[1])
+            # taken hold of by its text, wherever that was put
+            label = dwg.label_at(note)
+            where = (view.x + label[0], view.y + label[1])
             if math.hypot(where[0] - point[0],
-                          where[1] - point[1]) < tolerance * 1.8:
+                          where[1] - point[1]) < tolerance * 2.2:
                 return note.id
         return None
+
+    def _move_grip(self, pos: QtCore.QPoint) -> None:
+        sheet = self.sheet()
+        note_id, index = self._drag_grip
+        note = next((a for a in sheet.annotations if a.id == note_id),
+                    None) if sheet else None
+        view = sheet.view(note.view) if note is not None else None
+        if view is None or index >= len(note.points):
+            return
+        point = self.layout().to_sheet(pos.x(), pos.y())
+        landed = self.grip_snap(view.id, point) if self.grip_snap else None
+        local = landed if landed is not None else (point[0] - view.x,
+                                                   point[1] - view.y)
+        if list(local) != list(note.points[index]):
+            note.points[index] = [float(local[0]), float(local[1])]
+            self._moved = True
+        self.update()
 
     def parts_list_at(self, x: float, y: float) -> Optional[int]:
         """The parts list under this screen point, if any.
@@ -265,6 +331,12 @@ class SheetCanvas(QtWidgets.QWidget):
         if sheet is None:
             return
         layout = self.layout()
+        grip = self._grip_at(pos)
+        if grip is not None:
+            # a leg of the selected dimension, to be dropped on another point
+            self._drag_grip = grip
+            self._moved = False
+            return
         note_id = self.annotation_at(pos.x(), pos.y())
         table_id = None if note_id is not None else self.parts_list_at(
             pos.x(), pos.y())
@@ -306,6 +378,9 @@ class SheetCanvas(QtWidgets.QWidget):
             return
         self._last_pos = pos
 
+        if self._drag_grip is not None:
+            self._move_grip(pos)
+            return
         if self.placer is not None:
             point = self.layout().to_sheet(pos.x(), pos.y())
             device = QtCore.QPointF(pos)
@@ -384,6 +459,11 @@ class SheetCanvas(QtWidgets.QWidget):
                                     QtCore.QPointF(pos))
                 self.update()
             return
+        if self._drag_grip is not None:
+            grip, self._drag_grip = self._drag_grip, None
+            if self._moved:
+                self.grip_moved.emit(*grip)
+            return
         # a click that picks something moves nothing, and is not a change
         grabbed = (self._drag_view is not None or self._drag_note is not None
                    or self._drag_table is not None)
@@ -411,6 +491,10 @@ class SheetCanvas(QtWidgets.QWidget):
                 self.update()
             return
         pos = event.position().toPoint()
+        note_id = self.annotation_at(pos.x(), pos.y())
+        if note_id is not None:
+            self.annotation_activated.emit(note_id)
+            return
         view_id = self.view_at(pos.x(), pos.y())
         if view_id is not None:
             self.view_activated.emit(view_id)

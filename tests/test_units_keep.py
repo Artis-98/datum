@@ -171,6 +171,22 @@ imported.rebuild()
 check("kept as 10, in inches, it is 254 mm across",
       near(size(imported.shape)[0], 254.0, 1e-6), size(imported.shape))
 check("its scale is saved", body.field_dict().get("scale") == INCH)
+
+print()
+print("a primitive keeps its numbers too, corner and all")
+from datum.core.features import PrimitiveFeature                   # noqa: E402
+boxed = Document()
+cube = PrimitiveFeature(kind="box", a="10", b="10", c="10",
+                        origin=("5", "0", "0"))
+boxed.add_feature(cube)
+boxed.rebuild()
+rescale.keep_numbers(boxed, "in")
+boxed.rebuild()
+check("rescaled without trouble", boxed.last_report.ok and cube.a == "10 in"
+      and cube.origin[0] == "5 in", (cube.a, cube.origin))
+b = kernel.bounding_box(boxed.shape)
+check("10 inches across, starting 5 inches along",
+      near(b[3] - b[0], 254.0, 1e-6) and near(b[0], 127.0, 1e-6), b)
 again = Feature.from_dict(body.to_dict())
 check("and read back", near(again.scale, INCH))
 

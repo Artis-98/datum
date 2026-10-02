@@ -17,11 +17,13 @@ from ..core import bom, drawing as dwg, fileformat, hlr, kernel
 from ..core import templates
 from ..core import views as viewgen
 from ..core.drawing import (
-    Annotation, BASE, DETAIL, DIAMETER, DrawingDocument, LINEAR, PROJECTED,
+    ANGULAR, Annotation, BASE, DETAIL, DIAMETER, DrawingDocument, LINEAR,
+    PROJECTED,
     RADIUS, SECTION, Sheet, View, WITH_HIDDEN,
 )
 from . import drawingexport, icons
 from .drawing_browser import DrawingBrowser
+from . import drawpick
 from .sheetcube import OrientationCube
 from .theme import C
 
@@ -64,6 +66,11 @@ class DrawingController(QtCore.QObject):
         canvas.view_activated.connect(self.edit_view)
         canvas.context_requested.connect(self._canvas_menu)
         canvas.placing_finished.connect(self._placing_finished)
+        # a dimension double-clicked opens its text; a leg dragged to
+        # another point is tied to the model there
+        canvas.annotation_activated.connect(self.edit_annotation)
+        canvas.grip_snap = self._grip_snap
+        canvas.grip_moved.connect(self._grip_moved)
 
     # --------------------------------------------------------------- rebuild
 
@@ -561,6 +568,101 @@ class DrawingController(QtCore.QObject):
 
     # ----------------------------------------------------------- dimensions
 
+    def start_dimension(self) -> None:
+        """The Dimension tool: pick on a view what to measure, then place."""
+        doc = self.document
+        sheet = doc.active() if doc else None
+        if sheet is None:
+            return
+        self.end_placement()
+        tool = DimensionTool(self, sheet)
+        self._start_placer(tool)
+        tool._say()
+
+    def place_dimension(self, sheet: Sheet,
+                        note: Annotation) -> Optional[Annotation]:
+        """Put a dimension made with the tool on the sheet, tied to the
+        model wherever its points are on it."""
+        doc = self.document
+        view = sheet.view(note.view)
+        if doc is None or view is None:
+            return None
+        doc.push_undo()
+        self._anchor_exact(doc, sheet, view, note)
+        note.value = note.measure()
+        doc.add_annotation(sheet, note)
+        doc.modified = True
+        self.canvas.update()
+        self.browser.refresh()
+        self.host.update_title()
+        return note
+
+    def _anchor_exact(self, doc, sheet, view, note: Annotation,
+                      only: Optional[int] = None) -> None:
+        """Tie a dimension's points to the model where they are exactly
+        on it: a corner to its vertex, a diameter's centre to its circle.
+
+        Unlike _anchor, nothing is moved to find something: a point picked
+        on the view is already where it is meant to be, and one that is
+        not on the model, the foot of a perpendicular, stays on the paper.
+        """
+        shape = self.generator.model_of(doc, sheet, view)
+        if shape is None or view.projection is None:
+            return
+        try:
+            direction, up = self.generator.orientation(doc, sheet, view)
+        except Exception:
+            return
+        scale = doc.view_scale(sheet, view)
+        middle = view.projection.centre
+        anchors = list(note.anchors)[:len(note.points)]
+        anchors += [None] * (len(note.points) - len(anchors))
+        for index, point in enumerate(note.points):
+            if only is not None and index != only:
+                continue
+            if note.kind in (RADIUS, DIAMETER):
+                radius = (math.dist(note.points[0], note.points[1])
+                          if len(note.points) >= 2 else 0.0)
+                anchors[index] = (viewgen.snap_circle(
+                    shape, direction, up, point, radius, middle, scale)
+                    if index == 0 else None)
+                continue
+            _moved, ref = viewgen.snap(shape, direction, up, point, middle,
+                                       scale, 0.05)
+            if ref is None:
+                # not a corner: perhaps the centre of a hole, tied to the
+                # hole, whose middle is its centre
+                ref = viewgen.snap_circle(shape, direction, up, point, None,
+                                          middle, scale, whole=True)
+            anchors[index] = ref
+        note.anchors = anchors if any(a is not None for a in anchors) else []
+
+    def _grip_snap(self, view_id: int, point):
+        """The point on a view a dragged dimension leg lands on, if any."""
+        doc = self.document
+        sheet = doc.active() if doc else None
+        if sheet is None:
+            return None
+        tolerance = DimensionTool.PICK_PIXELS / max(
+            self.canvas.layout().scale, 1e-9)
+        item = drawpick.nearest(sheet, point, tolerance, only_view=view_id,
+                                kinds=(drawpick.POINT,))
+        return item.a if item is not None else None
+
+    def _grip_moved(self, note_id: int, index: int) -> None:
+        doc = self.document
+        sheet = doc.active() if doc else None
+        note = next((a for a in sheet.annotations if a.id == note_id),
+                    None) if sheet else None
+        view = sheet.view(note.view) if note is not None else None
+        if view is None:
+            return
+        self._anchor_exact(doc, sheet, view, note, only=index)
+        note.value = note.measure()
+        doc.modified = True
+        self.canvas.update()
+        self.host.update_title()
+
     def add_dimension(self, kind: str = LINEAR) -> None:
         """Dimension the selected view's extent, as a starting point."""
         doc, sheet, view = self._selected_view()
@@ -1018,7 +1120,7 @@ class DrawingController(QtCore.QObject):
             menu.addAction("Section View", self.add_section)
             menu.addAction("Detail View", self.add_detail)
             menu.addSeparator()
-            menu.addAction("Dimension", lambda: self.add_dimension(LINEAR))
+            menu.addAction("Dimension", self.start_dimension)
             menu.addAction("Centre Mark", self.add_centre_mark)
             menu.addAction("Text...", self.add_note)
             menu.addSeparator()
@@ -1036,7 +1138,10 @@ class DrawingController(QtCore.QObject):
 
     def on_escape(self) -> bool:
         if self._placer is not None:
-            self.end_placement()
+            # a tool may have something of its own to let go of first
+            escape = getattr(self._placer, "escape", None)
+            if escape is None or not escape():
+                self.end_placement()
             return True
         if self.canvas.selected_views or self.canvas.selected_annotations:
             self.canvas.select([], [])
@@ -2105,6 +2210,244 @@ class ViewPlacer:
         across, upward = viewgen.outline(box, direction, up)
         scale = doc.view_scale(self.sheet, parent)
         return (across * scale, upward * scale)
+
+    def close(self) -> None:
+        pass
+
+
+class DimensionTool:
+    """Inventor's General Dimension, on a drawing.
+
+    Pick what to measure on a view, then click clear of it to place the
+    dimension.  One line is its length; one circle its diameter, an arc
+    its radius; two points the distance between them; a point and a line
+    how far the point is from the line; two lines how far apart they are
+    when they are parallel and the angle between them when they are not.
+    A distance goes across the page or up it when it is placed above or
+    beside what it measures, and along it anywhere else.  The tool stays
+    on for the next one; Esc lets go of a half made one, and then of the
+    tool, as does a right-click.
+    """
+
+    PICK_PIXELS = 8.0
+
+    def __init__(self, controller: DrawingController, sheet: Sheet) -> None:
+        self.controller = controller
+        self.sheet = sheet
+        self.picks: List[drawpick.Item] = []
+        self.hot: Optional[drawpick.Item] = None
+        self.cursor: Optional[Tuple[float, float]] = None
+        self.placed: List[int] = []
+        self._scale = 1.0
+
+    # -- what is under the cursor --------------------------------------------
+
+    def _tolerance(self) -> float:
+        return self.PICK_PIXELS / max(self._scale, 1e-9)
+
+    def _under(self, point) -> Optional[drawpick.Item]:
+        only = self.picks[0].view if self.picks else None
+        return drawpick.nearest(self.sheet, point, self._tolerance(),
+                                only_view=only)
+
+    def _local(self, point) -> Tuple[float, float]:
+        view = self.sheet.view(self.picks[0].view) if self.picks else None
+        if view is None:
+            return (point[0], point[1])
+        return (point[0] - view.x, point[1] - view.y)
+
+    # -- the canvas asks ------------------------------------------------------
+
+    def press(self, point, device) -> None:
+        self._scale = self.controller.canvas.layout().scale
+        item = self._under(point)
+        ready = self.target(self._local(point)) if self.picks else None
+        if len(self.picks) >= 2 or (ready is not None and item is None):
+            if ready is not None:
+                self.place(ready)
+            return
+        if item is None:
+            return
+        if any(item.same(p) for p in self.picks):
+            return
+        self.picks.append(item)
+        self._say()
+
+    def move(self, point, device, held: bool) -> None:
+        self._scale = self.controller.canvas.layout().scale
+        self.cursor = (point[0], point[1])
+        self.hot = self._under(point) if len(self.picks) < 2 else None
+
+    def release(self, point, device) -> None:
+        pass
+
+    def right_click(self, point, device) -> bool:
+        if self.picks:
+            self.picks = []
+            self._say()
+            return True
+        return False
+
+    def escape(self) -> bool:
+        """Esc: let go of what is half picked; with nothing, the tool."""
+        if self.picks:
+            self.picks = []
+            self._say()
+            self.controller.canvas.update()
+            return True
+        return False
+
+    def cursor_shape(self, point, device):
+        return QtCore.Qt.CrossCursor
+
+    def _say(self) -> None:
+        host = self.controller.host
+        host.status_message.setStyleSheet("")
+        if not self.picks:
+            host.status_message.setText(
+                "Dimension: pick a line, a circle, or a point to measure "
+                "from. Esc when done.")
+        elif self.picks[0].kind == drawpick.POINT and len(self.picks) == 1:
+            host.status_message.setText(
+                "Dimension: now the point or line to measure to.")
+        else:
+            host.status_message.setText(
+                "Dimension: click clear of it to place it, above or beside "
+                "for across or up the page; or pick one more thing.")
+
+    # -- what it would make ---------------------------------------------------
+
+    def target(self, c) -> Optional[Annotation]:
+        """The dimension the picks and the cursor make, not yet placed."""
+        picks = self.picks
+        if not picks:
+            return None
+        if len(picks) == 1:
+            only = picks[0]
+            if only.kind == drawpick.LINE:
+                return self._distance(only.a, only.b, c)
+            if only.kind == drawpick.CIRCLE:
+                return self._radial(only, c)
+            return None
+        first, second = picks[0], picks[1]
+        kinds = {first.kind, second.kind}
+        # a circle measured to or from is measured at its centre
+        a_pt = first.a if first.kind != drawpick.LINE else None
+        b_pt = second.a if second.kind != drawpick.LINE else None
+        if a_pt is not None and b_pt is not None:
+            return self._distance(a_pt, b_pt, c)
+        if kinds == {drawpick.LINE}:
+            if drawpick.parallel(first, second):
+                return self._to_line(first.a, second, c)
+            return self._angle(first, second, c)
+        line = first if first.kind == drawpick.LINE else second
+        point = b_pt if first.kind == drawpick.LINE else a_pt
+        return self._to_line(point, line, c)
+
+    def _note(self, kind: str, points, offset, axis: str = "") -> Annotation:
+        return Annotation(kind=kind, view=self.picks[0].view,
+                          points=[[float(p[0]), float(p[1])] for p in points],
+                          offset=[float(offset[0]), float(offset[1])],
+                          axis=axis)
+
+    def _distance(self, a, b, c, axis: str = "") -> Annotation:
+        """From a to b: across the page, up it, or along, by where it is
+        put, unless ``axis`` says which."""
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        low_x, high_x = sorted((a[0], b[0]))
+        low_y, high_y = sorted((a[1], b[1]))
+        beside = c[0] < low_x or c[0] > high_x
+        above = c[1] < low_y or c[1] > high_y
+        mid = ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+        if axis == "x" or (not axis and (
+                abs(dy) < 1e-6 or (above and not beside and abs(dx) > 1e-6))):
+            return self._note(LINEAR, (a, b), (c[0] - mid[0], c[1] - a[1]),
+                              "x")
+        if axis == "y" or (not axis and (abs(dx) < 1e-6
+                                         or (beside and not above))):
+            return self._note(LINEAR, (a, b), (c[0] - a[0], c[1] - mid[1]),
+                              "y")
+        length = math.hypot(dx, dy)
+        ux, uy = dx / length, dy / length
+        push = (c[0] - a[0]) * -uy + (c[1] - a[1]) * ux
+        along = (c[0] - mid[0]) * ux + (c[1] - mid[1]) * uy
+        return self._note(dwg.ALIGNED, (a, b), (along, push), "aligned")
+
+    def _to_line(self, point, line: drawpick.Item, c) -> Annotation:
+        """How far a point, or a parallel line, is from a line, square on."""
+        # to a line up the page it is measured across, from the line's own
+        # end, so both ends are on the model and the dimension follows it
+        axis = drawpick.axis_of(line)
+        if axis == "y":
+            return self._distance(point, line.a, c, axis="x")
+        if axis == "x":
+            return self._distance(point, line.a, c, axis="y")
+        return self._distance(point, drawpick.foot(point, line.a, line.b), c)
+
+    def _angle(self, first: drawpick.Item, second: drawpick.Item,
+               c) -> Annotation:
+        points = (first.a, first.b, second.a, second.b)
+        found = dwg.between_lines(points, (1.0, 0.0))
+        vertex = found[0] if found else first.a
+        return self._note(ANGULAR, points,
+                          (c[0] - vertex[0], c[1] - vertex[1]))
+
+    def _radial(self, circle: drawpick.Item, c) -> Annotation:
+        dx, dy = c[0] - circle.a[0], c[1] - circle.a[1]
+        length = math.hypot(dx, dy) or 1.0
+        rim = (circle.a[0] + dx / length * circle.radius,
+               circle.a[1] + dy / length * circle.radius)
+        kind = DIAMETER if circle.closed else RADIUS
+        return self._note(kind, (circle.a, rim),
+                          (c[0] - rim[0], c[1] - rim[1]))
+
+    def place(self, note: Annotation) -> None:
+        made = self.controller.place_dimension(self.sheet, note)
+        if made is not None:
+            self.placed.append(made.id)
+        self.picks = []
+        self.hot = None
+        self._say()
+
+    # -- painting ---------------------------------------------------------------
+
+    def paint(self, painter: QtGui.QPainter, layout) -> None:
+        from . import sheetpaint
+
+        self._scale = layout.scale
+        for item in self.picks:
+            self._paint_item(painter, layout, item, "#3b82d6", 2.4)
+        if self.hot is not None and not any(self.hot.same(p)
+                                            for p in self.picks):
+            self._paint_item(painter, layout, self.hot, "#e08a1e", 2.0)
+        if self.picks and self.cursor is not None:
+            note = self.target(self._local(self.cursor))
+            if note is not None:
+                doc = self.controller.document
+                sheetpaint._annotation(painter, doc, self.sheet, note,
+                                       layout, selected=True)
+
+    def _paint_item(self, painter: QtGui.QPainter, layout,
+                    item: drawpick.Item, colour: str, width: float) -> None:
+        view = self.sheet.view(item.view)
+        if view is None:
+            return
+        at = lambda p: QtCore.QPointF(*layout.to_device(  # noqa: E731
+            view.x + p[0], view.y + p[1]))
+        painter.save()
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        pen = QtGui.QPen(QtGui.QColor(colour), width)
+        painter.setPen(pen)
+        painter.setBrush(QtCore.Qt.NoBrush)
+        if item.kind == drawpick.LINE:
+            painter.drawLine(at(item.a), at(item.b))
+        elif item.kind == drawpick.CIRCLE:
+            r = item.radius * layout.scale
+            painter.drawEllipse(at(item.a), r, r)
+        else:
+            painter.setBrush(QtGui.QColor(colour))
+            painter.drawEllipse(at(item.a), 3.5, 3.5)
+        painter.restore()
 
     def close(self) -> None:
         pass

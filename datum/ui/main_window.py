@@ -620,8 +620,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         panel = drawing_tab.add_panel("Annotate")
         panel.add_big("dimension", "Dimension",
-                      "Measure the selected view"
-                      ).clicked.connect(lambda: self.drawing_ui.add_dimension())
+                      "Pick a line, circle or points on a view, then place"
+                      ).clicked.connect(self.drawing_ui.start_dimension)
         panel.add_small("c_coincident", "Centre Mark").clicked.connect(
             self.drawing_ui.add_centre_mark)
         panel.add_small("dimension", "Text...").clicked.connect(

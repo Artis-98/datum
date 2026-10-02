@@ -283,6 +283,56 @@ def snap(shape, direction, up, point, centre=(0.0, 0.0), scale: float = 1.0,
                              within=shape))
 
 
+def _circle_of(edge, whole: bool = False):
+    """A circular edge's centre and radius, or None for any other edge.
+
+    ``whole`` asks for a full circle only: its centre is then also its
+    middle, which is what a point tied to it is put back at.
+    """
+    from OCP.BRepAdaptor import BRepAdaptor_Curve
+    from OCP.GeomAbs import GeomAbs_Circle
+    from OCP.TopoDS import TopoDS
+
+    try:
+        curve = BRepAdaptor_Curve(TopoDS.Edge_s(edge))
+        if curve.GetType() != GeomAbs_Circle:
+            return None
+        if whole and abs(curve.LastParameter() - curve.FirstParameter()
+                         - 2.0 * math.pi) > 1e-6:
+            return None
+        circle = curve.Circle()
+    except Exception:
+        return None
+    centre = circle.Location()
+    return (centre.X(), centre.Y(), centre.Z()), circle.Radius()
+
+
+def snap_circle(shape, direction, up, centre, radius, middle=(0.0, 0.0),
+                scale: float = 1.0, tolerance: float = 0.05,
+                whole: bool = False):
+    """The model circle seen as this one on the paper, and a reference to it.
+
+    A diameter tied to it follows the hole when the hole changes; one that
+    finds nothing, a circle seen at a slant, is still a dimension, it only
+    stays the size it was.  ``radius`` None takes any circle centred there,
+    for a dimension measured from a hole's centre.
+    """
+    if shape is None:
+        return None
+    frame = hlr.camera(direction, up)
+    for index, edge in enumerate(kernel.edges(shape)):
+        found = _circle_of(edge, whole)
+        if found is None:
+            continue
+        where, r = found
+        x, y = hlr.to_paper(where, frame, middle)
+        if (math.hypot(x * scale - centre[0], y * scale - centre[1])
+                <= tolerance and (radius is None
+                                  or abs(r * scale - radius) <= tolerance)):
+            return ShapeRef.capture(edge, "edge", index, within=shape)
+    return None
+
+
 # ---------------------------------------------------------------- cutting
 
 
@@ -444,6 +494,32 @@ class Generator:
             scale = doc.view_scale(sheet, view)
             frame = hlr.camera(*self._resolved_orientation(doc, sheet, view))
             middle = view.projection.centre
+
+            first = note.anchors[0] if note.anchors else None
+            if note.kind in (drawing.RADIUS, drawing.DIAMETER) \
+                    and first is not None and first.kind == "edge":
+                # a circle's centre and size, read off the model again;
+                # the label stays the same way round from it
+                found = first.rebind(shape)
+                circle = _circle_of(found) if found is not None else None
+                if circle is None or not first.resolved:
+                    if not note.sick:
+                        report.errors.append(
+                            "%s: the circle it measured is gone"
+                            % (note.text or note.kind))
+                    note.sick = True
+                    continue
+                where, r = circle
+                cx, cy = hlr.to_paper(where, frame, middle)
+                cx, cy, r = cx * scale, cy * scale, r * scale
+                old = note.points
+                dx, dy = ((old[1][0] - old[0][0], old[1][1] - old[0][1])
+                          if len(old) >= 2 else (1.0, 0.0))
+                length = math.hypot(dx, dy) or 1.0
+                note.points = [[cx, cy], [cx + dx / length * r,
+                                          cy + dy / length * r]]
+                note.sick = False
+                continue
 
             moved, lost = [], False
             for index, ref in enumerate(note.anchors):

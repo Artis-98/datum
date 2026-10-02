@@ -4,8 +4,9 @@ Turning the cube is how a base view is pointed: click a face to look
 straight at it, an edge to look along it, a corner for an isometric from
 that corner.  The arrows round it turn the view a quarter at a time, to
 the face beyond, and the curved ones roll it; the house goes back to the
-isometric.  The cube is drawn as the view is pointed, tipped a little so
-three faces show and the next ones are there to be clicked.
+isometric.  The cube is drawn exactly as the view is pointed: from the
+front it is one square, the front, whose corners give the isometrics and
+whose edges the views along them, and the arrows reach the rest.
 
 Painted with QPainter on the sheet, not the 3D viewport's cube: the sheet
 is paper, and the cube belongs to the view on it.
@@ -33,9 +34,6 @@ FACES: Dict[str, Tuple[Vec, str]] = {
 
 ISO: Tuple[Vec, Vec] = ((-1.0, 1.0, -1.0), (0.0, 0.0, 1.0))
 
-# how far the drawn cube is tipped off the view, so three faces show
-TIP_ACROSS = 0.42
-TIP_UP = 0.32
 
 
 def _unit(v: Sequence[float]) -> Vec:
@@ -154,12 +152,9 @@ class OrientationCube:
     # -- drawing ----------------------------------------------------------
 
     def _camera(self) -> Tuple[Vec, Vec, Vec]:
+        # straight on, the way the view itself looks: no tilt to puzzle out
         d, u = self.direction, self.up
-        r = right_of(d, u)
-        look = _unit([d[i] - TIP_ACROSS * r[i] - TIP_UP * u[i]
-                      for i in range(3)])
-        cam_up = square_up(look, u)
-        return look, cam_up, right_of(look, cam_up)
+        return d, u, right_of(d, u)
 
     def _to_screen(self, point: Sequence[float], look, cam_up, cam_right,
                    scale: float) -> QtCore.QPointF:
@@ -169,7 +164,7 @@ class OrientationCube:
     def draw(self, painter: QtGui.QPainter, centre: QtCore.QPointF) -> None:
         self.centre = QtCore.QPointF(centre)
         look, cam_up, cam_right = self._camera()
-        scale = self.SIZE / 1.6
+        scale = self.SIZE / 1.3
         project = lambda p: self._to_screen(p, look, cam_up,  # noqa: E731
                                             cam_right, scale)
 
@@ -183,11 +178,18 @@ class OrientationCube:
         seen_edges: Dict[Vec, QtCore.QPointF] = {}
         painter.save()
         painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+        # a panel of its own, so the cube reads over whatever is drawn
+        # under it
+        room = self.SIZE + 34.0
+        painter.setPen(QtGui.QPen(QtGui.QColor("#c9d0d8"), 1.0))
+        painter.setBrush(QtGui.QColor(255, 255, 255, 235))
+        painter.drawRoundedRect(QtCore.QRectF(
+            self.centre.x() - room, self.centre.y() - room,
+            room * 2.0, room * 2.0), 8.0, 8.0)
         facing = _unit(_neg(self.direction))
         font = QtGui.QFont(painter.font())
-        font.setPixelSize(9)
+        font.setPixelSize(22)
         font.setBold(True)
-        painter.setFont(font)
         for name, normal, label in visible:
             corners = _face_corners(normal)
             polygon = QtGui.QPolygonF([project(c) for c in corners])
@@ -202,14 +204,11 @@ class OrientationCube:
             painter.setPen(QtGui.QPen(QtGui.QColor("#4a5563"), 1.2))
             painter.setBrush(fill)
             painter.drawPolygon(polygon)
-            # named only where the name fits: a sliver seen edge on would
-            # show a word cut in half
-            bounds = polygon.boundingRect()
-            room = abs(_polygon_area(polygon)) / max(bounds.height(), 1.0)
-            wide = painter.fontMetrics().horizontalAdvance(label) + 4.0
-            if room >= wide and bounds.height() >= 12.0:
-                painter.setPen(QtGui.QColor("#2b333d"))
-                painter.drawText(bounds, QtCore.Qt.AlignCenter, label)
+            # the name lies on the face, the way it would on a real cube,
+            # so a face seen at a slant still says which it is; one seen
+            # nearly edge on is left blank rather than squashed
+            if -_dot(normal, look) > 0.25:
+                self._label(painter, font, normal, name, label, project)
             for i, corner in enumerate(corners):
                 seen_corners[corner] = polygon[i]
                 nxt = corners[(i + 1) % 4]
@@ -230,6 +229,30 @@ class OrientationCube:
             painter.drawEllipse(hot, 4.0, 4.0)
 
         self._draw_buttons(painter)
+        painter.restore()
+
+    def _label(self, painter: QtGui.QPainter, font: QtGui.QFont,
+               normal: Vec, name: str, label: str, project) -> None:
+        upward = (0.0, 1.0, 0.0) if name in ("top", "bottom")             else (0.0, 0.0, 1.0)
+        across = right_of(_neg(normal), upward)
+        corner = lambda a, b: project(  # noqa: E731
+            [normal[i] + a * across[i] * 0.86 + b * upward[i] * 0.86
+             for i in range(3)])
+        target = QtGui.QPolygonF([corner(-1, 1), corner(1, 1),
+                                  corner(1, -1), corner(-1, -1)])
+        source = QtGui.QPolygonF([QtCore.QPointF(0.0, 0.0),
+                                  QtCore.QPointF(100.0, 0.0),
+                                  QtCore.QPointF(100.0, 100.0),
+                                  QtCore.QPointF(0.0, 100.0)])
+        transform = QtGui.QTransform()
+        if not QtGui.QTransform.quadToQuad(source, target, transform):
+            return
+        painter.save()
+        painter.setTransform(transform, True)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor("#2b333d"))
+        painter.drawText(QtCore.QRectF(0.0, 0.0, 100.0, 100.0),
+                         QtCore.Qt.AlignCenter, label)
         painter.restore()
 
     def _draw_buttons(self, painter: QtGui.QPainter) -> None:
@@ -317,7 +340,8 @@ class OrientationCube:
         return None
 
     def contains(self, pos: QtCore.QPointF) -> bool:
-        reach = self.SIZE + 26.0
+        """Whether a point is on the cube's panel at all."""
+        reach = self.SIZE + 34.0
         return (abs(pos.x() - self.centre.x()) <= reach
                 and abs(pos.y() - self.centre.y()) <= reach)
 

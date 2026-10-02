@@ -195,21 +195,35 @@ print()
 print("clicking the cube turns the view")
 cube = session.cube
 check("the cube is drawn beside the view", cube._faces and cube._buttons)
-top_face = next((poly for name, poly, _n in cube._faces if name == "top"),
-                None)
-check("its top shows, to be clicked", top_face is not None)
-if top_face is not None:
-    centre = top_face.boundingRect().center()
-    point = canvas.layout().to_sheet(centre.x(), centre.y())
-    click(point)
+check("from the front it is one square, the front",
+      [name for name, _poly, _n in cube._faces] == ["front"],
+      [name for name, _poly, _n in cube._faces])
+
+
+def press_on_cube(where):
+    click(canvas.layout().to_sheet(where.x(), where.y()))
     settle()
-    check("clicking it looks down from the top",
-          same(session.direction, hlr.ORIENTATIONS["top"][0]),
-          session.direction)
-    box = session._box(session.views()[0])
-    check("and the view is redrawn from there, 30 by 20",
-          near(box[2] - box[0], 30.0, 1e-3)
-          and near(box[3] - box[1], 20.0, 1e-3), box)
+
+
+up_arrow = next(poly for name, poly in cube._buttons if name == "up")
+press_on_cube(up_arrow.boundingRect().center())
+check("the up arrow looks down from the top",
+      same(session.direction, hlr.ORIENTATIONS["top"][0]),
+      session.direction)
+box = session._box(session.views()[0])
+check("and the view is redrawn from there, 30 by 20",
+      near(box[2] - box[0], 30.0, 1e-3)
+      and near(box[3] - box[1], 20.0, 1e-3), box)
+session.set_orientation(*hlr.ORIENTATIONS["front"])
+settle()
+square = cube._faces[0][1].boundingRect()
+press_on_cube(square.topRight())
+check("the square's top right corner is the isometric from there",
+      same(session.direction,
+           [c / math.sqrt(3) for c in hlr.ORIENTATIONS["iso"][0]]),
+      session.direction)
+session.set_orientation(*hlr.ORIENTATIONS["front"])
+settle()
 home = next(poly for name, poly in cube._buttons if name == "home")
 centre = home.boundingRect().center()
 click(canvas.layout().to_sheet(centre.x(), centre.y()))

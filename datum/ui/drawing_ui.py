@@ -1646,8 +1646,10 @@ class BaseViewSession(QtCore.QObject):
 
     def press(self, point, device: QtCore.QPointF) -> None:
         element = self.cube.element_at(device)
-        if element:
-            view = self.cube.view_for(element)
+        if element or self.cube.contains(device):
+            # the cube's panel is the cube's: a click on it never lands on
+            # the sheet behind
+            view = self.cube.view_for(element) if element else None
             if view is not None:
                 self.set_orientation(*view)
             self._press = None
@@ -1696,6 +1698,8 @@ class BaseViewSession(QtCore.QObject):
     def cursor_shape(self, point, device: QtCore.QPointF):
         if self.cube.element_at(device):
             return QtCore.Qt.PointingHandCursor
+        if self.cube.contains(device):
+            return QtCore.Qt.ArrowCursor
         if self._view_at(point) is not None:
             return QtCore.Qt.SizeAllCursor
         return QtCore.Qt.CrossCursor
@@ -1707,7 +1711,9 @@ class BaseViewSession(QtCore.QObject):
         for view in views:
             self._paint_view(painter, layout, view)
         over = self._view_at(self.cursor)
-        if self.cursor is not None and over is None and self._press is None:
+        on_cube = (self.cursor is not None and self.cube.contains(
+            QtCore.QPointF(*layout.to_device(*self.cursor))))
+        if self.cursor is not None and over is None and self._press is None                 and not on_cube:
             spot = self._spot(self.cursor)
             if spot is not None:
                 direction, up, label, _diagonal = self._child_view(*spot)
@@ -1715,13 +1721,15 @@ class BaseViewSession(QtCore.QObject):
                          "up": up, "projection": None}
                 paint_boxes(painter, layout,
                             [(self._box(ghost), label)])
+        # off the view's top right corner, clear of where a side view or a
+        # top view goes, which is where the next clicks are wanted
         base_box = self._box(views[0])
         right, top = layout.to_device(base_box[2], base_box[3])
         canvas = self.controller.canvas
-        reach = OrientationCube.SIZE + 30.0
+        reach = OrientationCube.SIZE + 40.0
         centre = QtCore.QPointF(
             max(reach, min(canvas.width() - reach, right + reach)),
-            max(reach, min(canvas.height() - reach, top + reach * 0.4)))
+            max(reach, min(canvas.height() - reach, top - reach)))
         self.cube.draw(painter, centre)
 
     def _paint_view(self, painter: QtGui.QPainter, layout,

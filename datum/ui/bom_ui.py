@@ -268,7 +268,10 @@ class BomDialog(QtWidgets.QDialog):
                 table.setRowHeight(r, THUMB + 6)
         table.resizeColumnsToContents()
         if shows_thumbnails:
-            table.setColumnWidth(self.columns.index(THUMBNAIL), THUMB + 16)
+            # as wide as the picture, or as its heading if that is wider
+            column = self.columns.index(THUMBNAIL)
+            table.setColumnWidth(column, max(table.columnWidth(column),
+                                             THUMB + 16))
         self._filling = False
 
     # -- changing it ----------------------------------------------------------

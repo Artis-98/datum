@@ -135,9 +135,13 @@ def go():
     plan = doc.add_view(sheet, View(kind=PROJECTED, parent=front.id,
                                     name="Plan", x=front_x, y=plan_y,
                                     label_visible=False))
-    iso = doc.add_view(sheet, View(kind=PROJECTED, parent=front.id,
-                                   name="Iso", display="visible", scale=0.5,
-                                   x=iso_x, y=iso_y))
+    # The isometric is a view of its own, not a projection of the front:
+    # a projected one off a corner is seen from that corner, and this one
+    # sits below and to the right, which would be the housing from below.
+    iso = View(kind=BASE, orientation="iso", name="Iso", display="visible",
+               scale=0.5, x=iso_x, y=iso_y)
+    iso.ref = ref
+    doc.add_view(sheet, iso)
     win.drawing_ui.rebuild(keep_view=False)
     settle(500)
 
@@ -205,7 +209,7 @@ def go():
     settle(500)
     win.sheet_canvas.fit()
     win.drawing_ui.browser.expandAll()
-    win.status_message.setText("Bearing Housing.ddat  -  4 views, 13 "
+    win.status_message.setText("Bearing Housing.ddat: 4 views, 13 "
                                "annotations, up to date")
     settle(600)
     picture = win.grab()

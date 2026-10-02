@@ -61,6 +61,12 @@ class SheetCanvas(QtWidgets.QWidget):
         self.placer = None
 
     def set_placer(self, placer) -> None:
+        """Hand the mouse to something placing views, or take it back.
+
+        It is asked to ``paint`` itself over the sheet, and told of each
+        ``press``, ``move`` and ``release`` in sheet millimetres and in
+        pixels; a ``right_click`` it does not want ends it.
+        """
         self.placer = placer
         self.setCursor(QtCore.Qt.CrossCursor if placer is not None
                        else QtCore.Qt.ArrowCursor)
@@ -134,30 +140,8 @@ class SheetCanvas(QtWidgets.QWidget):
                          + self.selected_annotations,
                          on_screen=True)
         if self.placer is not None:
-            self._paint_placing(painter)
+            self.placer.paint(painter, self.layout())
         painter.end()
-
-    def _paint_placing(self, painter: QtGui.QPainter) -> None:
-        """The box a view will fill, where it will land, named."""
-        layout = self.layout()
-        # the colour a picked view is drawn in: it is on paper, where the
-        # window's own grey accent all but disappears
-        colour = QtGui.QColor(sheetpaint.SELECTED)
-        pen = QtGui.QPen(colour, 1.6, QtCore.Qt.DashLine)
-        fill = QtGui.QColor(colour)
-        fill.setAlpha(22)
-        for box, label in self.placer.preview():
-            x0, y0 = layout.to_device(box[0], box[3])
-            x1, y1 = layout.to_device(box[2], box[1])
-            rect = QtCore.QRectF(QtCore.QPointF(x0, y0),
-                                 QtCore.QPointF(x1, y1)).normalized()
-            painter.setPen(pen)
-            painter.setBrush(fill)
-            painter.drawRect(rect)
-            painter.setPen(colour)
-            painter.drawText(rect.adjusted(0, 0, 0, 18),
-                             QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom,
-                             label)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -242,12 +226,15 @@ class SheetCanvas(QtWidgets.QWidget):
             self._panning = True
             return
         if self.placer is not None:
-            # placing views: a click puts one down, a right-click is done
+            # placing views: the placer has the mouse
             placer = self.placer
+            point = self.layout().to_sheet(pos.x(), pos.y())
+            device = QtCore.QPointF(pos)
             if event.button() == QtCore.Qt.LeftButton:
-                placer.click(self.layout().to_sheet(pos.x(), pos.y()))
+                placer.press(point, device)
             elif event.button() == QtCore.Qt.RightButton:
-                self.placing_finished.emit()
+                if not placer.right_click(point, device):
+                    self.placing_finished.emit()
             self.update()
             return
         if event.button() == QtCore.Qt.RightButton:
@@ -301,7 +288,12 @@ class SheetCanvas(QtWidgets.QWidget):
         self._last_pos = pos
 
         if self.placer is not None:
-            self.placer.hover(self.layout().to_sheet(pos.x(), pos.y()))
+            point = self.layout().to_sheet(pos.x(), pos.y())
+            device = QtCore.QPointF(pos)
+            held = bool(event.buttons() & QtCore.Qt.LeftButton)
+            self.placer.move(point, device, held)
+            if self.placer is not None:
+                self.setCursor(self.placer.cursor_shape(point, device))
             self.update()
             return
         if self._drag_from is None:
@@ -363,6 +355,13 @@ class SheetCanvas(QtWidgets.QWidget):
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() == QtCore.Qt.MiddleButton:
             self._panning = False
+            return
+        if self.placer is not None:
+            if event.button() == QtCore.Qt.LeftButton:
+                pos = event.position().toPoint()
+                self.placer.release(self.layout().to_sheet(pos.x(), pos.y()),
+                                    QtCore.QPointF(pos))
+                self.update()
             return
         moved = (self._drag_view is not None or self._drag_note is not None
                  or self._drag_table is not None)

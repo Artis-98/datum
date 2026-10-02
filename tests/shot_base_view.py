@@ -1,5 +1,5 @@
-"""Screenshot Base View: the Drawing View box, the view following the
-cursor, and a projection about to be placed."""
+"""Screenshot Base View: the Drawing View box, the part drawn on the sheet
+with the cube beside it, and projections set up round it."""
 import os
 import sys
 import tempfile
@@ -16,6 +16,8 @@ from datum.ui.theme import stylesheet  # noqa: E402
 OUT = sys.argv[1] if len(sys.argv) > 1 else "."
 os.makedirs(OUT, exist_ok=True)
 WORK = tempfile.mkdtemp(prefix="datum_shot_base_")
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PART = os.path.join(ROOT, "examples", "excavator", "Boom.pdat")
 
 app = QtWidgets.QApplication(sys.argv)
 app.setStyle("Fusion")
@@ -30,31 +32,11 @@ def pump(n=5):
         app.processEvents()
 
 
-def make_box(name, a, b, c):
-    win.new_document(prompt=False)
-    win.new_primitive("box")
-    d = win._active_dialog
-    d.a.set_text(a)
-    d.b.set_text(b)
-    d.c.set_text(c)
-    d.commit()
-    pump()
-    win.document.path = os.path.join(WORK, name + ".pdat")
-    win.save_document()
-    pump()
-
-
-def hover(here):
-    canvas = win.sheet_canvas
-    device = QtCore.QPointF(*canvas.layout().to_device(*here))
-    QtWidgets.QApplication.sendEvent(canvas, QtGui.QMouseEvent(
-        QtCore.QEvent.MouseMove, device,
-        QtCore.QPointF(canvas.mapToGlobal(device.toPoint())),
-        QtCore.Qt.NoButton, QtCore.Qt.NoButton, QtCore.Qt.NoModifier))
-    pump()
-
-
 def shot(name, extra=None):
+    session = win.drawing_ui._placer
+    if session is not None and hasattr(session, "projections"):
+        session.projections.wait()
+    win.sheet_canvas.repaint()
     pump()
     image = win.grab()
     if extra is not None and extra.isVisible():
@@ -66,26 +48,29 @@ def shot(name, extra=None):
     print("shot:", name)
 
 
-make_box("Bracket", "80", "50", "30")
+win.open_path(PART)
+pump(10)
 win.new_drawing(prompt=False)
 pump()
-win.drawing.path = os.path.join(WORK, "Bracket.ddat")
+win.drawing.path = os.path.join(WORK, "Boom.ddat")
 win.save_document()
 pump()
 
 ui = win.drawing_ui
 ui.place_base_view()
 pump()
-dialog = ui._placer.dialog
-dialog.move(win.mapToGlobal(QtCore.QPoint(60, 180)))
-hover((150.0, 200.0))
-shot("01_base_following", dialog)
+session = ui._placer
+dialog = session.dialog
+shot("01_base_on_sheet", dialog)
 
-ui._placer.click((150.0, 200.0))
-pump(10)
-hover((290.0, 203.0))
-shot("02_projected_beside")
-ui._placer.click((290.0, 200.0))
-pump(10)
-hover((290.0, 90.0))
-shot("03_iso_corner")
+bx, by = session.x, session.y
+size = session._size(session.views()[0])
+for point in ((bx + size[0] * 0.5 + 45.0, by),
+              (bx, by - size[1] * 0.5 - 40.0),
+              (bx + size[0] * 0.5 + 45.0, by - size[1] * 0.5 - 40.0)):
+    session.press(point, QtCore.QPointF(-500, -500))
+    session.release(point, QtCore.QPointF(-500, -500))
+shot("02_projections_set_up", dialog)
+
+session.set_orientation(*session.cube.view_for("corner:1,-1,1"))
+shot("03_turned_by_the_cube", dialog)

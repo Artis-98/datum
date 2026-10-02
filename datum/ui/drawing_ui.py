@@ -22,6 +22,7 @@ from ..core.drawing import (
 )
 from . import drawingexport, icons
 from .drawing_browser import DrawingBrowser
+from .sheetcube import OrientationCube
 from .theme import C
 
 
@@ -194,15 +195,15 @@ class DrawingController(QtCore.QObject):
     # ----------------------------------------------------------------- views
 
     def place_base_view(self) -> None:
-        """Inventor's Base View: say what to draw, then put it down.
+        """Inventor's Base View: set the view up on the sheet, then OK.
 
         The Drawing View box offers the parts and assemblies open in tabs,
         the last one worked on first, or any file from a folder, with its
-        orientation, style and scale.  While it is open the view follows
-        the cursor over the sheet; a click puts it down, and from there
-        every click places a projection of it, beside, above or below for
-        the orthographic views and off a corner for an isometric, until a
-        right-click or Esc ends it.
+        style, scale and name.  The view is on the sheet straight away,
+        drawn, with a view cube beside it to point it by.  It can be
+        dragged anywhere, and a click beside it, above or below it, or off
+        a corner adds a projection, which can be dragged too.  Nothing is
+        made until OK; Cancel or Esc leaves the sheet as it was.
         """
         doc = self.document
         sheet = doc.active() if doc else None
@@ -217,12 +218,13 @@ class DrawingController(QtCore.QObject):
             if not self.host.save_document():
                 return
         dialog = BaseViewDialog(self.host, self, doc, sheet)
-        self._start_placer(ViewPlacer(self, sheet, dialog=dialog))
+        self._start_placer(BaseViewSession(self, sheet, dialog))
+        dialog.move(self.canvas.mapToGlobal(QtCore.QPoint(16, 16)))
         dialog.show()
         self.host.status_message.setStyleSheet("")
         self.host.status_message.setText(
-            "Pick the model and how to draw it, then click on the sheet to "
-            "put the view down.")
+            "Point the view with the cube and drag it where it goes. Click "
+            "round it for projections, then OK.")
 
     def add_projected(self) -> None:
         """Projections of the selected view, placed with the cursor."""
@@ -239,20 +241,27 @@ class DrawingController(QtCore.QObject):
 
     # -- placing views with the cursor ---------------------------------------
 
-    def _start_placer(self, placer: "ViewPlacer") -> None:
+    def _start_placer(self, placer) -> None:
         self._placer = placer
         self.canvas.set_placer(placer)
         self.canvas.setFocus()
 
     def _placing_finished(self) -> None:
-        placed = len(self._placer.placed) if self._placer else 0
+        placer = self._placer
+        if isinstance(placer, BaseViewSession):
+            # Esc in the middle of setting a base view up is Cancel
+            placer.cancel()
+            self.host.status_message.setStyleSheet("")
+            self.host.status_message.setText("Base view cancelled.")
+            return
+        placed = len(placer.placed) if placer else 0
         self.end_placement()
         self.host.status_message.setStyleSheet("")
         self.host.status_message.setText(
             "Placed %d view(s)." % placed if placed else "No view placed.")
 
     def end_placement(self) -> None:
-        """Stop placing views, keeping whatever has been put down."""
+        """Stop placing views, keeping whatever has been made."""
         placer = getattr(self, "_placer", None)
         self._placer = None
         if placer is not None:
@@ -292,14 +301,13 @@ class DrawingController(QtCore.QObject):
         boxes[path] = (stamp, box)
         return box
 
-    def fit_scale(self, path: str, sheet: Sheet, orientation: str) -> float:
-        """The standard scale a view of this model and two projections of
-        it fit the sheet at: where Inventor's default scale would land."""
+    def fit_scale(self, path: str, sheet: Sheet) -> float:
+        """The standard scale a front view of this model and two
+        projections of it fit the sheet at, the way Inventor picks one."""
         box = self.model_box(path)
         if box is None:
             return 1.0
-        direction, up = hlr.ORIENTATIONS.get(orientation,
-                                             hlr.ORIENTATIONS["front"])
+        direction, up = hlr.ORIENTATIONS["front"]
         across, upward = viewgen.outline(box, direction, up)
         depth = viewgen.outline(box, up, direction)[1]
         doc = self.document
@@ -311,17 +319,22 @@ class DrawingController(QtCore.QObject):
         return dwg.three_view_layout(frame, (across, depth, upward),
                                      reserve=reserve)["scale"]
 
-    def create_base(self, settings: Dict[str, Any], x: float,
-                    y: float) -> Optional[View]:
-        """Put the base view down here, as the Drawing View box describes."""
+    def create_views(self, settings: Dict[str, Any], direction, up,
+                     x: float, y: float,
+                     children: Sequence[Sequence[float]] = ()
+                     ) -> Optional[View]:
+        """The base view as it was set up, and its projections, made."""
         doc = self.document
         sheet = doc.active() if doc else None
         path = settings.get("path") or ""
         if sheet is None or not path:
             return None
         doc.push_undo()
-        base = View(kind=BASE, orientation=settings.get("orientation",
-                                                        "front"),
+        base = View(kind=BASE,
+                    orientation=viewgen.named_orientation(direction)
+                    or "front",
+                    direction=[float(c) for c in direction],
+                    up=[float(c) for c in up],
                     scale=float(settings.get("scale") or 1.0), x=x, y=y,
                     display=settings.get("display") or WITH_HIDDEN,
                     name=settings.get("name", ""))
@@ -330,12 +343,17 @@ class DrawingController(QtCore.QObject):
             name=os.path.basename(path),
             label=os.path.splitext(os.path.basename(path))[0])
         doc.add_view(sheet, base)
+        for cx, cy in children:
+            diagonal = abs(cx - x) > 1e-6 and abs(cy - y) > 1e-6
+            doc.add_view(sheet, View(
+                kind=PROJECTED, parent=base.id, x=float(cx), y=float(cy),
+                # an isometric with its hidden lines is a tangle
+                display="visible" if diagonal else ""))
         self.rebuild()
         self.host.status_message.setStyleSheet("")
         self.host.status_message.setText(
-            "%s placed. Click beside, above or below it for projections, off "
-            "a corner for an isometric. Right-click or Esc when done."
-            % base.name)
+            "%s placed%s." % (base.name, " with %d projection(s)"
+                              % len(children) if children else ""))
         return base
 
     def create_projected(self, parent_id: int, x: float,
@@ -1270,17 +1288,15 @@ class ViewDialog(QtWidgets.QDialog):
 
 
 class BaseViewDialog(QtWidgets.QDialog):
-    """Inventor's Drawing View box: which model, which way, how big.
+    """Inventor's Drawing View box: which model, how it is drawn, how big.
 
-    Modeless, so the sheet behind it stays live: the view it describes
-    follows the cursor there, and a click on the sheet puts it down.  OK
-    puts it where it was last shown, or in the middle of the sheet.
+    Modeless, so the sheet behind it stays live while it is open: the view
+    it describes is there, drawn, and pointed with the cube beside it.  It
+    stays open until OK makes the views or Cancel drops them.
     """
 
     changed = QtCore.Signal()
     place_requested = QtCore.Signal()
-
-    ORDER = ("front", "top", "right", "left", "back", "bottom", "iso")
 
     def __init__(self, parent, controller: DrawingController,
                  doc: DrawingDocument, sheet: Sheet) -> None:
@@ -1308,11 +1324,6 @@ class BaseViewDialog(QtWidgets.QDialog):
         row.addWidget(self.browse)
         form.addRow("File", row)
 
-        self.orientation = QtWidgets.QComboBox()
-        for key in self.ORDER:
-            self.orientation.addItem(hlr.ORIENTATION_LABELS[key], key)
-        form.addRow("Orientation", self.orientation)
-
         self.style = QtWidgets.QComboBox()
         for key, label in dwg.DISPLAY_LABELS.items():
             self.style.addItem(label, key)
@@ -1329,10 +1340,14 @@ class BaseViewDialog(QtWidgets.QDialog):
         self.name = QtWidgets.QLineEdit(doc.unique_view_name(sheet, BASE))
         form.addRow("View identifier", self.name)
 
-        self.projected = QtWidgets.QCheckBox(
-            "Then place projected views from it")
-        self.projected.setChecked(True)
-        form.addRow("", self.projected)
+        hint = QtWidgets.QLabel(
+            "Point the view with the cube beside it, and drag it where it "
+            "goes. Click beside, above or below it for projections, off a "
+            "corner for an isometric; drag those too, right-click one to "
+            "drop it.")
+        hint.setWordWrap(True)
+        hint.setProperty("hint", True)
+        form.addRow(hint)
 
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel)
@@ -1342,8 +1357,6 @@ class BaseViewDialog(QtWidgets.QDialog):
 
         self.browse.clicked.connect(self._browse)
         self.file.currentIndexChanged.connect(lambda _i: self._model_changed())
-        self.orientation.currentIndexChanged.connect(
-            lambda _i: self._model_changed())
         self.style.currentIndexChanged.connect(lambda _i: self.changed.emit())
         self.scale.editTextChanged.connect(self._scale_edited)
         self.name.textChanged.connect(lambda _t: self.changed.emit())
@@ -1354,18 +1367,14 @@ class BaseViewDialog(QtWidgets.QDialog):
     def path(self) -> str:
         return self.file.currentData() or ""
 
-    def orientation_key(self) -> str:
-        return self.orientation.currentData() or "front"
-
     def scale_value(self) -> float:
         return dwg.parse_scale(self.scale.currentText()) or 1.0
 
     def settings(self) -> Dict[str, Any]:
-        return {"path": self.path(), "orientation": self.orientation_key(),
+        return {"path": self.path(),
                 "display": self.style.currentData() or WITH_HIDDEN,
                 "scale": self.scale_value(),
-                "name": self.name.text().strip(),
-                "projected": self.projected.isChecked()}
+                "name": self.name.text().strip()}
 
     # -- keeping up -----------------------------------------------------------
 
@@ -1390,8 +1399,7 @@ class BaseViewDialog(QtWidgets.QDialog):
     def _model_changed(self) -> None:
         path = self.path()
         if path and not self._scale_chosen:
-            self._set_scale(self.controller.fit_scale(
-                path, self.sheet, self.orientation_key()))
+            self._set_scale(self.controller.fit_scale(path, self.sheet))
         self.changed.emit()
 
     def _set_scale(self, value: float) -> None:
@@ -1408,46 +1416,434 @@ class BaseViewDialog(QtWidgets.QDialog):
         self._scale_chosen = True
         self.changed.emit()
 
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        # Enter is OK here as in any dialog, but OK is place_requested,
+        # not accept, so it is wired by hand
+        if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            self.place_requested.emit()
+            return
+        super().keyPressEvent(event)
 
-class ViewPlacer:
-    """What the sheet does with the cursor while views are being placed.
 
-    Two steps, as in Inventor.  With the Drawing View box open the base
-    view follows the cursor and a click puts it down.  After that, or from
-    the start when Projected was pressed with a view picked, each click
-    places a projection of it: level beside it a side view, in line above
-    or below a top or bottom view, off a corner an isometric.  Each shows
-    as the box it will fill, named, before it is placed.
+class PreviewProjections(QtCore.QObject):
+    """Views worked out for a preview, in the background where possible.
+
+    Hidden line removal on a big model takes seconds, and a preview that
+    froze the window every time the cube was clicked would be worse than
+    none.  So each is asked of a worker and shown when it comes back;
+    until then the view shows as the box it will fill.
+    """
+
+    ready = QtCore.Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._done: Dict[Any, hlr.Projection] = {}
+        self._pending: Dict[Any, Any] = {}
+        self._timer = QtCore.QTimer(self)
+        self._timer.setInterval(40)
+        self._timer.timeout.connect(self._poll)
+        self.library = None
+
+    def get(self, path: str, direction, up,
+            hidden: bool) -> Optional[hlr.Projection]:
+        stamp = os.path.getmtime(path) if os.path.exists(path) else 0.0
+        key = (os.path.abspath(path), stamp,
+               tuple(round(float(c), 9) for c in direction),
+               tuple(round(float(c), 9) for c in up), bool(hidden))
+        if key not in self._done and key not in self._pending:
+            self._start(key, path, direction, up, hidden)
+        return self._done.get(key)
+
+    @property
+    def busy(self) -> bool:
+        return bool(self._pending)
+
+    def wait(self, seconds: float = 60.0) -> None:
+        """Until every preview asked for is back.  For tests and shots."""
+        import time
+        end = time.monotonic() + seconds
+        while self._pending and time.monotonic() < end:
+            self._poll()
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.02)
+
+    def _start(self, key, path, direction, up, hidden) -> None:
+        from ..core import rules, workers
+
+        helpers = workers.pool()
+        if helpers is not None:
+            try:
+                self._pending[key] = helpers.submit(
+                    "project", trusted=sorted(rules.trusted_paths()),
+                    path=os.path.abspath(path), direction=list(direction),
+                    up=list(up), hidden=bool(hidden))
+                self._timer.start()
+                return
+            except Exception:
+                pass
+        # no workers to hand it to: worked out here, now
+        try:
+            if self.library is None:
+                from ..core.parts import PartLibrary
+                self.library = PartLibrary()
+            shape, _model = viewgen.load_model(path, self.library)
+            self._done[key] = hlr.project(shape, tuple(direction), tuple(up),
+                                          hidden=hidden)
+        except Exception as exc:
+            self._done[key] = hlr.Projection(error=str(exc))
+
+    def _poll(self) -> None:
+        arrived = False
+        for key, future in list(self._pending.items()):
+            if not future.done():
+                continue
+            del self._pending[key]
+            try:
+                self._done[key] = hlr.Projection.from_dict(future.result())
+            except Exception as exc:
+                self._done[key] = hlr.Projection(error=str(exc))
+            arrived = True
+        if not self._pending:
+            self._timer.stop()
+        if arrived:
+            self.ready.emit()
+
+    def close(self) -> None:
+        self._timer.stop()
+        self._pending.clear()
+
+
+PREVIEW = "#3d5a80"
+PREVIEW_HIDDEN = "#8fa3ba"
+
+
+class BaseViewSession(QtCore.QObject):
+    """A base view and its projections, set up on the sheet before they are
+    made, the way Inventor's Drawing View box works.
+
+    The base view starts in the middle of the sheet, drawn, with the view
+    cube beside it.  Clicking the cube points the view; dragging the view
+    moves it, and its projections with it.  A click beside the view, above
+    or below it adds a projection there, level or in line with it, and a
+    click off a corner an isometric; each can be dragged along its line,
+    an isometric anywhere, and a right-click on one drops it.  OK makes
+    them all, Cancel or Esc none.
     """
 
     def __init__(self, controller: DrawingController, sheet: Sheet,
-                 dialog: Optional[BaseViewDialog] = None,
-                 parent: Optional[int] = None) -> None:
+                 dialog: BaseViewDialog) -> None:
+        super().__init__(controller)
         self.controller = controller
         self.sheet = sheet
-        self.dialog = dialog
+        self.dialog: Optional[BaseViewDialog] = dialog
+        self.direction, self.up = hlr.ORIENTATIONS["front"]
+        self.cube = OrientationCube()
+        self.cube.set_view(self.direction, self.up)
+        self.x, self.y = self._middle()
+        self.children: List[List[float]] = []
+        self.cursor: Optional[Tuple[float, float]] = None
+        self.placed: List[int] = []
+        self._press = None
+        self._dragged = False
+        self._last_scale = dialog.scale_value()
+        self._paths: Dict[int, Tuple[QtGui.QPainterPath,
+                                     QtGui.QPainterPath]] = {}
+        self.projections = PreviewProjections(self)
+        self.projections.ready.connect(self._refresh)
+        dialog.changed.connect(self._settings_changed)
+        dialog.place_requested.connect(self.commit)
+        dialog.finished.connect(self._dialog_closed)
+
+    def _middle(self) -> Tuple[float, float]:
+        doc = self.controller.document
+        border = doc.borders.get(self.sheet.border) if doc else None
+        width, height = self.sheet.extent()
+        frame = (border.frame(width, height) if border
+                 else (0.0, 0.0, width, height))
+        return ((frame[0] + frame[2]) / 2.0, (frame[1] + frame[3]) / 2.0)
+
+    # -- the views as they stand ----------------------------------------------
+
+    def settings(self) -> Dict[str, Any]:
+        return self.dialog.settings() if self.dialog is not None else {}
+
+    def _scale(self) -> float:
+        return float(self.settings().get("scale") or 1.0)
+
+    def set_orientation(self, direction, up) -> None:
+        """Point the base view; its projections turn with it."""
+        self.direction = tuple(float(c) for c in direction)
+        self.up = tuple(float(c) for c in up)
+        self.cube.set_view(self.direction, self.up)
+        self._refresh()
+
+    def _child_view(self, cx: float, cy: float):
+        doc = self.controller.document
+        dx, dy = cx - self.x, cy - self.y
+        if abs(dx) > 1e-6 and abs(dy) > 1e-6:
+            direction, up = hlr.ORIENTATIONS["iso"]
+            return direction, up, "Isometric", True
+        direction, up = viewgen.projected_orientation(
+            self.direction, self.up, dx, dy, doc.angle if doc else
+            dwg.FIRST_ANGLE)
+        name = viewgen.named_orientation(direction)
+        return (direction, up,
+                hlr.ORIENTATION_LABELS.get(name, "Projected View"), False)
+
+    def views(self) -> List[Dict[str, Any]]:
+        """Every view being set up: where, which way, and its lines."""
+        settings = self.settings()
+        path = settings.get("path") or ""
+        hidden = settings.get("display") == WITH_HIDDEN
+        out = [{"key": "base", "x": self.x, "y": self.y,
+                "direction": self.direction, "up": self.up,
+                "hidden": hidden,
+                "label": "%s (%s)" % (settings.get("name") or "Base View",
+                                      dwg.scale_text(self._scale()))}]
+        for i, (cx, cy) in enumerate(self.children):
+            direction, up, label, diagonal = self._child_view(cx, cy)
+            out.append({"key": i, "x": cx, "y": cy, "direction": direction,
+                        "up": up, "hidden": hidden and not diagonal,
+                        "label": label})
+        for view in out:
+            view["projection"] = (self.projections.get(
+                path, view["direction"], view["up"], view["hidden"])
+                if path else None)
+        return out
+
+    def _size(self, view: Dict[str, Any]) -> Tuple[float, float]:
+        scale = self._scale()
+        projection = view.get("projection")
+        if projection is not None and projection.ok and projection.box:
+            box = projection.box
+            return ((box[2] - box[0]) * scale, (box[3] - box[1]) * scale)
+        path = self.settings().get("path") or ""
+        box = self.controller.model_box(path) if path else None
+        if box is None:
+            return (40.0, 30.0)
+        across, upward = viewgen.outline(box, view["direction"], view["up"])
+        return (across * scale, upward * scale)
+
+    def _box(self, view: Dict[str, Any]):
+        return _box_at((view["x"], view["y"]), self._size(view))
+
+    def _view_at(self, point) -> Optional[Any]:
+        if point is None:
+            return None
+        for view in reversed(self.views()):
+            x0, y0, x1, y1 = self._box(view)
+            if x0 - 2.0 <= point[0] <= x1 + 2.0 and \
+                    y0 - 2.0 <= point[1] <= y1 + 2.0:
+                return view["key"]
+        return None
+
+    def _spot(self, point):
+        base = self.views()[0]
+        return dwg.projected_spot((self.x, self.y), self._size(base), point)
+
+    # -- the canvas asks ------------------------------------------------------
+
+    def press(self, point, device: QtCore.QPointF) -> None:
+        element = self.cube.element_at(device)
+        if element:
+            view = self.cube.view_for(element)
+            if view is not None:
+                self.set_orientation(*view)
+            self._press = None
+            return
+        self._press = (self._view_at(point), (point[0], point[1]),
+                       (self.x, self.y), [list(c) for c in self.children])
+        self._dragged = False
+
+    def move(self, point, device: QtCore.QPointF, held: bool) -> None:
+        self.cursor = (point[0], point[1])
+        if self._press is not None and held:
+            key, start, base_at, children_at = self._press
+            dx, dy = point[0] - start[0], point[1] - start[1]
+            if abs(dx) + abs(dy) > 1e-9:
+                self._dragged = True
+            if key == "base":
+                self.x, self.y = base_at[0] + dx, base_at[1] + dy
+                self.children = [[c[0] + dx, c[1] + dy] for c in children_at]
+            elif isinstance(key, int) and key < len(self.children):
+                cx, cy = children_at[key]
+                level = abs(cy - base_at[1]) <= 1e-6
+                in_line = abs(cx - base_at[0]) <= 1e-6
+                if level:
+                    self.children[key] = [cx + dx, cy]
+                elif in_line:
+                    self.children[key] = [cx, cy + dy]
+                else:
+                    self.children[key] = [cx + dx, cy + dy]
+            return
+        self.cube.hover = self.cube.element_at(device)
+
+    def release(self, point, device: QtCore.QPointF) -> None:
+        press, self._press = self._press, None
+        if press is None or press[0] is not None or self._dragged:
+            return
+        spot = self._spot(point)
+        if spot is not None:
+            self.children.append([spot[0], spot[1]])
+
+    def right_click(self, point, device: QtCore.QPointF) -> bool:
+        key = self._view_at(point)
+        if isinstance(key, int) and key < len(self.children):
+            del self.children[key]
+        return True
+
+    def cursor_shape(self, point, device: QtCore.QPointF):
+        if self.cube.element_at(device):
+            return QtCore.Qt.PointingHandCursor
+        if self._view_at(point) is not None:
+            return QtCore.Qt.SizeAllCursor
+        return QtCore.Qt.CrossCursor
+
+    # -- painting ---------------------------------------------------------------
+
+    def paint(self, painter: QtGui.QPainter, layout) -> None:
+        views = self.views()
+        for view in views:
+            self._paint_view(painter, layout, view)
+        over = self._view_at(self.cursor)
+        if self.cursor is not None and over is None and self._press is None:
+            spot = self._spot(self.cursor)
+            if spot is not None:
+                direction, up, label, _diagonal = self._child_view(*spot)
+                ghost = {"x": spot[0], "y": spot[1], "direction": direction,
+                         "up": up, "projection": None}
+                paint_boxes(painter, layout,
+                            [(self._box(ghost), label)])
+        base_box = self._box(views[0])
+        right, top = layout.to_device(base_box[2], base_box[3])
+        canvas = self.controller.canvas
+        reach = OrientationCube.SIZE + 30.0
+        centre = QtCore.QPointF(
+            max(reach, min(canvas.width() - reach, right + reach)),
+            max(reach, min(canvas.height() - reach, top + reach * 0.4)))
+        self.cube.draw(painter, centre)
+
+    def _paint_view(self, painter: QtGui.QPainter, layout,
+                    view: Dict[str, Any]) -> None:
+        box = self._box(view)
+        projection = view.get("projection")
+        scale = self._scale()
+        if projection is not None and projection.ok:
+            visible, hidden = self._path_for(projection)
+            s = layout.scale
+            painter.save()
+            painter.setRenderHint(QtGui.QPainter.Antialiasing, True)
+            painter.setTransform(QtGui.QTransform(
+                scale * s, 0.0, 0.0, -scale * s,
+                layout.offset_x + view["x"] * s,
+                layout.offset_y + (layout.height - view["y"]) * s))
+            painter.setBrush(QtCore.Qt.NoBrush)
+            pen = QtGui.QPen(QtGui.QColor(PREVIEW), 1.3)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawPath(visible)
+            pen = QtGui.QPen(QtGui.QColor(PREVIEW_HIDDEN), 1.0,
+                             QtCore.Qt.DashLine)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawPath(hidden)
+            painter.restore()
+            label = view["label"]
+        else:
+            label = (view["label"] + "  (drawing...)" if projection is None
+                     else view["label"])
+        # the box it fills, faint, so it is plain it can be taken hold of
+        paint_boxes(painter, layout, [(box, label)], faint=True)
+
+    def _path_for(self, projection: hlr.Projection):
+        held = self._paths.get(id(projection))
+        if held is not None and held[0] is projection:
+            return held[1], held[2]
+        visible = QtGui.QPainterPath()
+        hidden = QtGui.QPainterPath()
+        for line in projection.lines:
+            if len(line.points) < 2:
+                continue
+            path = hidden if line.kind == hlr.HIDDEN else visible
+            first = line.points[0]
+            path.moveTo(first[0], first[1])
+            for x, y in line.points[1:]:
+                path.lineTo(x, y)
+        self._paths[id(projection)] = (projection, visible, hidden)
+        return visible, hidden
+
+    # -- keeping up, and ending ------------------------------------------------
+
+    def _settings_changed(self) -> None:
+        # a new scale spreads the projections out, or in, with it, so they
+        # keep the gaps they were given instead of landing on each other
+        scale = self._scale()
+        if self._last_scale and abs(scale - self._last_scale) > 1e-12:
+            ratio = scale / self._last_scale
+            self.children = [[self.x + (c[0] - self.x) * ratio,
+                              self.y + (c[1] - self.y) * ratio]
+                             for c in self.children]
+        self._last_scale = scale
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.controller.canvas.update()
+
+    def commit(self) -> None:
+        """OK: make the base view and its projections, as set up."""
+        settings = self.settings()
+        if not settings.get("path"):
+            self.controller._complain(
+                "Pick a part or assembly to draw first.")
+            return
+        base = self.controller.create_views(
+            settings, self.direction, self.up, self.x, self.y,
+            [tuple(c) for c in self.children])
+        if base is None:
+            return
+        self.placed = [base.id] + [v.id for v in
+                                   self.sheet.children_of(base.id)]
+        self.controller.end_placement()
+
+    def cancel(self) -> None:
+        self.controller.end_placement()
+
+    def _dialog_closed(self, _result: int) -> None:
+        # closed by its own Cancel or its X, not by OK
+        if self.dialog is not None:
+            self.dialog = None
+            self.controller.end_placement()
+
+    def close(self) -> None:
+        dialog, self.dialog = self.dialog, None
+        self.projections.close()
+        if dialog is not None:
+            dialog.close()
+
+
+class ViewPlacer:
+    """Projections of a view on the sheet, placed with the cursor.
+
+    Projected with a view picked: each click places one, level beside it a
+    side view, in line above or below a top or bottom view, off a corner
+    an isometric, each shown as the box it will fill before it is placed.
+    A right-click or Esc ends it.
+    """
+
+    def __init__(self, controller: DrawingController, sheet: Sheet,
+                 parent: int) -> None:
+        self.controller = controller
+        self.sheet = sheet
         self.parent = parent
         self.cursor: Optional[Tuple[float, float]] = None
         self.placed: List[int] = []
-        if dialog is not None:
-            dialog.changed.connect(self._refresh)
-            dialog.place_requested.connect(self.place_here)
-            dialog.finished.connect(self._dialog_closed)
-
-    @property
-    def placing_base(self) -> bool:
-        return self.parent is None and self.dialog is not None
-
-    # -- the cursor -----------------------------------------------------------
 
     def hover(self, point: Sequence[float]) -> None:
         self.cursor = (float(point[0]), float(point[1]))
 
     def click(self, point: Sequence[float]) -> None:
         self.hover(point)
-        if self.placing_base:
-            self.place_here()
-            return
         spot = self.spot()
         if spot is None:
             return
@@ -1455,43 +1851,27 @@ class ViewPlacer:
         if view is not None:
             self.placed.append(view.id)
 
-    def place_here(self) -> None:
-        """Put the base view down where it was last shown, or mid-sheet."""
-        if self.dialog is None:
-            return
-        settings = self.dialog.settings()
-        if not settings["path"]:
-            self.controller._complain(
-                "Pick a part or assembly to draw first.")
-            return
-        width, height = self.sheet.extent()
-        point = self.cursor or (width / 2.0, height / 2.0)
-        base = self.controller.create_base(settings, point[0], point[1])
-        if base is None:
-            return
-        self.placed.append(base.id)
-        self._close_dialog()
-        if settings["projected"]:
-            self.parent = base.id
-        else:
-            self.controller.end_placement()
+    # the canvas's side of it
+    def press(self, point, device) -> None:
+        self.click(point)
 
-    # -- what it shows --------------------------------------------------------
+    def move(self, point, device, held: bool) -> None:
+        self.hover(point)
+
+    def release(self, point, device) -> None:
+        pass
+
+    def right_click(self, point, device) -> bool:
+        return False
+
+    def cursor_shape(self, point, device):
+        return QtCore.Qt.CrossCursor
+
+    def paint(self, painter: QtGui.QPainter, layout) -> None:
+        paint_boxes(painter, layout, self.preview())
 
     def preview(self) -> List[Tuple[Tuple[float, float, float, float], str]]:
-        """The boxes to show on the sheet, in sheet millimetres, named."""
-        if self.cursor is None:
-            return []
-        if self.placing_base:
-            settings = self.dialog.settings()
-            if not settings["path"]:
-                return []
-            direction, up = hlr.ORIENTATIONS.get(
-                settings["orientation"], hlr.ORIENTATIONS["front"])
-            size = self._size(settings["path"], direction, up,
-                              settings["scale"])
-            return [(_box_at(self.cursor, size),
-                     settings["name"] or "Base View")]
+        """The box the next projection will fill, named."""
         spot = self.spot()
         if spot is None:
             return []
@@ -1528,42 +1908,49 @@ class ViewPlacer:
         return (spot, direction, up,
                 hlr.ORIENTATION_LABELS.get(name, "Projected View"))
 
-    def _size(self, path: str, direction, up, scale: float):
-        box = self.controller.model_box(path)
-        if box is None:
-            return (40.0, 40.0)
-        across, upward = viewgen.outline(box, direction, up)
-        return (across * scale, upward * scale)
-
     def _child_size(self, direction, up):
         doc = self.controller.document
         parent = self.sheet.view(self.parent)
         model = doc.view_model(self.sheet, parent) if parent else None
         path = (model.ref.resolve(doc.base_dir)
                 if model is not None and model.ref.path else None)
-        if not path:
+        box = self.controller.model_box(path) if path else None
+        if box is None:
             return (40.0, 40.0)
-        return self._size(path, direction, up,
-                          doc.view_scale(self.sheet, parent))
-
-    # -- ending ---------------------------------------------------------------
-
-    def _refresh(self) -> None:
-        self.controller.canvas.update()
-
-    def _close_dialog(self) -> None:
-        dialog, self.dialog = self.dialog, None
-        if dialog is not None:
-            dialog.close()
-
-    def _dialog_closed(self, _result: int) -> None:
-        # closed by its own Cancel or its X, not by a view being placed
-        if self.dialog is not None:
-            self.dialog = None
-            self.controller.end_placement()
+        across, upward = viewgen.outline(box, direction, up)
+        scale = doc.view_scale(self.sheet, parent)
+        return (across * scale, upward * scale)
 
     def close(self) -> None:
-        self._close_dialog()
+        pass
+
+
+def paint_boxes(painter: QtGui.QPainter, layout, boxes,
+                faint: bool = False) -> None:
+    """Boxes on the sheet, in sheet millimetres, each with its name under it:
+    where a view will land, or the room a view being set up takes."""
+    from . import sheetpaint
+
+    colour = QtGui.QColor(sheetpaint.SELECTED)
+    painter.save()
+    for box, label in boxes:
+        x0, y0 = layout.to_device(box[0], box[3])
+        x1, y1 = layout.to_device(box[2], box[1])
+        rect = QtCore.QRectF(QtCore.QPointF(x0, y0),
+                             QtCore.QPointF(x1, y1)).normalized()
+        pen = QtGui.QPen(colour, 1.0 if faint else 1.6, QtCore.Qt.DashLine)
+        if faint:
+            pen.setColor(QtGui.QColor("#a9b4c1"))
+        painter.setPen(pen)
+        fill = QtGui.QColor(colour)
+        fill.setAlpha(0 if faint else 22)
+        painter.setBrush(fill)
+        painter.drawRect(rect)
+        painter.setPen(colour)
+        painter.drawText(rect.adjusted(-80, 0, 80, 18),
+                         QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom,
+                         label)
+    painter.restore()
 
 
 def _box_at(centre: Sequence[float], size: Sequence[float]

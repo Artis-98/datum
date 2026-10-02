@@ -245,3 +245,73 @@ def plain_value(text: str, unit: str, kind: str = LENGTH
     if kind == LENGTH:
         return to_mm(plain, known(unit))
     return plain
+
+
+# --------------------------------------------------------------------------
+# keeping the numbers
+
+
+def _number(value: float) -> str:
+    text = "%.12g" % value
+    return "0" if text == "-0" else text
+
+
+def rescaled(text: str, old: str, new: str, kind: str = LENGTH) -> str:
+    """A stored expression, rewritten for a part whose numbers were kept.
+
+    Keeping the numbers when a part goes from ``old`` units to ``new``
+    multiplies every length in it by one factor, 25.4 from millimetres to
+    inches, so an expression has to come out that much larger too.  A
+    number written in the old unit is the same number in the new one; a
+    bare number, which is millimetres, and a number in any other unit are
+    multiplied.  Names are left as they are: what they stand for is
+    rescaled where it is kept.  Factors, like the 2 in d1 * 2, stay put.
+    """
+    from .params import LENGTH_UNITS
+
+    text = str(text).strip()
+    old, new = known(old), known(new)
+    if kind != LENGTH or old == new or not text:
+        return text
+    scale = factor(new) / factor(old)
+
+    def bare(digits: str) -> str:
+        # millimetres in, millimetres out; from a millimetre part that is
+        # simply the same digits in the new unit, which is what was typed
+        if old == "mm":
+            return "%s %s" % (digits, new)
+        return _number(float(digits) * scale)
+
+    if _plain(text) is not None:
+        return bare(text)
+
+    held: Dict[str, str] = {}
+
+    def hold(match: "re.Match[str]") -> str:
+        digits, unit = match.group(1), match.group(2)
+        if abs(LENGTH_UNITS[unit] - factor(old)) < 1e-12:
+            out = "%s %s" % (digits, new)
+        else:
+            out = "%s %s" % (_number(float(digits) * scale), unit)
+        key = "__kept%d__" % len(held)
+        held[key] = out
+        return key
+
+    pattern = re.compile(
+        r"(?<![\w.])((?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)\s*("
+        + "|".join(sorted(LENGTH_UNITS, key=len, reverse=True)) + r")\b")
+    out = pattern.sub(hold, text)
+    try:
+        tree = ast.parse(out, mode="eval")
+    except SyntaxError:
+        tree = None
+    if tree is not None:
+        found: List[ast.Constant] = []
+        _lengths(tree.body, True, found)
+        # rewritten from the right, so earlier offsets stay true
+        for node in sorted(found, key=lambda n: n.col_offset, reverse=True):
+            start, end = node.col_offset, node.end_col_offset
+            out = out[:start] + bare(out[start:end]) + out[end:]
+    for key, value in held.items():
+        out = out.replace(key, value)
+    return out

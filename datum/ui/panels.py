@@ -441,6 +441,8 @@ class DocumentProperties(QtWidgets.QWidget):
     """
 
     changed = QtCore.Signal()
+    # a different unit picked: the window asks how before anything changes
+    units_requested = QtCore.Signal(str)
 
     FIELDS = (
         ("Title", "Title"),
@@ -465,6 +467,19 @@ class DocumentProperties(QtWidgets.QWidget):
         form = QtWidgets.QFormLayout()
         form.setSpacing(6)
         root.addLayout(form)
+
+        # This document's own unit.  Preferences sets the one new documents
+        # start in; this is where one part is told otherwise, years later.
+        self.units_combo = QtWidgets.QComboBox()
+        for key, label in unitlib.LABELS.items():
+            self.units_combo.addItem("%s  (%s)" % (label, key), key)
+        self.units_combo.setToolTip(
+            "What this document's lengths are in. Changing it asks whether "
+            "to convert, so the part keeps its size, or to keep the "
+            "numbers, so the part is rescaled.")
+        self.units_combo.activated.connect(self._units_picked)
+        form.addRow("Units", self.units_combo)
+
         self.edits = {}
         for key, label in self.FIELDS:
             edit = QtWidgets.QLineEdit()
@@ -496,6 +511,7 @@ class DocumentProperties(QtWidgets.QWidget):
         self.document = doc if hasattr(doc, "properties") else None
         held = getattr(self.document, "properties", None) or {}
         self.setEnabled(self.document is not None)
+        self.show_units(getattr(self.document, "units", "mm"))
         for key, edit in self.edits.items():
             was = edit.blockSignals(True)
             edit.setText(str(held.get(key, "")))
@@ -507,6 +523,23 @@ class DocumentProperties(QtWidgets.QWidget):
                 continue
             self._append(name, str(value))
         self.custom.blockSignals(was)
+
+    def show_units(self, unit: str) -> None:
+        """Point the units box at a unit without asking anything."""
+        index = self.units_combo.findData(unitlib.known(unit or "mm"))
+        was = self.units_combo.blockSignals(True)
+        self.units_combo.setCurrentIndex(max(0, index))
+        self.units_combo.blockSignals(was)
+
+    def _units_picked(self, index: int) -> None:
+        unit = self.units_combo.itemData(index)
+        current = unitlib.known(getattr(self.document, "units", "mm") or "mm")
+        if self.document is None or unit == current:
+            return
+        # put back until the change has really been made: a cancelled
+        # question must not leave the box saying something untrue
+        self.show_units(current)
+        self.units_requested.emit(unit)
 
     def _append(self, name: str, value: str) -> int:
         row = self.custom.rowCount()

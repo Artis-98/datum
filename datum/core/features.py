@@ -1490,7 +1490,12 @@ class ImportFeature(Feature):
     path: str = ""
     operation: str = JOIN
     body_name: str = ""
+    # how much bigger than the file says it is, about the origin: what
+    # keeping a part's numbers through a change of unit does to a body
+    # that has no numbers of its own (see rescale.py)
+    scale: float = 1.0
     _cache: Optional[TopoDS_Shape] = None
+    _scaled: Optional[Tuple[float, TopoDS_Shape]] = None
 
     def build(self, ctx: BuildContext) -> None:
         from . import fileio
@@ -1508,7 +1513,13 @@ class ImportFeature(Feature):
         # every copy is new geometry nothing has meshed, so the whole
         # import was meshed again after every command. Nothing downstream
         # changes a shape in place, so there is nothing to protect it from.
-        ctx.apply(self._cache, self.operation, self.id,
+        # A scaled one is made once and kept, for the same reason.
+        shape = self._cache
+        if abs(self.scale - 1.0) > 1e-12:
+            if self._scaled is None or self._scaled[0] != self.scale:
+                self._scaled = (self.scale, kernel.scale(shape, self.scale))
+            shape = self._scaled[1]
+        ctx.apply(shape, self.operation, self.id,
                   name=self.body_name, targets=self.solids)
 
     def resolved(self, base_dir: str = "") -> str:
@@ -1525,15 +1536,24 @@ class ImportFeature(Feature):
 
     def summary(self) -> str:
         import os
-        return "%s: %s" % (self.name, os.path.basename(self.path) or "(none)")
+        text = "%s: %s" % (self.name, os.path.basename(self.path) or "(none)")
+        if abs(self.scale - 1.0) > 1e-12:
+            text += ", scaled %.6g times" % self.scale
+        return text
 
     def field_dict(self) -> Dict[str, Any]:
-        return {"path": self.path, "operation": self.operation, "body_name": self.body_name}
+        d = {"path": self.path, "operation": self.operation, "body_name": self.body_name}
+        if abs(self.scale - 1.0) > 1e-12:
+            # written only when it is not 1, so an ordinary import reads,
+            # and fingerprints, exactly as it always did
+            d["scale"] = self.scale
+        return d
 
     def load_fields(self, data: Dict[str, Any]) -> None:
         self.path = data.get("path", "")
         self.operation = data.get("operation", JOIN)
         self.body_name = str(data.get("body_name", ""))
+        self.scale = float(data.get("scale", 1.0) or 1.0)
 
 
 # ==========================================================================

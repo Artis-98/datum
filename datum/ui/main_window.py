@@ -527,7 +527,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         ).clicked.connect(self.reload_components)
         panel.add_small("params", "Parameters", "Named parameters (Ctrl+P)"
                         ).clicked.connect(self.edit_parameters)
-        panel.add_small("material", "Properties", "Mass and bounding box"
+        panel.add_small("material", "dProperties",
+                        "Title, part number, units, mass and bounding box"
                         ).clicked.connect(self.show_properties)
         panel.add_small("auto", "dLogic", "Rules that drive this assembly"
                         ).clicked.connect(self.show_rules)
@@ -641,7 +642,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "Redraw every view from the models as they are now")
         self.drawing_update_button.clicked.connect(
             lambda: self.drawing_ui.rebuild(force=True))
-        panel.add_small("material", "Properties").clicked.connect(
+        panel.add_small("material", "dProperties",
+                        "Title, part number, units, mass and bounding box"
+                        ).clicked.connect(
             self.show_properties)
         panel.add_small("auto", "dLogic", "Rules that drive this drawing"
                         ).clicked.connect(self.show_rules)
@@ -661,7 +664,8 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = inspect.add_panel("Measure")
         panel.add_big("measure", "Measure", "Measure faces, edges and distances"
                       ).clicked.connect(self.open_measure)
-        panel.add_big("material", "Properties", "Mass and bounding box"
+        panel.add_big("material", "dProperties",
+                      "Title, part number, units, mass and bounding box"
                       ).clicked.connect(self.show_properties)
 
         panel = inspect.add_panel("Selection Filter")
@@ -1028,7 +1032,7 @@ class MainWindow(QtWidgets.QMainWindow):
             action.setCheckable(True)
             group.addAction(action)
             action.triggered.connect(
-                lambda _=False, k=key: self.set_document_units(k))
+                lambda _=False, k=key: self.change_units(k))
             self._unit_actions[key] = action
         self.status_units.setMenu(menu)
         bar.addPermanentWidget(self.status_units)
@@ -1064,6 +1068,106 @@ class MainWindow(QtWidgets.QMainWindow):
             "Units: %s. Nothing in the model moved; lengths read in %s now."
             % (unitlib.LABELS[unit], unit))
 
+    def change_units(self, unit: str) -> None:
+        """Change the active document's unit, from dProperties or the
+        status bar, asking how first when it is a part.
+
+        A part can be converted, which keeps its size, or keep its
+        numbers, which rescales it: the second is for a part drawn in the
+        wrong unit, or a file that came in without one.  An assembly or a
+        drawing only has the first; its size is its parts'.
+        """
+        from ..core import units as unitlib
+
+        document = self.active_document
+        unit = unitlib.known(unit)
+        old = unitlib.known(getattr(document, "units", "mm") or "mm")
+        if document is None or unit == old:
+            self._sync_units()
+            return
+        how = "convert"
+        if hasattr(document, "features"):
+            how = self._ask_unit_change(document, old, unit)
+        if how == "keep":
+            self.keep_numbers(unit)
+        elif how == "convert":
+            self.set_document_units(unit)
+        else:
+            self._sync_units()
+
+    def _ask_unit_change(self, document, old: str, new: str) -> Optional[str]:
+        """Convert, keep the numbers, or neither: "convert", "keep", None."""
+        from ..core import units as unitlib
+
+        sample = unitlib.to_mm(1.0, new)
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Question)
+        box.setWindowTitle("Units")
+        box.setText("Change %s from %s to %s?" % (
+            self._document_label(document), unitlib.LABELS[old].lower(),
+            unitlib.LABELS[new].lower()))
+        words = unitlib.LABELS[new].lower()
+        box.setInformativeText(
+            "Convert: the part keeps its size, and every number is "
+            "shown in %s. %s %s reads 1 %s.\n\n"
+            "Keep the numbers: every number stays as it is, now in %s, so "
+            "the part is rescaled %s times. For a part drawn in the wrong "
+            "unit, or a file that came in without one."
+            % (words, unitlib.fmt(unitlib.to_unit(sample, old), 6), old, new,
+               words, unitlib.fmt(unitlib.factor(new) / unitlib.factor(old),
+                                  6)))
+        convert = box.addButton("Convert", QtWidgets.QMessageBox.AcceptRole)
+        keep = box.addButton("Keep the numbers",
+                             QtWidgets.QMessageBox.ActionRole)
+        box.addButton(QtWidgets.QMessageBox.Cancel)
+        # the theme's buttons are sized for one word; this one has three
+        keep.setMinimumWidth(
+            keep.fontMetrics().horizontalAdvance(keep.text()) + 36)
+        box.setDefaultButton(convert)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is convert:
+            return "convert"
+        if clicked is keep:
+            return "keep"
+        return None
+
+    def _document_label(self, document) -> str:
+        path = getattr(document, "path", "") or ""
+        if path:
+            return os.path.splitext(os.path.basename(path))[0]
+        return "this part"
+
+    def keep_numbers(self, unit: str) -> None:
+        """Change the active part's unit and keep its numbers: it rescales."""
+        from ..core import rescale
+        from ..core import units as unitlib
+
+        document = self.active_document
+        if document is None or not hasattr(document, "features"):
+            return
+        old = unitlib.known(getattr(document, "units", "mm") or "mm")
+        if self.editor.active:
+            # the sketch being edited is rescaled with the rest, and is
+            # easier to come back into than to carry through it
+            self.finish_sketch()
+        document.push_undo()
+        notes = rescale.keep_numbers(document, unit)
+        self._sync_units()
+        self._update_title()
+        self.rebuild(keep_camera=True)
+        if self.document is document:
+            self.viewport.fit_all()
+        self.status_message.setStyleSheet("")
+        text = ("Units: %s. The numbers stayed, so the part is %s times "
+                "the size it was." % (
+                    unitlib.LABELS[unitlib.known(unit)],
+                    unitlib.fmt(unitlib.factor(unitlib.known(unit))
+                                / unitlib.factor(old), 6)))
+        if notes:
+            text += " Not rescaled: %s." % "; ".join(notes)
+        self.status_message.setText(text)
+
     def _sync_units(self) -> None:
         document = self.active_document
         unit = getattr(document, "units", "mm") or "mm"
@@ -1071,6 +1175,9 @@ class MainWindow(QtWidgets.QMainWindow):
         action = self._unit_actions.get(unit)
         if action is not None:
             action.setChecked(True)
+        properties = getattr(self, "doc_properties", None)
+        if properties is not None and properties.document is document:
+            properties.show_units(unit)
 
     # -- shortcuts ----------------------------------------------------------
 
@@ -3170,7 +3277,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.measure_dialog.raise_()
 
     def show_properties(self) -> None:
-        """Mass, volume and bounding box, in a window of their own.
+        """dProperties: what a document says about itself, its units, and
+        its mass, volume and bounding box, in a window of their own.
 
         These used to sit permanently under the tree taking a third of it,
         for numbers nobody watches continuously.  Material and appearance,
@@ -3178,7 +3286,7 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         if getattr(self, "properties_window", None) is None:
             window = QtWidgets.QDialog(self)
-            window.setWindowTitle("Properties")
+            window.setWindowTitle("dProperties")
             window.setMinimumWidth(320)
             layout = QtWidgets.QVBoxLayout(window)
             layout.setContentsMargins(0, 0, 0, 0)
@@ -3187,6 +3295,7 @@ class MainWindow(QtWidgets.QMainWindow):
             # happens to weigh: the first is typed, the second is measured
             self.doc_properties = DocumentProperties(window)
             self.doc_properties.changed.connect(self._title_changed)
+            self.doc_properties.units_requested.connect(self.change_units)
             layout.addWidget(self.doc_properties)
             layout.addWidget(self.properties)
             # it was explicitly hidden so it would not draw over the

@@ -163,6 +163,43 @@ def three_view_layout(frame: Sequence[float], span: Sequence[float],
     }
 
 
+def projected_spot(base: Sequence[float], size: Sequence[float],
+                   point: Sequence[float]) -> Optional[Tuple[float, float]]:
+    """Where a projected view goes for a cursor here, the way Inventor does.
+
+    ``base`` is the parent view's centre and ``size`` how big it is on the
+    sheet.  Level with it, off to one side, the cursor asks for a side
+    view, put exactly level so it stays one; in line with it, above or
+    below, a top or bottom view, put exactly in line; off a corner, an
+    isometric, left where the cursor is.  Over the parent itself there is
+    nothing to place.
+    """
+    bx, by = float(base[0]), float(base[1])
+    beside = abs(point[0] - bx) > size[0] / 2.0
+    above = abs(point[1] - by) > size[1] / 2.0
+    if beside and above:
+        return (float(point[0]), float(point[1]))
+    if beside:
+        return (float(point[0]), by)
+    if above:
+        return (bx, float(point[1]))
+    return None
+
+
+def parse_scale(text: str) -> Optional[float]:
+    """A scale typed the way a drawing writes it, 1:2 or 2:1, or as 0.5."""
+    text = str(text).strip().replace(" ", "")
+    try:
+        if ":" in text:
+            left, right = text.split(":", 1)
+            value = float(left) / float(right)
+        else:
+            value = float(text)
+    except (ValueError, ZeroDivisionError):
+        return None
+    return value if value > 0 else None
+
+
 def sheet_extent(size: str, orientation: str,
                  custom: Optional[Sequence[float]] = None
                  ) -> Tuple[float, float]:

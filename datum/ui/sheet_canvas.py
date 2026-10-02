@@ -32,6 +32,7 @@ class SheetCanvas(QtWidgets.QWidget):
     changed = QtCore.Signal()               # something was moved
     view_activated = QtCore.Signal(int)     # double-clicked
     context_requested = QtCore.Signal(QtCore.QPoint)
+    placing_finished = QtCore.Signal()      # right-click or Esc while placing
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -55,6 +56,15 @@ class SheetCanvas(QtWidgets.QWidget):
         self._origin: Optional[Tuple[float, float]] = None
         self._panning = False
         self._last_pos = QtCore.QPoint()
+        # views being placed with the cursor: the left button places, the
+        # right one or Esc stops; see drawing_ui.ViewPlacer
+        self.placer = None
+
+    def set_placer(self, placer) -> None:
+        self.placer = placer
+        self.setCursor(QtCore.Qt.CrossCursor if placer is not None
+                       else QtCore.Qt.ArrowCursor)
+        self.update()
 
     # ------------------------------------------------------------ document
 
@@ -123,7 +133,31 @@ class SheetCanvas(QtWidgets.QWidget):
                          selection=self.selected_views
                          + self.selected_annotations,
                          on_screen=True)
+        if self.placer is not None:
+            self._paint_placing(painter)
         painter.end()
+
+    def _paint_placing(self, painter: QtGui.QPainter) -> None:
+        """The box a view will fill, where it will land, named."""
+        layout = self.layout()
+        # the colour a picked view is drawn in: it is on paper, where the
+        # window's own grey accent all but disappears
+        colour = QtGui.QColor(sheetpaint.SELECTED)
+        pen = QtGui.QPen(colour, 1.6, QtCore.Qt.DashLine)
+        fill = QtGui.QColor(colour)
+        fill.setAlpha(22)
+        for box, label in self.placer.preview():
+            x0, y0 = layout.to_device(box[0], box[3])
+            x1, y1 = layout.to_device(box[2], box[1])
+            rect = QtCore.QRectF(QtCore.QPointF(x0, y0),
+                                 QtCore.QPointF(x1, y1)).normalized()
+            painter.setPen(pen)
+            painter.setBrush(fill)
+            painter.drawRect(rect)
+            painter.setPen(colour)
+            painter.drawText(rect.adjusted(0, 0, 0, 18),
+                             QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom,
+                             label)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -207,6 +241,15 @@ class SheetCanvas(QtWidgets.QWidget):
         if event.button() in (QtCore.Qt.MiddleButton,):
             self._panning = True
             return
+        if self.placer is not None:
+            # placing views: a click puts one down, a right-click is done
+            placer = self.placer
+            if event.button() == QtCore.Qt.LeftButton:
+                placer.click(self.layout().to_sheet(pos.x(), pos.y()))
+            elif event.button() == QtCore.Qt.RightButton:
+                self.placing_finished.emit()
+            self.update()
+            return
         if event.button() == QtCore.Qt.RightButton:
             self.context_requested.emit(pos)
             return
@@ -257,6 +300,10 @@ class SheetCanvas(QtWidgets.QWidget):
             return
         self._last_pos = pos
 
+        if self.placer is not None:
+            self.placer.hover(self.layout().to_sheet(pos.x(), pos.y()))
+            self.update()
+            return
         if self._drag_from is None:
             return
         sheet = self.sheet()
@@ -329,6 +376,8 @@ class SheetCanvas(QtWidgets.QWidget):
             self.changed.emit()
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if self.placer is not None:
+            return
         pos = event.position().toPoint()
         view_id = self.view_at(pos.x(), pos.y())
         if view_id is not None:
@@ -341,6 +390,9 @@ class SheetCanvas(QtWidgets.QWidget):
         self.zoom(ZOOM_STEP ** steps, event.position().toPoint())
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key_Escape and self.placer is not None:
+            self.placing_finished.emit()
+            return
         if event.key() == QtCore.Qt.Key_Escape:
             self.selected_views = []
             self.selected_annotations = []

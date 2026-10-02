@@ -88,6 +88,35 @@ def projected_orientation(parent_dir: Sequence[float],
     return (new_look, new_up)
 
 
+def outline(box: Sequence[float], direction: Sequence[float],
+            up: Sequence[float]) -> Tuple[float, float]:
+    """How big a model's box looks from this direction: across, and up.
+
+    Its eight corners projected onto the page.  Cheap, so a view can be
+    shown where it will land while the cursor is still moving, long before
+    its lines have been worked out.
+    """
+    look = _unit(direction)
+    up = _unit(up)
+    right = _unit(_cross(up, _negate(look)))
+    across, upward = [], []
+    for x in (box[0], box[3]):
+        for y in (box[1], box[4]):
+            for z in (box[2], box[5]):
+                across.append(x * right[0] + y * right[1] + z * right[2])
+                upward.append(x * up[0] + y * up[1] + z * up[2])
+    return (max(across) - min(across), max(upward) - min(upward))
+
+
+def named_orientation(direction: Sequence[float]) -> str:
+    """Which standard view looks this way, "front" and so on, or ""."""
+    look = _unit(direction)
+    for name, (d, _up) in hlr.ORIENTATIONS.items():
+        if math.dist(look, _unit(d)) < 1e-6:
+            return name
+    return ""
+
+
 def auxiliary_orientation(parent_dir: Sequence[float],
                           parent_up: Sequence[float],
                           edge_angle_deg: float

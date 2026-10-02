@@ -1460,6 +1460,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.close_dialogs()
         self._stash_camera()
 
+        # the part or assembly last worked on: what a drawing's Base View
+        # offers first, as Inventor does, since it is nearly always the one
+        # the drawing is wanted of
+        previous = self.session.active
+        if previous is not None and previous.doc_type in (
+                fileformat.PART, fileformat.ASSEMBLY):
+            self.last_model_entry = previous
         self.session.active = entry
         self.document = entry.document if entry.is_part else Document()
         self.assembly = (entry.document
@@ -2645,6 +2652,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def close_dialogs(self) -> None:
         self.assembly_ui.close_dialogs()
         self.cam_ui.close_dialogs()
+        self.drawing_ui.end_placement()
         if self._active_dialog is not None:
             dialog = self._active_dialog
             self._active_dialog = None
@@ -3468,6 +3476,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_escape(self) -> None:
         # cancel the innermost operation first; Esc never leaves a sketch
+        if self.in_drawing:
+            # placing views stops, or the selection on the sheet goes
+            self.drawing_ui.on_escape()
+            return
         if self.in_cam:
             if self.cam_ui.on_escape():
                 return

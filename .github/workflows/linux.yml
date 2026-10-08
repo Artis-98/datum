@@ -146,15 +146,15 @@ jobs:
         run: |
           gh release download v0.2.7 -p "*linux*" -D old || exit 0
           mkdir -p oldbuild && tar -xzf old/*.tar.gz -C oldbuild
-          docker run --rm -v "$PWD/oldbuild:/old" archlinux:latest bash -c '
+          docker run --rm -v "$PWD/oldbuild:/old" -v "$PWD/examples:/examples" archlinux:latest bash -c '
             pacman -Syu --noconfirm --needed xorg-server-xvfb xorg-xauth mesa \
               libglvnd libxkbcommon-x11 xcb-util-cursor xcb-util-wm \
               xcb-util-image xcb-util-keysyms xcb-util-renderutil libxi libsm \
               fontconfig ttf-dejavu dbus > /dev/null
             cd /tmp
             LIBGL_DEBUG=verbose timeout 40 xvfb-run -a -s "-screen 0 1600x1000x24" \
-              /old/DATUM/DATUM > /tmp/old.txt 2>&1
-            grep -iE "GL rendering|MESA|libstdc|GLIBCXX|failed to load|error" /tmp/old.txt | head -30'
+              /old/DATUM/DATUM /examples/excavator/Bucket.pdat > /tmp/old.txt 2>&1
+            grep -iE "GL rendering|MESA|libstdc|GLIBCXX|failed to load|Error" /tmp/old.txt | grep -v Fontconfig | head -30'
 
       - name: Pack
         id: pack

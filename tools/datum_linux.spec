@@ -80,12 +80,21 @@ SYSTEM_LIBS = (
     "libxcb.so", "libxcb-dri", "libxcb-glx", "libxcb-present",
     "libxcb-sync", "libxcb-xfixes", "libxcb-randr", "libxcb-shm",
     "libwayland-",
+    # an older fontconfig cannot read a newer system's font config, and
+    # says so on every start
+    "libfontconfig", "libfreetype",
 )
 
 
 def _from_the_system(entry) -> bool:
-    name = os.path.basename(entry[0])
-    return name.startswith(SYSTEM_LIBS)
+    """A library PyInstaller took from the build machine's own system.
+
+    Those land at the top of the bundle.  Anything inside a package's own
+    folder came with that package's wheel, renamed so nothing else can
+    mistake it for the system's copy, and stays.
+    """
+    dest = entry[0].replace(chr(92), "/")
+    return "/" not in dest and dest.startswith(SYSTEM_LIBS)
 
 
 dropped = sorted(os.path.basename(e[0]) for e in a.binaries

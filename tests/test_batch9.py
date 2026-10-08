@@ -215,7 +215,10 @@ pump()
 check("picking after arming applies it",
       len(ed.sketch.constraints) == before_count + 1,
       len(ed.sketch.constraints))
-check("the arm is cleared", ed._pending_constraint is None)
+check("it stays armed for the next pick until Esc",
+      ed._pending_constraint == "horizontal")
+ed.escape()
+check("Esc puts it away", ed._pending_constraint is None)
 
 print("a two-point constraint waits for both picks")
 ed.clear_selection()

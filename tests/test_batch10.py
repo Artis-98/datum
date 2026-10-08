@@ -285,7 +285,7 @@ win.finish_sketch()
 pump()
 
 # ==========================================================================
-print("features start with no profile and suggest nothing")
+print("features start with the likeliest profile, easily dropped")
 win.new_document(prompt=False)
 feature = SketchFeature()
 feature.name = "Regions"
@@ -301,11 +301,13 @@ pump()          # the first preview runs on the next event-loop turn
 check("the dialog opened", dlg is not None)
 check("no sketch combo on the dialog", not hasattr(dlg, "sketch"))
 check("a profile field instead", hasattr(dlg, "profiles"))
-check("it starts empty", len(dlg.feature.profiles) == 0,
+check("it starts with one proposed", len(dlg.feature.profiles) == 1,
       len(dlg.feature.profiles))
-check("and the feature reports no profile",
+dlg._clear_profiles()
+pump()
+check("cleared, the feature reports no profile",
       "no profile selected" in dlg.feature.summary(), dlg.feature.summary())
-check("nothing builds yet", dlg.feature.error != "", dlg.feature.error)
+check("and nothing builds", dlg.feature.error != "", dlg.feature.error)
 
 print("clicking the field arms viewport picking")
 dlg.profiles.set_picking(True)

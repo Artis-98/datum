@@ -228,6 +228,10 @@ win.new_feature(ExtrudeFeature)
 dlg = win._active_dialog
 pump()
 check("picking is armed as soon as the dialog opens", dlg.profiles.picking)
+check("with the biggest region proposed", len(dlg.feature.profiles) == 1,
+      len(dlg.feature.profiles))
+dlg._clear_profiles()          # the clicks below choose their own
+pump()
 check("regions are already on screen",
       len(win.viewport._profile_display) == 7,
       len(win.viewport._profile_display))
@@ -295,7 +299,9 @@ pump()
 check("seven pickable patches on screen",
       len(win.viewport._profile_display) == 7,
       len(win.viewport._profile_display))
-check("none selected to begin with", len(dlg.feature.profiles) == 0)
+dlg._clear_profiles()          # drop the proposed one, to pick by hand
+pump()
+check("none selected once that is cleared", len(dlg.feature.profiles) == 0)
 
 for index in (0, 3, 6):
     entry = win._profile_regions[index]

@@ -372,7 +372,7 @@ class MaterialEditor(QtWidgets.QDialog):
         return Appearance(
             name=self.name.text().strip() or self.item.name,
             category=self.category.currentText().strip() or "Misc",
-            colour=self.colour.text().strip() or "#9aa7b6",
+            colour=self.colour.text().strip() or "#d5d6d7",
             roughness=self.roughness.value(),
             metallic=self.metallic.isChecked(),
             opacity=self.opacity.value(),

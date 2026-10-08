@@ -3051,6 +3051,9 @@ class MainWindow(QtWidgets.QMainWindow):
         # rather than to a fixed view the person never chose
         self._camera_before_sketch = self.viewport.camera_state()
         self.editor.references = self._reference_sketches(feature_id)
+        # a first dimension sizes the sketch only while there is no body
+        # yet for it to be out of proportion with
+        self.editor.autoscale = self.document.shape is None
         self.editor.begin(feature.sketch, self.document.parameter_view())
         self._draw_visible_planes()      # clears them while sketching
         # swing round to the plane rather than snapping, so it stays obvious
@@ -3589,6 +3592,17 @@ class MainWindow(QtWidgets.QMainWindow):
                 self, "Edit in Place",
                 "%s cannot be found at %s."
                 % (occurrence.label, occurrence.ref.path or "(no path)"))
+            return
+        open_tab = self.session.by_path(path)
+        if open_tab is not None and open_tab is not self.session.active:
+            # Inventor's way: a part that already has a tab of its own is
+            # edited there, in the one place, rather than a second time in
+            # here with the two copies left to disagree
+            self.activate(open_tab)
+            self.status_message.setStyleSheet("")
+            self.status_message.setText(
+                "%s is open in its own tab, so it is edited there."
+                % occurrence.label)
             return
         try:
             child = self._in_place_document(path)

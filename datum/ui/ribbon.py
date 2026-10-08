@@ -10,7 +10,44 @@ from . import icons
 from .theme import C
 
 
-class RibbonButton(QtWidgets.QToolButton):
+class _Squeezable:
+    """A ribbon button that drops its caption when there is no room for it.
+
+    On a scaled up display the ribbon is wider than the window, the layout
+    squeezes the buttons, and Qt cut their captions down to "C...nt" and
+    "Di...on", which says nothing.  A button too narrow for its words now
+    shows only its icon, and hovering it says what it is.
+    """
+
+    def squeezed(self) -> bool:
+        """Whether the caption would have to be cut short to fit."""
+        if self.toolButtonStyle() == QtCore.Qt.ToolButtonIconOnly:
+            return False
+        return self.width() + 1 < QtWidgets.QToolButton.sizeHint(self).width()
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        if not self.squeezed():
+            QtWidgets.QToolButton.paintEvent(self, event)
+            return
+        painter = QtWidgets.QStylePainter(self)
+        option = QtWidgets.QStyleOptionToolButton()
+        self.initStyleOption(option)
+        option.toolButtonStyle = QtCore.Qt.ToolButtonIconOnly
+        option.text = ""
+        painter.drawComplexControl(QtWidgets.QStyle.CC_ToolButton, option)
+
+    def event(self, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.ToolTip and self.squeezed():
+            name = " ".join(self.text().split())
+            tip = self.toolTip()
+            text = name if not tip or tip == name else (
+                tip if name.lower() in tip.lower() else "%s - %s" % (name, tip))
+            QtWidgets.QToolTip.showText(event.globalPos(), text, self)
+            return True
+        return QtWidgets.QToolButton.event(self, event)
+
+
+class RibbonButton(_Squeezable, QtWidgets.QToolButton):
     """Large button: icon on top, caption underneath."""
 
     def __init__(self, name: str, text: str, tip: str = "",
@@ -31,7 +68,7 @@ class RibbonButton(QtWidgets.QToolButton):
         self.setCursor(QtCore.Qt.PointingHandCursor)
 
 
-class RibbonSmallButton(QtWidgets.QToolButton):
+class RibbonSmallButton(_Squeezable, QtWidgets.QToolButton):
     """Compact button: icon beside caption, stacked three per column."""
 
     def __init__(self, name: str, text: str, tip: str = "",
@@ -48,6 +85,12 @@ class RibbonSmallButton(QtWidgets.QToolButton):
         self.setCursor(QtCore.Qt.PointingHandCursor)
         self.setSizePolicy(QtWidgets.QSizePolicy.Minimum,
                            QtWidgets.QSizePolicy.Fixed)
+
+    def set_compact(self, on: bool) -> None:
+        """Icon only, packed tight, or icon and caption."""
+        self.setToolButtonStyle(QtCore.Qt.ToolButtonIconOnly if on
+                                else QtCore.Qt.ToolButtonTextBesideIcon)
+        self.setMaximumWidth(26 if on else 16777215)
 
 
 class SplitMenuEntry(QtWidgets.QWidget):
@@ -166,6 +209,35 @@ class RibbonPanel(QtWidgets.QWidget):
 
         self._column: Optional[QtWidgets.QVBoxLayout] = None
         self._column_count = 0
+        self.compact = False
+
+    def small_buttons(self) -> List["RibbonSmallButton"]:
+        return self.findChildren(RibbonSmallButton)
+
+    def set_compact(self, on: bool) -> None:
+        """The whole group with captions, or the whole group as icons.
+
+        All of a group one way or the other: some buttons worded and their
+        neighbours bare looked broken, and bare buttons spread out at the
+        width the words needed looked lost.  So the group goes over as one,
+        and its icons pack into a tight grid.
+        """
+        if on == self.compact:
+            return
+        self.compact = on
+        buttons = self.small_buttons()
+        for button in buttons:
+            button.set_compact(on)
+        # Qt would only work the new sizes out on its next pass, and the
+        # tab asks straight away whether it fits yet
+        for column in {id(b.parentWidget()): b.parentWidget()
+                       for b in buttons}.values():
+            if column.layout() is not None:
+                column.layout().invalidate()
+            column.updateGeometry()
+        self.body.invalidate()
+        self.layout().invalidate()
+        self.updateGeometry()
 
     def add_big(self, name: str, text: str, tip: str = "",
                 checkable: bool = False) -> RibbonButton:
@@ -221,6 +293,40 @@ class RibbonTab(QtWidgets.QWidget):
         self._layout.setSpacing(0)
         self._layout.addStretch(1)
         self.panels: List[RibbonPanel] = []
+        self._fitting = False
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.fit()
+
+    def _needed(self) -> int:
+        margins = self._layout.contentsMargins()
+        return (sum(panel.sizeHint().width() for panel in self.panels)
+                + margins.left() + margins.right())
+
+    def fit(self) -> None:
+        """Fold groups down to icons, most buttons first, until all fit.
+
+        On a scaled up display, or a narrow window, the ribbon is wider
+        than the room it has.  The group with the most small buttons saves
+        the most by going to icons, so it goes first, then the next, until
+        the whole ribbon fits; a wider window puts the words back.
+        """
+        if self._fitting or not self.panels:
+            return
+        self._fitting = True
+        try:
+            room = self.width()
+            for panel in self.panels:
+                panel.set_compact(False)
+            order = sorted((p for p in self.panels if p.small_buttons()),
+                           key=lambda p: -len(p.small_buttons()))
+            for panel in order:
+                if self._needed() <= room:
+                    break
+                panel.set_compact(True)
+        finally:
+            self._fitting = False
 
     def add_panel(self, title: str) -> RibbonPanel:
         panel = RibbonPanel(title, self)

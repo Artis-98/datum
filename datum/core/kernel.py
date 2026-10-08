@@ -604,6 +604,49 @@ def _split_at_intersections(edge_list: Sequence[TopoDS_Edge]
         return list(edge_list)
 
 
+def _bounding_only(edge_list: Sequence[TopoDS_Edge]) -> List[TopoDS_Edge]:
+    """The pieces of curve that bound something, loose ends pruned away.
+
+    A line with an end hanging free inside a region does not divide it,
+    and handed to the splitter anyway it is sewn into the region's face as
+    an edge of its own: the extrusion then carries it into the solid as a
+    line across the top, fillets trip over it, and the regions round it can
+    come out wrong.  So any piece with an end nothing else meets is dropped,
+    and again, until every piece left is part of some loop.  The edges have
+    been cut where they cross already, so a line crossing a circle right
+    through still divides it, as it should.
+    """
+    from OCP.BRep import BRep_Tool
+    from OCP.TopExp import TopExp
+
+    def key(vertex) -> Tuple[float, float, float]:
+        p = BRep_Tool.Pnt_s(vertex)
+        return (round(p.X(), 6), round(p.Y(), 6), round(p.Z(), 6))
+
+    pieces = list(edge_list)
+    ends = []
+    for edge in pieces:
+        try:
+            ends.append((key(TopExp.FirstVertex_s(edge)),
+                         key(TopExp.LastVertex_s(edge))))
+        except Exception:
+            ends.append(None)
+    while True:
+        degree: Dict[Tuple[float, float, float], int] = {}
+        for pair in ends:
+            if pair is None:
+                continue
+            for point in pair:
+                degree[point] = degree.get(point, 0) + 1
+        keep = [i for i, pair in enumerate(ends)
+                if pair is None or pair[0] == pair[1]
+                or (degree[pair[0]] > 1 and degree[pair[1]] > 1)]
+        if len(keep) == len(pieces):
+            return pieces
+        pieces = [pieces[i] for i in keep]
+        ends = [ends[i] for i in keep]
+
+
 def _host_face(sketch: Sketch, margin: float = 1.6):
     """A rectangle on the sketch plane comfortably bigger than the sketch."""
     umin, vmin, umax, vmax = sketch.bounds()
@@ -641,6 +684,12 @@ def sketch_regions_faces(sketch: Sketch) -> List[TopoDS_Face]:
             curves.append(edge)
     if not curves:
         return []
+    # only what encloses something divides the sheet
+    split = _split_at_intersections(curves)
+    curves = _bounding_only(split)
+    if not curves:
+        return []
+    pruned = len(curves) < len(split)
 
     try:
         host, (cu, cv, du, dv) = _host_face(sketch)
@@ -669,7 +718,7 @@ def sketch_regions_faces(sketch: Sketch) -> List[TopoDS_Face]:
             continue
         if _touches_border(face, sketch, cu, cv, du, dv):
             continue                  # leftover sheet outside the sketch
-        out.append(face)
+        out.append(_whole_edges(face) if pruned else face)
 
     # deterministic order, so a region keeps its place between rebuilds
     out.sort(key=lambda f: (round(-face_area(f), 6),
@@ -677,6 +726,26 @@ def sketch_regions_faces(sketch: Sketch) -> List[TopoDS_Face]:
                             round(shape_centre(f)[1], 6),
                             round(shape_centre(f)[2], 6)))
     return out
+
+
+def _whole_edges(face: TopoDS_Face) -> TopoDS_Face:
+    """A region with its outline in as few edges as its curves allow.
+
+    Where a loose line was pruned away, the point it crossed the outline
+    at is left behind, cutting a circle into two arcs or a side into two
+    lines.  Extruded, that point is an edge down the side of the solid.
+    Joining the pieces of one curve back up gets rid of it.
+    """
+    try:
+        joined = unify(face)
+    except Exception:
+        return face
+    if joined is face or joined.IsNull():
+        return face
+    if joined.ShapeType() == TopAbs_FACE:
+        return TopoDS.Face_s(joined)
+    found = faces(joined)
+    return found[0] if len(found) == 1 else face
 
 
 def _touches_border(face: TopoDS_Face, sketch: Sketch, cu: float, cv: float,
@@ -1064,6 +1133,67 @@ def half_box(origin: Sequence[float], normal: Sequence[float],
     return extrude(face, towards, size, 0.0)
 
 
+def is_seam(edge: TopoDS_Shape) -> bool:
+    """Whether an edge is a join nobody would call an edge.
+
+    A cylinder's side is one face wrapped round, and where it meets itself
+    there is an edge OCCT needs and a person does not: there is no corner
+    there to see or to fillet.  OCCT marks such an edge as smooth to any
+    order, which is the test, so a seam left between two pieces of the same
+    surface that a boolean did not merge is caught too.  A tangent edge, a
+    fillet running into a flat, is only smooth to the first order and stays
+    an edge, as it does in Inventor.
+    """
+    from OCP.GeomAbs import GeomAbs_Shape
+    try:
+        smooth = BRep_Tool.MaxContinuity_s(TopoDS.Edge_s(edge))
+        return smooth.value > GeomAbs_Shape.GeomAbs_C2.value
+    except Exception:
+        return False
+
+
+def mark_seams(shape: Optional[TopoDS_Shape]) -> None:
+    """Make sure every seam on a shape is marked as one.
+
+    The bodies built here come out marked; one read from a STEP file often
+    does not, and an unmarked seam is drawn down the side of every cylinder,
+    can be picked like a corner and turns up in the drawings.  Only the
+    edges a closed face meets itself along are looked at, so this costs
+    little even on a big import, and marking an edge twice does nothing.
+    """
+    if shape is None or shape.IsNull():
+        return
+    from OCP.BRepLib import BRepLib
+    from OCP.GeomAbs import GeomAbs_Shape
+
+    loose = TopTools_ListOfShape()
+    found = False
+    faces_of = TopExp_Explorer(shape, TopAbs_FACE)
+    while faces_of.More():
+        face = TopoDS.Face_s(faces_of.Current())
+        faces_of.Next()
+        try:
+            surface = BRep_Tool.Surface_s(face)
+            if not (surface.IsUClosed() or surface.IsVClosed()):
+                continue
+        except Exception:
+            continue
+        edges_of = TopExp_Explorer(face, TopAbs_EDGE)
+        while edges_of.More():
+            edge = TopoDS.Edge_s(edges_of.Current())
+            edges_of.Next()
+            if (BRep_Tool.IsClosed_s(edge, face)
+                    and BRep_Tool.MaxContinuity_s(edge)
+                    == GeomAbs_Shape.GeomAbs_C0):
+                loose.Append(edge)
+                found = True
+    if found:
+        try:
+            BRepLib.EncodeRegularity_s(shape, loose, 1e-10)
+        except Exception:
+            pass
+
+
 def unify(shape: TopoDS_Shape) -> TopoDS_Shape:
     """Merge faces that lie in the same surface, and edges in the same curve.
 
@@ -1242,14 +1372,25 @@ def fillet(shape: TopoDS_Shape, edge_list: Sequence[TopoDS_Edge],
         raise KernelError("fillet radius must be positive")
     if not edge_list:
         raise KernelError("no edges selected for fillet")
-    mk = BRepFilletAPI_MakeFillet(shape)
-    for e in edge_list:
-        mk.Add(float(radius), e)
-    mk.Build()
-    if not mk.IsDone():
-        raise KernelError("fillet failed - radius %.3f is probably too large"
-                          % radius)
-    return check(mk.Shape(), "Fillet")
+    # A radius that is exactly half a wall, rounding both of its edges, is
+    # a full round: the two fillets meet in a line with nothing flat left
+    # between them.  OCCT will not build two surfaces that touch along an
+    # edge it then has to make, and refuses outright.  A hair less leaves
+    # a band too thin to see or measure, which is the full round anyone
+    # asking for one wants, so that is tried before giving up.
+    for shrink in (0.0, 1e-5, 1e-4, 1e-3):
+        size = float(radius) * (1.0 - shrink)
+        mk = BRepFilletAPI_MakeFillet(shape)
+        for e in edge_list:
+            mk.Add(size, e)
+        try:
+            mk.Build()
+        except Exception:
+            continue
+        if mk.IsDone() and is_valid(mk.Shape()):
+            return check(mk.Shape(), "Fillet")
+    raise KernelError("fillet failed - radius %.3f is probably too large"
+                      % radius)
 
 
 def chamfer(shape: TopoDS_Shape, edge_list: Sequence[TopoDS_Edge],

@@ -52,7 +52,7 @@ class Appearance:
 
     name: str = "Default"
     category: str = "Misc"
-    colour: str = "#9aa7b6"
+    colour: str = "#d5d6d7"
     # 0 is a dead matte surface, 1 a mirror; metals want a low roughness
     # and metallic on, everything else wants metallic off
     roughness: float = 0.45
@@ -155,7 +155,7 @@ def builtin_appearances() -> List[Appearance]:
     right on PLA as it is on ABS.
     """
     return [
-        Appearance("Default", "Misc", "#9aa7b6", 0.45, False),
+        Appearance("Default", "Misc", "#d5d6d7", 0.45, False),
 
         Appearance("Steel, Polished", "Metal", "#b9c0c7", 0.16, True),
         Appearance("Steel, Brushed", "Metal", "#9ea5ad", 0.38, True),

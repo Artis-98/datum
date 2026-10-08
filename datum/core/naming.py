@@ -124,6 +124,20 @@ class ShapeRef:
         return cls(kind=kind, index=index, centre=tuple(fp["centre"]),
                    size=fp["size"], geom=fp["geom"], local=local)
 
+    def same_as(self, other: "ShapeRef") -> bool:
+        """Whether two references are to the one face or edge.
+
+        Where it is centred is not enough on its own: the inner and outer
+        rims of a washer share a centre, and taking them for one edge made
+        the second pick quietly undo the first.  How big it is, and what
+        kind of curve or surface, tells them apart.
+        """
+        return (self.kind == other.kind
+                and math.dist(self.centre, other.centre) < 1e-6
+                and abs(self.size - other.size)
+                <= 1e-6 * max(1.0, abs(self.size))
+                and (self.geom == other.geom or "?" in (self.geom, other.geom)))
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "kind": self.kind,
@@ -313,8 +327,7 @@ class RefSet:
 
     def add(self, ref: ShapeRef) -> None:
         for existing in self.refs:
-            if (existing.kind == ref.kind
-                    and math.dist(existing.centre, ref.centre) < 1e-6):
+            if existing.same_as(ref):
                 return
         self.refs.append(ref)
 

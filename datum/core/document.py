@@ -341,10 +341,17 @@ class Document:
     def add_feature(self, feature: Feature, index: Optional[int] = None) -> Feature:
         feature.id = feature.id or self.new_id()
         feature.name = self.unique_name(feature.name)
+        # a new feature always lands above the End of Part, so it is built
+        # and seen, never parked below the marker where nothing happens
+        rolled = self.rollback_index
+        if index is None and rolled is not None:
+            index = rolled
         if index is None:
             self.features.append(feature)
         else:
             self.features.insert(index, feature)
+            if rolled is not None and index <= rolled:
+                self.rollback_index = rolled + 1
         modelparams.assign_names(self)
         self.modified = True
         return feature
@@ -410,7 +417,12 @@ class Document:
         self.modified = True
 
     def remove_feature(self, feature_id: int) -> None:
+        index = self.index_of(feature_id)
         self.features = [f for f in self.features if f.id != feature_id]
+        # the marker stays under the same feature it was under
+        if (self.rollback_index is not None
+                and 0 <= index < self.rollback_index):
+            self.rollback_index -= 1
         # drop references from patterns / mirrors that pointed at it
         for f in self.features:
             parents = getattr(f, "parents", None)

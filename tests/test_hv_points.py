@@ -88,7 +88,9 @@ ed._check_pending_constraint()
 check("one point is not enough", ed._pending_constraint == "horizontal")
 ed.selected_points = [p1, p2]
 ed._check_pending_constraint()
-check("the second point fires it", ed._pending_constraint is None)
+check("the second point fires it, and it stays armed for the next",
+      ed._pending_constraint == "horizontal" and not ed.selected_points)
+ed.escape()
 check("and the centres are level",
       abs(sk.points[p1].y - sk.points[p2].y) < 1e-6,
       (sk.points[p1].y, sk.points[p2].y))

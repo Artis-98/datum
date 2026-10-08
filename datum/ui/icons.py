@@ -86,15 +86,21 @@ def _arrow(p: QtGui.QPainter, x1, y1, x2, y2, colour: str = _ACCENT,
     ))
 
 
-def _box_iso(p: QtGui.QPainter, cx=12.0, cy=13.0, s=7.0, h=5.0,
+def _box_iso(p: QtGui.QPainter, cx=12.0, cy=12.0, edge=8.0,
              colour=_SOLID) -> None:
-    """A small isometric block used as the base of several icons."""
-    top = [(cx, cy - h - s * 0.5), (cx + s, cy - h), (cx, cy - h + s * 0.5),
-           (cx - s, cy - h)]
-    left = [(cx - s, cy - h), (cx, cy - h + s * 0.5), (cx, cy + s * 0.5 - h + h),
-            (cx - s, cy + h * 0.2)]
-    right = [(cx + s, cy - h), (cx, cy - h + s * 0.5), (cx, cy + s * 0.5),
-             (cx + s, cy + h * 0.2)]
+    """A cube in true isometric, every edge the same length.
+
+    It used to be a block squashed to two thirds of its width, which read
+    as a slab rather than as a part.
+    """
+    half = edge * 0.866                 # half the width, at 30 degrees
+    y0 = cy - edge                      # the top corner
+    top = [(cx, y0), (cx + half, y0 + edge * 0.5), (cx, y0 + edge),
+           (cx - half, y0 + edge * 0.5)]
+    left = [(cx - half, y0 + edge * 0.5), (cx, y0 + edge),
+            (cx, y0 + edge * 2.0), (cx - half, y0 + edge * 1.5)]
+    right = [(cx + half, y0 + edge * 0.5), (cx, y0 + edge),
+             (cx, y0 + edge * 2.0), (cx + half, y0 + edge * 1.5)]
     _face(p, left, colour, 70)
     _face(p, right, colour, 110)
     _face(p, top, colour, 150)
@@ -605,8 +611,8 @@ def _i_shaded(p):
 def _i_shaded_edges(p):
     _box_iso(p)
     _pen(p, _LINE, 1.4)
-    p.drawPolygon(_poly((12, 5.5), (19, 8), (12, 10.5), (5, 8)))
-    p.drawLine(QtCore.QPointF(12, 10.5), QtCore.QPointF(12, 18.5))
+    p.drawPolygon(_poly((12, 4), (18.93, 8), (12, 12), (5.07, 8)))
+    p.drawLine(QtCore.QPointF(12, 12), QtCore.QPointF(12, 20))
 
 
 def _i_wireframe(p):

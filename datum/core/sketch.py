@@ -215,6 +215,7 @@ CONSTRAINT_KINDS = (
     "equal", "distance", "distance_x", "distance_y", "distance_pl",
     "radius", "diameter", "point_on", "tangent", "angle", "symmetric",
     "fix", "ground", "concentric", "midpoint", "collinear", "radial_gap",
+    "offset",
 )
 
 # Kinds that carry a number the user typed, and so get a name of their own
@@ -761,6 +762,16 @@ class Sketch:
             ent = self.entities[eid]
             return P(x, ent.points[0]), P(x, ent.points[1])
 
+        def gap(x: np.ndarray, source: int, copy: int) -> float:
+            """How far a copy sits from its source, signed as measured."""
+            if self.entities[source].kind == "line":
+                (ax, ay), (bx, by) = line_pts(x, source)
+                (px, py) = P(x, self.entities[copy].points[0])
+                dx, dy = bx - ax, by - ay
+                n = math.hypot(dx, dy) or 1.0
+                return ((px - ax) * dy - (py - ay) * dx) / n
+            return R(x, copy) - R(x, source)
+
         def residuals(x: np.ndarray) -> np.ndarray:
             out: List[float] = []
 
@@ -870,6 +881,14 @@ class Sketch:
                         # inner circle stays inside where it was drawn
                         out.append(R(x, c.entities[1]) - R(x, c.entities[0])
                                    - val)
+                    elif kind == "offset":
+                        # an offset copy keeps one gap all the way round:
+                        # the gap from the first curve to its copy matches
+                        # the gap from this one to its copy, each measured
+                        # the way the run goes, which the value's sign says
+                        out.append(gap(x, c.entities[0], c.entities[1])
+                                   - val * gap(x, c.entities[2],
+                                               c.entities[3]))
                     elif kind == "radius":
                         out.append(R(x, c.entities[0]) - val)
                     elif kind == "diameter":
@@ -1214,6 +1233,227 @@ class Sketch:
                 if not record.entities:
                     self.projections.remove(record)
 
+    # -- offsetting ---------------------------------------------------------
+
+    def offset_chain(self, eid: int) -> Tuple[List[Tuple[int, bool]], bool]:
+        """The run of connected lines and arcs ``eid`` is part of, in order.
+
+        Inventor offsets the whole loop a curve belongs to, so a rectangle
+        comes out as a rectangle rather than as one loose side.  Each entry
+        is an entity and whether the run goes through it in its own
+        direction, start to end; the flag says whether the run closes.
+        Ends meeting at the same spot count as joined, whether they share a
+        point or are held together by a coincident constraint.  The run
+        stops where three or more curves meet, as there is no saying which
+        way it would go on.
+        """
+        picked = self.entities.get(eid)
+        if picked is None:
+            return [], False
+        if picked.kind == "circle":
+            return [(eid, True)], True
+        if picked.kind not in ("line", "arc"):
+            return [], False
+
+        def ends(entity) -> Tuple[int, int]:
+            if entity.kind == "line":
+                return entity.points[0], entity.points[1]
+            return entity.points[1], entity.points[2]
+
+        usable = {i: ends(e) for i, e in self.entities.items()
+                  if e.kind in ("line", "arc")
+                  and e.construction == picked.construction}
+
+        def meeting(pid: int, skip: int) -> List[Tuple[int, int]]:
+            here = self.points[pid]
+            out = []
+            for other, pair in usable.items():
+                if other == skip:
+                    continue
+                for which in (0, 1):
+                    there = self.points[pair[which]]
+                    if math.hypot(there.x - here.x,
+                                  there.y - here.y) <= POINT_MERGE_TOL:
+                        out.append((other, which))
+            return out
+
+        chain: List[Tuple[int, bool]] = [(eid, True)]
+        seen = {eid}
+        closed = False
+        current, forward = eid, True
+        while True:
+            tail = usable[current][1 if forward else 0]
+            found = meeting(tail, current)
+            if len(found) != 1:
+                break
+            other, which = found[0]
+            if other == eid:
+                closed = True
+                break
+            if other in seen:
+                break
+            forward = which == 0          # come in at its start: its own way
+            chain.append((other, forward))
+            seen.add(other)
+            current = other
+        if not closed:
+            current, forward = eid, True
+            while True:
+                head = usable[current][0 if forward else 1]
+                found = meeting(head, current)
+                if len(found) != 1:
+                    break
+                other, which = found[0]
+                if other in seen:
+                    break
+                forward = which == 1      # its end meets this one's start
+                chain.insert(0, (other, forward))
+                seen.add(other)
+                current = other
+        return chain, closed
+
+    def _run_piece(self, eid: int, forward: bool) -> Dict[str, Any]:
+        """One curve of an offset run, as the run goes through it."""
+        e = self.entities[eid]
+        if e.kind == "line":
+            a = self.points[e.points[0]].as_tuple()
+            b = self.points[e.points[1]].as_tuple()
+            t0, t1 = (a, b) if forward else (b, a)
+            return {"kind": "line", "t0": t0, "t1": t1}
+        piece = {"kind": "arc", "c": self.points[e.points[0]].as_tuple(),
+                 "r": e.radius, "ccw": forward}
+        if e.kind == "arc":
+            a = self.points[e.points[1]].as_tuple()
+            b = self.points[e.points[2]].as_tuple()
+            piece["t0"], piece["t1"] = (a, b) if forward else (b, a)
+        return piece
+
+    def offset_distance(self, chain: Sequence[Tuple[int, bool]],
+                        cursor: Tuple[float, float]) -> float:
+        """How far, and to which side, the cursor is from the nearest curve.
+
+        Positive to the left of the way the run goes, negative to the
+        right, so the copy forms on whichever side it is pulled to.
+        """
+        best, best_gap = None, 0.0
+        for eid, forward in chain:
+            piece = self._run_piece(eid, forward)
+            gap = _side_gap(piece, cursor)
+            reach = _reach(piece, cursor)
+            if best is None or reach < best:
+                best, best_gap = reach, gap
+        return best_gap
+
+    def offset_layout(self, chain: Sequence[Tuple[int, bool]], closed: bool,
+                      d: float) -> Optional[Dict[str, Any]]:
+        """Where an offset copy's corners and radii go, or None if it folds.
+
+        Each curve moves ``d`` to the left of the run; neighbours are
+        trimmed or extended to meet again where their offsets cross, the
+        way Inventor's offset keeps sharp corners sharp.  Too far inwards
+        and a side turns back on itself or an arc's radius runs out, and
+        there is no copy of the same shape to make.
+        """
+        pieces = [self._run_piece(eid, forward) for eid, forward in chain]
+        if not pieces:
+            return None
+        radii: List[Optional[float]] = []
+        for piece in pieces:
+            if piece["kind"] == "arc":
+                r = piece["r"] - d if piece["ccw"] else piece["r"] + d
+                if r <= 1e-6:
+                    return None
+                radii.append(r)
+            else:
+                radii.append(None)
+        if len(pieces) == 1 and "t0" not in pieces[0]:
+            return {"joints": [], "radii": radii}       # a whole circle
+
+        joints: List[Tuple[float, float]] = []
+        count = len(pieces)
+        for k in range(count):
+            here = pieces[k]
+            if k == 0 and not closed:
+                n = _left_normal(here, here["t0"])
+                joints.append((here["t0"][0] + d * n[0],
+                               here["t0"][1] + d * n[1]))
+                continue
+            before = pieces[k - 1]
+            corner = here["t0"]
+            na = _left_normal(before, corner)
+            nb = _left_normal(here, corner)
+            plain = (corner[0] + d * na[0], corner[1] + d * na[1])
+            if na[0] * nb[0] + na[1] * nb[1] > 1.0 - 1e-9:
+                joints.append(plain)        # a smooth joint stays smooth
+                continue
+            hit = _crossing(_moved(before, d), _moved(here, d), plain)
+            joints.append(hit if hit is not None else plain)
+        if not closed:
+            last = pieces[-1]
+            n = _left_normal(last, last["t1"])
+            joints.append((last["t1"][0] + d * n[0], last["t1"][1] + d * n[1]))
+
+        for k, piece in enumerate(pieces):
+            a = joints[k]
+            b = joints[(k + 1) % len(joints)] if closed else joints[k + 1]
+            if piece["kind"] == "line":
+                was = (piece["t1"][0] - piece["t0"][0],
+                       piece["t1"][1] - piece["t0"][1])
+                now = (b[0] - a[0], b[1] - a[1])
+                if was[0] * now[0] + was[1] * now[1] <= 1e-9:
+                    return None             # turned back on itself
+            else:
+                before = _sweep(piece, piece["t0"], piece["t1"])
+                after = _sweep(piece, a, b)
+                if after is None or abs(after - before) > math.pi * 0.999:
+                    return None
+        return {"joints": joints, "radii": radii}
+
+    def add_offset(self, chain: Sequence[Tuple[int, bool]], closed: bool,
+                   d: float) -> Optional[Dict[str, Any]]:
+        """Draw an offset copy of a run, tied to it, and say what was made.
+
+        Lines are held parallel to what they were copied from and arcs
+        share its centre.  Every curve after the first is held at the same
+        gap as the first, so one dimension on the first drives the lot.
+        """
+        layout = self.offset_layout(chain, closed, d)
+        if layout is None:
+            return None
+        first = self.entities[chain[0][0]]
+        construction = first.construction
+        signs = [-1.0 if forward else 1.0 for _, forward in chain]
+        if not layout["joints"]:
+            new = self._new_id()
+            self.entities[new] = Entity(new, "circle", [first.points[0]],
+                                        radius=layout["radii"][0],
+                                        construction=construction)
+            return {"pairs": [(chain[0][0], new)], "signs": signs, "d": d}
+
+        pids = [self.add_point(x, y) for x, y in layout["joints"]]
+        made: List[int] = []
+        for k, (eid, forward) in enumerate(chain):
+            a = pids[k]
+            b = pids[(k + 1) % len(pids)] if closed else pids[k + 1]
+            start, end = (a, b) if forward else (b, a)
+            source = self.entities[eid]
+            if source.kind == "line":
+                new = self.add_line_ids(start, end, construction)
+                self.add_constraint("parallel", entities=[eid, new])
+            else:
+                new = self._new_id()
+                self.entities[new] = Entity(
+                    new, "arc", [source.points[0], start, end],
+                    radius=layout["radii"][k], construction=construction)
+            made.append(new)
+        for k in range(1, len(chain)):
+            self.add_constraint(
+                "offset",
+                entities=[chain[0][0], made[0], chain[k][0], made[k]],
+                value=signs[0] * signs[k])
+        return {"pairs": [(eid, new) for (eid, _), new in zip(chain, made)],
+                "signs": signs, "d": d}
+
     def copy(self) -> "Sketch":
         return Sketch.from_dict(self.to_dict())
 
@@ -1221,6 +1461,122 @@ class Sketch:
 # ==========================================================================
 # helpers
 # ==========================================================================
+
+
+def _left_normal(piece: Dict[str, Any],
+                 at: Tuple[float, float]) -> Tuple[float, float]:
+    """The unit normal to the left of the way a run goes through a curve."""
+    if piece["kind"] == "line":
+        dx = piece["t1"][0] - piece["t0"][0]
+        dy = piece["t1"][1] - piece["t0"][1]
+        n = math.hypot(dx, dy) or 1.0
+        return (-dy / n, dx / n)
+    vx, vy = at[0] - piece["c"][0], at[1] - piece["c"][1]
+    n = math.hypot(vx, vy) or 1.0
+    # going anticlockwise round a centre, left is in towards it
+    return (-vx / n, -vy / n) if piece["ccw"] else (vx / n, vy / n)
+
+
+def _side_gap(piece: Dict[str, Any], q: Tuple[float, float]) -> float:
+    """How far a point is from a curve, positive on the run's left."""
+    if piece["kind"] == "line":
+        dx = piece["t1"][0] - piece["t0"][0]
+        dy = piece["t1"][1] - piece["t0"][1]
+        n = math.hypot(dx, dy) or 1.0
+        return (dx * (q[1] - piece["t0"][1])
+                - dy * (q[0] - piece["t0"][0])) / n
+    out = math.hypot(q[0] - piece["c"][0], q[1] - piece["c"][1]) - piece["r"]
+    return -out if piece["ccw"] else out
+
+
+def _reach(piece: Dict[str, Any], q: Tuple[float, float]) -> float:
+    """How far a point is from the curve itself, ends and all."""
+    if piece["kind"] == "line":
+        return _dist_point_segment(q, piece["t0"], piece["t1"])
+    centre_gap = math.hypot(q[0] - piece["c"][0], q[1] - piece["c"][1])
+    if "t0" not in piece:
+        return abs(centre_gap - piece["r"])
+    a0 = math.atan2(piece["t0"][1] - piece["c"][1],
+                    piece["t0"][0] - piece["c"][0])
+    a1 = math.atan2(piece["t1"][1] - piece["c"][1],
+                    piece["t1"][0] - piece["c"][0])
+    aq = math.atan2(q[1] - piece["c"][1], q[0] - piece["c"][0])
+    if not piece["ccw"]:
+        a0, a1 = a1, a0
+    span = (a1 - a0) % (2.0 * math.pi)
+    if (aq - a0) % (2.0 * math.pi) <= span:
+        return abs(centre_gap - piece["r"])
+    return min(math.dist(q, piece["t0"]), math.dist(q, piece["t1"]))
+
+
+def _dist_point_segment(p, a, b) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length2 = dx * dx + dy * dy
+    if length2 < 1e-24:
+        return math.dist(p, a)
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length2))
+    return math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy))
+
+
+def _moved(piece: Dict[str, Any], d: float):
+    """A curve's offset, as an endless line or a whole circle."""
+    if piece["kind"] == "line":
+        n = _left_normal(piece, piece["t0"])
+        start = (piece["t0"][0] + d * n[0], piece["t0"][1] + d * n[1])
+        return ("line", start, (piece["t1"][0] - piece["t0"][0],
+                                piece["t1"][1] - piece["t0"][1]))
+    r = piece["r"] - d if piece["ccw"] else piece["r"] + d
+    return ("circle", piece["c"], r)
+
+
+def _crossing(a, b, near: Tuple[float, float]) -> Optional[Tuple[float, float]]:
+    """Where two endless offset curves cross, the crossing nearest ``near``."""
+    if a[0] == "circle" and b[0] == "line":
+        a, b = b, a
+    hits: List[Tuple[float, float]] = []
+    if a[0] == "line" and b[0] == "line":
+        (px, py), (ux, uy) = a[1], a[2]
+        (qx, qy), (vx, vy) = b[1], b[2]
+        cross = ux * vy - uy * vx
+        if abs(cross) < 1e-12:
+            return None
+        t = ((qx - px) * vy - (qy - py) * vx) / cross
+        hits.append((px + t * ux, py + t * uy))
+    elif a[0] == "line":
+        (px, py), (ux, uy) = a[1], a[2]
+        (cx, cy), r = b[1], b[2]
+        n = math.hypot(ux, uy) or 1.0
+        ux, uy = ux / n, uy / n
+        fx, fy = px - cx, py - cy
+        along = fx * ux + fy * uy
+        rest = along * along - (fx * fx + fy * fy - r * r)
+        if rest < 0.0:
+            return None
+        root = math.sqrt(rest)
+        for t in (-along - root, -along + root):
+            hits.append((px + t * ux, py + t * uy))
+    else:
+        (ax, ay), ra = a[1], a[2]
+        (bx, by), rb = b[1], b[2]
+        gap = math.hypot(bx - ax, by - ay)
+        if gap < 1e-12 or gap > ra + rb or gap < abs(ra - rb):
+            return None
+        along = (ra * ra - rb * rb + gap * gap) / (2.0 * gap)
+        h = math.sqrt(max(0.0, ra * ra - along * along))
+        mx = ax + along * (bx - ax) / gap
+        my = ay + along * (by - ay) / gap
+        hits.append((mx + h * (by - ay) / gap, my - h * (bx - ax) / gap))
+        hits.append((mx - h * (by - ay) / gap, my + h * (bx - ax) / gap))
+    return min(hits, key=lambda p: math.dist(p, near)) if hits else None
+
+
+def _sweep(piece: Dict[str, Any], a, b) -> Optional[float]:
+    """The angle an arc turns through from ``a`` to ``b``, the run's way."""
+    c = piece["c"]
+    a0 = math.atan2(a[1] - c[1], a[0] - c[0])
+    a1 = math.atan2(b[1] - c[1], b[0] - c[0])
+    turn = (a1 - a0) % (2.0 * math.pi)
+    return turn if piece["ccw"] else (2.0 * math.pi - turn) % (2.0 * math.pi)
 
 
 def _bspline_samples(ctrl: Sequence[Tuple[float, float]],

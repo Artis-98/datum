@@ -195,8 +195,12 @@ def main(argv=None) -> int:
 
     if sys.platform.startswith("linux"):
         # OpenCASCADE draws into an X11 window, so on a Wayland desktop
-        # DATUM runs through XWayland unless told otherwise
-        os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
+        # DATUM runs through XWayland.  Forced, not defaulted: a desktop
+        # that sets QT_QPA_PLATFORM=wayland for everything left the 3D view
+        # with a window it cannot draw in.  DATUM_QT_PLATFORM overrides it
+        # for anyone who knows better.
+        os.environ["QT_QPA_PLATFORM"] = (
+            os.environ.get("DATUM_QT_PLATFORM") or "xcb")
 
     app = QtWidgets.QApplication(argv)
     app.setApplicationName(APP_NAME)

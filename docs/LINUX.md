@@ -34,3 +34,18 @@ sudo apt install libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 \
   own udev rule, or one granting your user the hidraw device, does that.
 * Documents go in `~/Documents/DATUM` and settings under `~/.config`,
   the same places a Linux desktop keeps everything else.
+
+## If the 3D view will not start
+
+DATUM always runs through X11, XWayland on a Wayland desktop, because the
+OpenCASCADE viewer draws into an X11 window. If it reports that it could
+not get an OpenGL window, check that XWayland has working OpenGL:
+
+```bash
+glxinfo -B
+```
+
+It should name your graphics card. Please open an issue with what it
+prints, your graphics card and driver, and the output of
+`echo $XDG_SESSION_TYPE $QT_QPA_PLATFORM`. To try another Qt platform
+anyway, set `DATUM_QT_PLATFORM` before starting it.

@@ -211,6 +211,13 @@ class SelectionField(QtWidgets.QWidget):
         self.button.toggled.connect(self.pick_toggled.emit)
         self.clear_btn.clicked.connect(self.cleared.emit)
 
+    def set_mark(self, colour: Optional[str]) -> None:
+        """Underline the button in the colour its pick is shown in."""
+        self._mark = colour
+        self.button.setStyleSheet(
+            "QPushButton { border-bottom: 3px solid %s; }" % colour
+            if colour else "")
+
     def set_count(self, n: int, noun: str = "edge") -> None:
         if n == 0:
             self.count.setText("none selected")

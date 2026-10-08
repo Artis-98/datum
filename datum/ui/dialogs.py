@@ -214,12 +214,13 @@ class FeatureDialog(QtWidgets.QDialog):
         return w
 
     def profile_field(self) -> SelectionField:
-        """A blank profile field you activate, then click regions in the view.
+        """The profile field, armed, with a likely profile already in it.
 
-        Nothing is proposed and nothing is preselected: the field starts
-        empty, and clicking it puts the viewport into profile-picking mode
-        so any closed region in the model can be chosen, whichever sketch it
-        happens to belong to.
+        Clicking regions in the view adds and drops them, any closed region
+        of any sketch in sight.  A new feature starts with one already
+        chosen, the biggest of the newest sketch's, which is the one wanted
+        most of the time and saves a click; when it is not, a click on it
+        drops it and a click on the right one takes that.
         """
         self.profiles = SelectionField("Select profiles")
         self.profiles.pick_toggled.connect(self._toggle_profile_pick)
@@ -229,8 +230,38 @@ class FeatureDialog(QtWidgets.QDialog):
         # thing you do, so it should not need a click to switch on. It stays
         # a toggle because later extent options need the viewport for their
         # own picking.
-        QtCore.QTimer.singleShot(0, lambda: self.profiles.set_picking(True))
+        QtCore.QTimer.singleShot(0, self._arm_profiles)
         return self.profiles
+
+    def _arm_profiles(self) -> None:
+        if self._closed:
+            return
+        self.profiles.set_picking(True)
+        self._propose_profile()
+
+    def _propose_profile(self) -> None:
+        """Start a new feature off on the profile it most likely wants."""
+        if not self.is_new or len(self.feature.profiles):
+            return
+        finder = getattr(self.host, "available_regions", None)
+        if finder is None:
+            return
+        try:
+            regions = finder()
+        except Exception:
+            return
+        if not regions:
+            return
+        wanted = getattr(self.feature, "sketch_id", 0)
+        own = [r for r in regions if r["sketch_id"] == wanted]
+        if not own:
+            # otherwise the newest sketch there is a region of
+            newest = max(regions,
+                         key=lambda r: self.doc.index_of(r["sketch_id"]))
+            own = [r for r in regions
+                   if r["sketch_id"] == newest["sketch_id"]]
+        best = max(own, key=lambda r: r.get("area", 0.0))
+        self.on_profile_clicked(best["sketch_id"], best["centre"])
 
     def _toggle_profile_pick(self, on: bool) -> None:
         self.host.set_profile_pick(self if on else None)
@@ -769,8 +800,7 @@ class EdgeOpDialog(FeatureDialog):
     def _matching_ref(self, ref):
         import math
         for existing in self.feature.refs:
-            if (existing.kind == ref.kind
-                    and math.dist(existing.centre, ref.centre) < 1e-6):
+            if existing.same_as(ref):
                 return existing
         return None
 
@@ -865,7 +895,7 @@ class ShellDialog(FeatureDialog):
             fresh.capture_from(base, "face", picked)
             for ref in fresh:
                 match = next((e for e in self.feature.refs
-                              if math.dist(e.centre, ref.centre) < 1e-6), None)
+                              if e.same_as(ref)), None)
                 if match is not None:
                     self.feature.refs.refs.remove(match)
                 else:

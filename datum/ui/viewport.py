@@ -38,9 +38,11 @@ from OCP.Graphic3d import (
     Graphic3d_Camera, Graphic3d_ClipPlane, Graphic3d_MaterialAspect,
     Graphic3d_NameOfMaterial, Graphic3d_RenderingParams,
     Graphic3d_TypeOfShadingModel, Graphic3d_ZLayerId_Default,
-    Graphic3d_ZLayerId_Top, Graphic3d_ZLayerId_TopOSD,
+    Graphic3d_ZLayerId_Top, Graphic3d_ZLayerId_Topmost,
+    Graphic3d_ZLayerId_TopOSD,
 )
 from OCP.OpenGl import OpenGl_GraphicDriver
+from OCP.GeomAbs import GeomAbs_Shape
 from OCP.Prs3d import (
     Prs3d_Drawer, Prs3d_LineAspect, Prs3d_PointAspect, Prs3d_TextAspect,
     Prs3d_TypeOfHighlight,
@@ -168,6 +170,33 @@ def _rotate_about(point, pivot, axis, angle: float
                  for i in range(3))
 
 
+def _linux_gl_advice(exc: Exception) -> str:
+    """What to tell someone whose Linux desktop would not give a GL window."""
+    return (
+        "The 3D view could not get an OpenGL window from the desktop "
+        "(%s).\n\n"
+        "Qt is running on '%s' and the session is '%s'. DATUM needs X11 "
+        "or XWayland with working OpenGL: 'glxinfo -B' should name your "
+        "graphics card. Please report what it prints, and your graphics "
+        "card, at https://github.com/Artis-98/datum/issues."
+        % (str(exc).strip() or type(exc).__name__,
+           os.environ.get("QT_QPA_PLATFORM", "?"),
+           os.environ.get("XDG_SESSION_TYPE", "?")))
+
+
+def _hide_seams(drawer) -> None:
+    """Draw the edges a person would call edges, and not a cylinder's seam.
+
+    OCCT draws every face boundary, the line where a wrapped face meets
+    itself included.  Anything smoother than a tangent join is left out,
+    which is exactly the seams; a fillet's edges still show.
+    """
+    try:
+        drawer.SetFaceBoundaryUpperContinuity(GeomAbs_Shape.GeomAbs_C2)
+    except Exception:
+        pass
+
+
 def _col(value) -> Quantity_Color:
     if isinstance(value, str):
         c = QtGui.QColor(value)
@@ -237,6 +266,10 @@ class Viewport(QtWidgets.QWidget):
         self._model_look = None
         # assembly occurrences and CAM parts, each its own selectable body
         self._component_ais: Dict[int, AIS_Shape] = {}
+        # how see-through each body is of its own accord, glass or a ghost
+        # round a part edited in place, so a change of display mode puts
+        # that back rather than making everything solid
+        self._own_alpha: Dict[int, Tuple[Any, float]] = {}
         # the ones that are outlines rather than solids, so the display mode
         # does not shade them into invisibility
         self._component_wires: set = set()
@@ -369,11 +402,15 @@ class Viewport(QtWidgets.QWidget):
         if sys.platform.startswith("linux"):
             # an X11 window is the display it lives on and its number, not
             # a handle in a capsule as on Windows and macOS
-            self._window = _NativeWindow(self._display_connection,
-                                         int(self.winId()))
+            try:
+                self._window = _NativeWindow(self._display_connection,
+                                             int(self.winId()))
+                self.view.SetWindow(self._window)
+            except Exception as exc:
+                raise RuntimeError(_linux_gl_advice(exc)) from exc
         else:
             self._window = _NativeWindow(_capsule(self.winId()))
-        self.view.SetWindow(self._window)
+            self.view.SetWindow(self._window)
         if not self._window.IsMapped():
             self._window.Map()
 
@@ -459,15 +496,20 @@ class Viewport(QtWidgets.QWidget):
     def _make_view_cube(self) -> None:
         try:
             cube = AIS_ViewCube()
+            # in real pixels, so the same size on a scaled display as the
+            # rest of the window around it
+            ratio = self.devicePixelRatioF() or 1.0
             # bigger, with a dark box behind near-white lettering - the stock
             # mid-grey cube makes FRONT / BACK / RIGHT almost unreadable
-            cube.SetSize(64.0)
+            cube.SetSize(64.0 * ratio)
             cube.SetBoxColor(_col("#3a434f"))
             cube.SetTextColor(_col("#ffffff"))
-            cube.SetFontHeight(12.0)
+            cube.SetFontHeight(12.0 * ratio)
             cube.SetTransparency(0.0)
             cube.SetDrawAxes(True)
-            cube.SetZLayer(Graphic3d_ZLayerId_TopOSD)
+            # its own depth, so the axes it carries pass in front of the
+            # box and behind it as they turn, instead of always under it
+            cube.SetZLayer(Graphic3d_ZLayerId_Topmost)
             try:
                 from OCP.Graphic3d import (
                     Graphic3d_TransformPers, Graphic3d_TransModeFlags,
@@ -476,7 +518,7 @@ class Viewport(QtWidgets.QWidget):
                 cube.SetTransformPersistence(Graphic3d_TransformPers(
                     Graphic3d_TransModeFlags.Graphic3d_TMF_TriedronPers,
                     Aspect_TypeOfTriedronPosition.Aspect_TOTP_RIGHT_UPPER,
-                    Graphic3d_Vec2i(85, 85)))
+                    Graphic3d_Vec2i(int(85 * ratio), int(85 * ratio))))
             except Exception:
                 pass
             self.context.Display(cube, False)
@@ -526,6 +568,7 @@ class Viewport(QtWidgets.QWidget):
         material.SetDiffuseColor(base)
         material.SetShininess(shine)
         transparency = 1.0 - opacity if opacity < 0.999 else 0.0
+        self._own_alpha[id(ais)] = (ais, transparency)
 
         if restyle and self.context is not None:
             # already on screen: change how it looks through the context,
@@ -570,6 +613,7 @@ class Viewport(QtWidgets.QWidget):
             self.redraw()
             return
 
+        kernel.mark_seams(shape)
         pieces = self._pieces_of(shape)
         if (pieces is not None and self._model_chunks
                 and look == self._model_look):
@@ -625,6 +669,7 @@ class Viewport(QtWidgets.QWidget):
         self.apply_appearance(ais, appearance)
         drawer = ais.Attributes()
         drawer.SetFaceBoundaryDraw(True)
+        _hide_seams(drawer)
         boundary = Prs3d_LineAspect(_col(C.material_edge),
                                     Aspect_TypeOfLine.Aspect_TOL_SOLID, 1.4)
         drawer.SetFaceBoundaryAspect(boundary)
@@ -764,6 +809,8 @@ class Viewport(QtWidgets.QWidget):
             if shape is None or shape.IsNull():
                 continue
             looks = item.get("looks")
+            if not item.get("wire"):
+                kernel.mark_seams(shape)
             ais = AIS_ColoredShape(shape) if looks else AIS_Shape(shape)
             colour = item.get("colour") or C.material
 
@@ -797,6 +844,7 @@ class Viewport(QtWidgets.QWidget):
 
             drawer = ais.Attributes()
             drawer.SetFaceBoundaryDraw(self.display_mode != "shaded")
+            _hide_seams(drawer)
             edge_colour = _col(C.accent if item.get("highlight")
                                else C.material_edge)
             boundary = Prs3d_LineAspect(
@@ -818,6 +866,7 @@ class Viewport(QtWidgets.QWidget):
                 # the presentation is computed, which is how a ghosted
                 # assembly came out solid
                 ctx.SetTransparency(ais, transparency, False)
+                self._own_alpha[id(ais)] = (ais, transparency)
             if not item.get("pickable", True):
                 # context around a part being edited in place: there to be
                 # seen, never to catch a click meant for the part itself.
@@ -1005,10 +1054,10 @@ class Viewport(QtWidgets.QWidget):
             pass
         try:
             self.context.SelectRectangle(
-                Graphic3d_Vec2i(min(start.x(), end.x()),
-                                min(start.y(), end.y())),
-                Graphic3d_Vec2i(max(start.x(), end.x()),
-                                max(start.y(), end.y())),
+                Graphic3d_Vec2i(*self._px(min(start.x(), end.x()),
+                                          min(start.y(), end.y()))),
+                Graphic3d_Vec2i(*self._px(max(start.x(), end.x()),
+                                          max(start.y(), end.y()))),
                 self.view)
         finally:
             try:
@@ -1036,7 +1085,7 @@ class Viewport(QtWidgets.QWidget):
         if not self._ready or not self._component_ais:
             return None
         self._finish_arming()
-        self.context.MoveTo(int(x), int(y), self.view, False)
+        self._detect(x, y)
         if not self.context.HasDetected():
             return None
         try:
@@ -1063,10 +1112,22 @@ class Viewport(QtWidgets.QWidget):
     def _apply_display_mode(self) -> None:
         ctx = self.context
         mode = 0 if self.display_mode == "wireframe" else 1
-        for ais in self._solids():
+        solids = self._solids()
+        # forget the bodies no longer on screen
+        alive = {id(ais) for ais in solids}
+        self._own_alpha = {key: held for key, held in self._own_alpha.items()
+                           if key in alive and held[0] is not None}
+        for ais in solids:
             ctx.SetDisplayMode(ais, mode, False)
             ais.Attributes().SetFaceBoundaryDraw(self.display_mode != "shaded")
-            ais.SetTransparency(0.55 if self.display_mode == "xray" else 0.0)
+            # Each body keeps its own see-through: the ghosts round a part
+            # edited in place went solid the moment anything redrew the
+            # part, and stayed solid, because this used to set every body
+            # to nothing at all.
+            held = self._own_alpha.get(id(ais))
+            own = held[1] if held is not None and held[0] is ais else 0.0
+            wanted = max(own, 0.55) if self.display_mode == "xray" else own
+            ctx.SetTransparency(ais, wanted, False)
 
     def _bodies(self) -> List[AIS_Shape]:
         """Everything pickable on screen - the part, or the components."""
@@ -1208,16 +1269,50 @@ class Viewport(QtWidgets.QWidget):
         return (self.view.Camera().ProjectionType()
                 == Graphic3d_Camera.Projection_Orthographic)
 
+    # anything else a fit should take in besides the scene: the sketch
+    # being drawn, which is overlay rather than scenery to OCCT
+    fit_extra: Optional[Callable[[], Sequence[Tuple[float, float, float]]]] = None
+
     def fit_all(self) -> None:
         if not self._ready:
             return
         self.finish_animation()
-        self.view.FitAll(0.06, False)
+        extra = []
+        if self.fit_extra is not None:
+            try:
+                extra = list(self.fit_extra())
+            except Exception:
+                extra = []
+        if extra and self._fit_with(extra):
+            pass
+        else:
+            self.view.FitAll(0.06, False)
         try:
             self.view.ZFitAll()
         except Exception:
             pass
         self.redraw()
+
+    def _fit_with(self, points) -> bool:
+        """Fit the scene and some points besides it."""
+        from OCP.Bnd import Bnd_Box
+        try:
+            box = self.view.View().MinMaxValues(False)
+        except Exception:
+            box = Bnd_Box()
+        try:
+            if box.IsVoid() and self._model_shape is not None:
+                xmin, ymin, zmin, xmax, ymax, zmax = kernel.bounding_box(
+                    self._model_shape)
+                box.Update(xmin, ymin, zmin, xmax, ymax, zmax)
+            for p in points:
+                box.Add(gp_Pnt(float(p[0]), float(p[1]), float(p[2])))
+            # never a single point: give it a little body to frame
+            box.Enlarge(1e-3)
+            self.view.FitAll(box, 0.06, False)
+        except Exception:
+            return False
+        return True
 
     def eye_side(self, plane: SketchPlane) -> float:
         """1.0 when the camera sees a plane from the side its normal points
@@ -1894,6 +1989,30 @@ class Viewport(QtWidgets.QWidget):
             ais.Attributes().SetWireAspect(aspect)
         return self._add(ais, preview, fittable=fittable)
 
+    def draw_tint(self, shape: TopoDS_Shape, colour: str,
+                  preview: bool = True) -> AIS_InteractiveObject:
+        """A face washed over in a colour, or an edge drawn thick in it.
+
+        Pulled a little towards the eye, so it sits on the face it covers
+        instead of flickering in and out of it.
+        """
+        from OCP.Aspect import Aspect_PolygonOffsetMode
+        ais = AIS_Shape(shape)
+        ais.SetColor(_col(colour))
+        ais.SetWidth(4.0)
+        drawer = ais.Attributes()
+        drawer.SetFaceBoundaryDraw(False)
+        if shape.ShapeType() == TopAbs_FACE:
+            ais.SetDisplayMode(1)
+            ais.SetTransparency(0.25)
+            try:
+                drawer.SetupOwnShadingAspect()
+                drawer.ShadingAspect().Aspect().SetPolygonOffsets(
+                    Aspect_PolygonOffsetMode.Aspect_POM_Fill, -2.0, -2.0)
+            except Exception:
+                pass
+        return self._add(ais, preview, Graphic3d_ZLayerId_Top)
+
     def draw_point(self, p: Sequence[float], colour: str, size: float = 3.0,
                    preview: bool = False,
                    marker=Aspect_TypeOfMarker.Aspect_TOM_O) -> AIS_InteractiveObject:
@@ -1930,7 +2049,7 @@ class Viewport(QtWidgets.QWidget):
         if not self._ready or self._cube is None:
             return False
         try:
-            self.context.MoveTo(int(x), int(y), self.view, False)
+            self._detect(x, y)
             if not self.context.HasDetected():
                 return False
             return isinstance(self.context.DetectedInteractive(), AIS_ViewCube)
@@ -2119,11 +2238,50 @@ class Viewport(QtWidgets.QWidget):
 
     # -- geometry from screen coordinates -----------------------------------
 
+    def _px(self, x: float, y: float) -> Tuple[int, int]:
+        """A widget position as OCCT counts pixels.
+
+        Qt gives positions in logical pixels, scaled by the display setting,
+        while OCCT draws into the window's real ones.  At 100 percent the two
+        agree and nothing shows; at 150 percent every click landed a third
+        of the way back towards the top left corner.
+        """
+        ratio = self.devicePixelRatioF() or 1.0
+        return int(round(x * ratio)), int(round(y * ratio))
+
+    def _detect(self, x: float, y: float, redraw: bool = False) -> None:
+        """Hover the scene at a widget position, seams passed over.
+
+        A seam down a cylinder is not drawn, so it must not be found under
+        the cursor either: the face behind it, or nothing, is what a click
+        there gets.
+        """
+        ctx = self.context
+        ctx.MoveTo(*self._px(x, y), self.view, False)
+        try:
+            for _ in range(16):
+                if (not ctx.HasDetected() or not ctx.HasDetectedShape()):
+                    break
+                found = ctx.DetectedShape()
+                if (found.ShapeType() != TopAbs_EDGE
+                        or not kernel.is_seam(found)):
+                    break
+                if not ctx.HasNextDetected():
+                    ctx.ClearDetected(False)
+                    break
+                ctx.HilightNextDetected(self.view, False)
+            else:
+                ctx.ClearDetected(False)
+        except Exception:
+            pass
+        if redraw:
+            self.view.RedrawImmediate()
+
     def ray_at(self, x: int, y: int) -> Optional[Tuple[Tuple[float, float, float],
                                                        Tuple[float, float, float]]]:
         if not self._ready:
             return None
-        px, py, pz, vx, vy, vz = self.view.ConvertWithProj(int(x), int(y))
+        px, py, pz, vx, vy, vz = self.view.ConvertWithProj(*self._px(x, y))
         return (px, py, pz), (vx, vy, vz)
 
     def plane_point(self, x: int, y: int,
@@ -2147,13 +2305,15 @@ class Viewport(QtWidgets.QWidget):
         return plane.to_2d(hit)
 
     def project(self, p: Sequence[float]) -> Tuple[int, int]:
-        """World point to widget pixel."""
+        """World point to widget pixel, the kind a mouse event gives."""
         if not self._ready:
             return (0, 0)
         try:
-            return self.view.Convert(float(p[0]), float(p[1]), float(p[2]))
+            x, y = self.view.Convert(float(p[0]), float(p[1]), float(p[2]))
         except Exception:
             return (0, 0)
+        ratio = self.devicePixelRatioF() or 1.0
+        return int(round(x / ratio)), int(round(y / ratio))
 
     def view_span(self) -> float:
         """Width of the visible area in model units."""
@@ -2171,7 +2331,9 @@ class Viewport(QtWidgets.QWidget):
         try:
             a = self.view.Convert(0, 0)
             b = self.view.Convert(100, 0)
-            return abs(b[0] - a[0]) / 100.0 or 1.0
+            # per screen pixel as the mouse counts them, not as OCCT does
+            ratio = self.devicePixelRatioF() or 1.0
+            return abs(b[0] - a[0]) / 100.0 * ratio or 1.0
         except Exception:
             return 1.0
 
@@ -2308,7 +2470,7 @@ class Viewport(QtWidgets.QWidget):
             self.level_camera()
             self.redraw()
         else:
-            self.view.StartRotation(pos.x(), pos.y())
+            self.view.StartRotation(*self._px(pos.x(), pos.y()))
 
     def _orbit_centre(self) -> Tuple[float, float, float]:
         """Rotate about the model, falling back to the view target."""
@@ -2376,7 +2538,7 @@ class Viewport(QtWidgets.QWidget):
                 if self.edge_picking:
                     # Project Geometry is running: this click is choosing a
                     # model edge, not drawing on the plane
-                    self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                    self._detect(pos.x(), pos.y())
                     self.context.SelectDetected()
                     self.view.Redraw()
                     self.model_edge_picked.emit()
@@ -2394,7 +2556,7 @@ class Viewport(QtWidgets.QWidget):
             elif self.plane_tool:
                 # resolve what is under the cursor straight away, so the drag
                 # that follows can start from the picked face
-                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                self._detect(pos.x(), pos.y())
                 self.context.SelectDetected()
                 self.view.Redraw()
                 self.plane_tool_pressed.emit()
@@ -2421,7 +2583,7 @@ class Viewport(QtWidgets.QWidget):
                     # nothing under the cursor, so this drag is a box
                     self._sel_box_from = QtCore.QPoint(pos)
                 else:
-                    self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                    self._detect(pos.x(), pos.y())
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if not self._ready:
@@ -2440,9 +2602,13 @@ class Viewport(QtWidgets.QWidget):
                     self.refresh_grid()
                     self.redraw()
                 else:
-                    self.view.Rotation(pos.x(), pos.y())
+                    self.view.Rotation(*self._px(pos.x(), pos.y()))
             else:
-                self.view.Pan(dx, -dy)
+                # from the two positions, so the rounding never adds up
+                # and the model stays under the cursor
+                was = self._px(self._last_pos.x(), self._last_pos.y())
+                now = self._px(pos.x(), pos.y())
+                self.view.Pan(now[0] - was[0], was[1] - now[1])
             self._last_pos = pos
             return
 
@@ -2471,7 +2637,7 @@ class Viewport(QtWidgets.QWidget):
             if not self._dragging_plane and not self._drag_armed:
                 # selection is off while sketching, so the only thing this
                 # can pre-highlight is the cube
-                self.context.MoveTo(pos.x(), pos.y(), self.view, True)
+                self._detect(pos.x(), pos.y(), redraw=True)
             uv = self.plane_point(pos.x(), pos.y())
             if uv is not None:
                 if (self._drag_armed and not self._dragging_plane
@@ -2489,7 +2655,7 @@ class Viewport(QtWidgets.QWidget):
             self._last_pos = pos
             return
 
-        self.context.MoveTo(pos.x(), pos.y(), self.view, True)
+        self._detect(pos.x(), pos.y(), redraw=True)
         self._last_pos = pos
 
     def _moved_enough(self, pos: QtCore.QPoint) -> bool:
@@ -2521,7 +2687,7 @@ class Viewport(QtWidgets.QWidget):
                 # offer actions for that face rather than generic ones
                 self._menu_pos = QtCore.QPoint(pos)
                 if not self.plane_mode:
-                    self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                    self._detect(pos.x(), pos.y())
                     self.context.SelectDetected()
                     self.view.Redraw()
                     self.selection_changed.emit()
@@ -2538,7 +2704,7 @@ class Viewport(QtWidgets.QWidget):
                 self.select_in_box(start, pos)
             else:
                 # a click, not a drag: treat it as one
-                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                self._detect(pos.x(), pos.y())
                 self.context.SelectDetected()
                 self.view.Redraw()
                 self.selection_changed.emit()
@@ -2552,7 +2718,7 @@ class Viewport(QtWidgets.QWidget):
                 # it never actually moved, so treat it as the selection
                 # click it was
                 self._free_drag = False
-                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                self._detect(pos.x(), pos.y())
                 self.context.SelectDetected()
                 self.view.Redraw()
                 self.selection_changed.emit()
@@ -2587,7 +2753,7 @@ class Viewport(QtWidgets.QWidget):
                 scheme = (AIS_SelectionScheme.AIS_SelectionScheme_XOR
                           if event.modifiers() & QtCore.Qt.ControlModifier
                           else AIS_SelectionScheme.AIS_SelectionScheme_Replace)
-                self.context.MoveTo(pos.x(), pos.y(), self.view, False)
+                self._detect(pos.x(), pos.y())
                 self.context.SelectDetected(scheme)
                 self.view.Redraw()
                 self.selection_changed.emit()
@@ -2601,7 +2767,7 @@ class Viewport(QtWidgets.QWidget):
             return
         pos = event.position().toPoint()
         step = 60
-        self.view.StartZoomAtPoint(pos.x(), pos.y())
+        self.view.StartZoomAtPoint(*self._px(pos.x(), pos.y()))
         self.view.ZoomAtPoint(0, 0, int(step if delta > 0 else -step), 0)
         try:
             self.view.ZFitAll()
@@ -2611,6 +2777,14 @@ class Viewport(QtWidgets.QWidget):
         self.redraw()
 
     def mouseDoubleClickEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MiddleButton and self._ready:
+            # Inventor's habit: a double click on the wheel brings the whole
+            # thing back into view, however far it has wandered off
+            self._navigating = False
+            self._button = QtCore.Qt.NoButton
+            self.fit_all()
+            self.refresh_grid()
+            return
         if event.button() == QtCore.Qt.LeftButton:
             pos = event.position().toPoint()
             if self.plane_mode:

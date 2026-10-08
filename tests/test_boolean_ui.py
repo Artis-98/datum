@@ -61,7 +61,12 @@ def rect_sketch(name, x0, y0, x1, y1):
 def extrude_dialog():
     win.new_feature(ExtrudeFeature)
     pump()
-    return win._active_dialog
+    dlg = win._active_dialog
+    if dlg is not None:
+        # a new feature proposes a profile; these pick their own
+        dlg._clear_profiles()
+        pump()
+    return dlg
 
 
 # ==========================================================================

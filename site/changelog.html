@@ -38,7 +38,7 @@
   <div class="wrap">
     <div class="inner">
       <div class="eyebrow"><span class="dot"></span>
-        <span id="live-version">Latest: 0.2.6</span></div>
+        <span id="live-version">Latest: 0.2.7</span></div>
       <h1 style="font-size:clamp(34px,5vw,52px)">Changelog</h1>
       <p class="lede">
         Every release, what changed in it, and why. DATUM updates itself,
@@ -46,7 +46,7 @@
         just here so you can see what arrived.
       </p>
       <a class="btn ghost" id="get-latest"
-         href="https://api.iiteg.com/datum/0.2.6/DATUM-0.2.6-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.7/DATUM-0.2.7-setup.exe">
         Download the current version</a>
     </div>
   </div>
@@ -72,9 +72,65 @@
 
     <div class="release current">
       <div class="head">
+        <span class="ver">0.2.7</span>
+        <span class="when">8 October 2026</span>
+        <span class="badge">current</span>
+      </div>
+      <p style="color:var(--dim);margin:0 0 12px">
+        Offset that shows you the result, fillets on rings, a new look,
+        and the first fixes from GitHub.
+      </p>
+      <ul>
+        <li><strong>Offset, as in Inventor.</strong> Click a line, an arc or
+          a circle and its whole loop comes along, the copy riding on the
+          cursor on whichever side you pull it to. Click to place it, or
+          type the distance in the box beside the cursor and press Enter
+          to place it with that dimension on it. Every side keeps the same
+          gap, so one dimension drives the lot.</li>
+        <li><strong>The first dimension sizes the sketch.</strong> Draw a
+          square, type 10000 for its first side, and the whole sketch
+          scales to it, in proportion, and is framed on screen. Only the
+          first, and only before there is a body.</li>
+        <li><strong>Constraints stay on.</strong> Pick Coincident once and
+          join corner after corner; Esc when done.</li>
+        <li><strong>Fillets:</strong> the inner and outer rims of a ring
+          can be picked together, and a radius of half the wall rounds it
+          right over.</li>
+        <li><strong>Stray sketch lines</strong> left lying inside a profile
+          no longer turn up as edges across the extruded solid, and no
+          longer stop the regions next to them from extruding.</li>
+        <li><strong>No seam line</strong> down the side of a cylinder,
+          on screen or in drawings.</li>
+        <li><strong>A new feature always goes above the End of
+          Part.</strong></li>
+        <li><strong>Extrude starts with a profile picked</strong>, the
+          biggest of the newest sketch, so most of the time it is OK
+          straight away.</li>
+        <li><strong>A new look:</strong> a grey backdrop, parts in off
+          white with black edges, the view cube's axes in front of it when
+          they are, and a cube for a part.</li>
+        <li><strong>Assemblies:</strong> Place Constraint lights the first
+          pick blue and the second purple, on the model and in the box. A
+          part already open in its own tab is edited there when double
+          clicked, and the parts around one edited in place stay see
+          through.</li>
+        <li><strong>The mouse wheel clicked twice fits the view</strong> in
+          parts, sketches and assemblies too.</li>
+        <li><strong>Scaled displays:</strong> clicks land where you point
+          at 125 and 150 percent (<a href="https://github.com/Artis-98/datum/issues/2">#2</a>),
+          and a ribbon too wide for the window folds a group down to its
+          icons, with the names on hover.</li>
+        <li><strong>Linux:</strong> always runs through XWayland, and says
+          plainly when the desktop gives it no OpenGL
+          (<a href="https://github.com/Artis-98/datum/issues/3">#3</a>):
+          <a href="https://github.com/Artis-98/datum/releases/download/v0.2.7/DATUM-0.2.7-linux-x86_64-preview.tar.gz">Linux preview</a>.</li>
+      </ul>
+    </div>
+
+    <div class="release">
+      <div class="head">
         <span class="ver">0.2.6</span>
         <span class="when">2 October 2026</span>
-        <span class="badge">current</span>
       </div>
       <p style="color:var(--dim);margin:0 0 12px">
         Drawings the Inventor way, a Bill of Materials, and units in
@@ -451,7 +507,7 @@
         ask it now from File then Check for Updates.
       </p>
       <a class="btn primary" id="get-latest-2"
-         href="https://api.iiteg.com/datum/0.2.6/DATUM-0.2.6-setup.exe">
+         href="https://api.iiteg.com/datum/0.2.7/DATUM-0.2.7-setup.exe">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
              aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M4 19h16"/>

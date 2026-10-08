@@ -667,6 +667,21 @@ class AssemblyDocument:
                 offset=constraint.value(scope), flip=constraint.flip))
         return out
 
+    def world_shape(self, attachment: Attachment) -> Optional[TopoDS_Shape]:
+        """The picked face or edge itself, where its component sits."""
+        if not attachment or not attachment.valid or attachment.ref is None:
+            return None
+        occurrence = self.occurrence(attachment.occurrence)
+        if occurrence is None or occurrence.shape is None:
+            return None
+        try:
+            found = attachment.ref.resolve(occurrence.shape)
+        except Exception:
+            return None
+        if found is None:
+            return None
+        return found.Moved(occurrence.placement.location())
+
     def world_frame(self, attachment: Attachment) -> Optional[Frame]:
         """Where an attachment's geometry actually is, in the assembly.
 

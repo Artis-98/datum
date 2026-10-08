@@ -117,7 +117,10 @@ check("one point is not enough to fire it",
       ed._pending_constraint == "coincident")
 click(70.0, 0.0)
 pump(4)
-check("the second pick fires it", ed._pending_constraint is None)
+check("the second pick fires it, and it stays armed for the next",
+      ed._pending_constraint == "coincident" and "coincident" in kinds(s),
+      (ed._pending_constraint, kinds(s)))
+ed.escape()
 check("the constraint was made", "coincident" in kinds(s), kinds(s))
 check("and the points moved together", at(s, pa) == at(s, pb),
       (at(s, pa), at(s, pb)))
@@ -164,7 +167,11 @@ click(70.0, 0.0)
 pump(5)
 
 check("picking a line after a point completes it, rather than waiting "
-      "for a second point for ever", ed._pending_constraint is None)
+      "for a second point for ever",
+      any(c.kind in ("point_on", "coincident")
+          for c in s.constraints.values())
+      and not ed.selected_points, kinds(s))
+ed.escape()
 check("a constraint really was made",
       any(c.kind in ("point_on", "coincident") for c in s.constraints.values()),
       kinds(s))

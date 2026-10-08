@@ -29,6 +29,7 @@ LIVE_FIELDS = {
     "rect": ("W", "H"),
     "circle": ("ø",),
     "line": ("L", "∠"),
+    "offset": ("D",),
 }
 
 # the heads-up fields that are angles, in degrees from the sketch's
@@ -53,6 +54,7 @@ CONSTRAINT_BADGES = {
     "midpoint": "M",
     "point_on": "P",
     "symmetric": "S",
+    "offset": "Of",
     "fix": "X",
     "ground": "X",
 }
@@ -110,7 +112,9 @@ TOOL_HINTS = {
     "point": "Point: click to place a sketch point.",
     "fillet2d": "Fillet: click two lines that meet.",
     "trim": "Trim: click the piece of geometry to remove.",
-    "offset": "Offset: click a line, then click the side to offset towards.",
+    "offset": "Offset: click a line, arc or circle and its whole loop "
+              "follows the cursor. Click to place it, or type the distance "
+              "and press Enter.",
     "project": "Project Geometry: click the model edges you want on this "
                "sketch. Esc when you are done.",
     "dimension": "Dimension: click one thing for its own size, or two for "
@@ -205,6 +209,12 @@ class SketchEditor(QtCore.QObject):
         # reconsider what is being measured instead of placing the label
         self._dim_picks: List[Tuple[str, int]] = []
         self._dim_offset: Tuple[float, float] = (0.0, 0.0)
+        # whether a first dimension may scale the sketch, which the window
+        # allows while there is no body yet
+        self.autoscale = True
+        # the loop the offset tool picked, and what it last made
+        self._offset_chain = None
+        self._offset_made = None
 
         # a constraint waiting for the user to pick its geometry
         self._pending_constraint: Optional[str] = None
@@ -293,12 +303,24 @@ class SketchEditor(QtCore.QObject):
         self.viewport.grid_unit = self.units
         self.viewport.enter_plane_mode(sketch.plane, self.grid_step,
                                        self.show_grid)
+        # a fit takes in the sketch, which OCCT does not count as scenery
+        self.viewport.fit_extra = self._fit_points
         self.solve()
         self.render()
+
+    def _fit_points(self) -> List[Tuple[float, float, float]]:
+        """The corners of everything drawn on the sketch, in space."""
+        s = self.sketch
+        if s is None or not s.entities:
+            return []
+        umin, vmin, umax, vmax = s.bounds()
+        return [s.plane.to_3d(u, v) for u in (umin, umax)
+                for v in (vmin, vmax)]
 
     def end(self) -> None:
         if self.sketch is not None:
             self.sketch.name_pool = None
+        self.viewport.fit_extra = None
         self.sketch = None
         self.references = []
         self._reference_labels = []
@@ -411,6 +433,7 @@ class SketchEditor(QtCore.QObject):
         if self._pending:
             self._pending = []
             self._chain_from = None
+            self._offset_chain = None
             self.live.dismiss()
             self.viewport.clear_preview()
             self.render()
@@ -1145,6 +1168,9 @@ class SketchEditor(QtCore.QObject):
         if self.tool == "line":
             anchor = self._pending[-1]
             return [math.dist(anchor, cursor), _heading(anchor, cursor)]
+        if self.tool == "offset" and getattr(self, "_offset_chain", None):
+            return [abs(self.sketch.offset_distance(self._offset_chain[0],
+                                                    cursor))]
         return None
 
     def _resolved_cursor(self, cursor) -> Tuple[float, float]:
@@ -1236,6 +1262,8 @@ class SketchEditor(QtCore.QObject):
             if locked and locked[0]:
                 self._add_dimension("diameter", [], [created[0]],
                                     2.0 * math.dist(start, end), locked[0])
+        elif tool == "offset" and created and locked and locked[0]:
+            self._dimension_offset_made(locked[0])
         elif tool == "line" and created:
             pts = s.entities[created[0]].points
             if locked and locked[0]:
@@ -1243,6 +1271,28 @@ class SketchEditor(QtCore.QObject):
                                     math.dist(start, end), locked[0])
             if len(locked) > 1 and locked[1]:
                 self._dimension_line_angle(created[0], locked[1])
+
+    def _dimension_offset_made(self, text: str) -> None:
+        """Put the typed gap on the first curve of an offset just made."""
+        made = getattr(self, "_offset_made", None)
+        if not made or self.sketch is None:
+            return
+        s = self.sketch
+        source, copy = made["pairs"][0]
+        d = made["d"]
+        if s.entities[source].kind == "line":
+            a, b = s.entities[source].points
+            # held on the side it was made on: the measured side follows
+            # the order the line's ends are given in
+            ends = [a, b] if made["signs"][0] * d > 0 else [b, a]
+            self._add_dimension("distance_pl",
+                                [s.entities[copy].points[0]] + ends, [],
+                                abs(d), text)
+        else:
+            inner, outer = ((source, copy)
+                            if s.entities[copy].radius > s.entities[source].radius
+                            else (copy, source))
+            self._add_dimension("radial_gap", [], [inner, outer], abs(d), text)
 
     def _dimension_line_angle(self, eid: int, text: str) -> None:
         """Hold a just-drawn line at the angle typed for it.
@@ -1760,33 +1810,95 @@ class SketchEditor(QtCore.QObject):
         self._touch()
 
     def _tool_offset(self, point, modifiers) -> None:
+        """Pick a curve, then place its loop's copy where the cursor is.
+
+        The first click takes the line, arc or circle and everything joined
+        to it end to end, the way Inventor's offset takes the loop.  From
+        then on the copy rides along under the cursor on whichever side it
+        is pulled to, so how it will look is seen before it is made.  A
+        click puts it there; a distance typed in the box beside the cursor
+        fixes the gap and Enter puts it there with that dimension on it.
+        """
         if not self._pending:
             eid, _ = self.pick(*point)
-            if eid is None or self.sketch.entities[eid].kind != "line":
+            if eid is None:
                 return
+            if self.sketch.entities[eid].kind not in ("line", "arc", "circle"):
+                self._complain("Offset works on lines, arcs and circles.")
+                return
+            chain, closed = self.sketch.offset_chain(eid)
+            if not chain:
+                return
+            self._offset_chain = (chain, closed)
             self._pending = [point]
-            self._offset_source = eid
             return
-        eid = getattr(self, "_offset_source", None)
-        if eid is None:
+        held = getattr(self, "_offset_chain", None)
+        if held is None:
             self._pending = []
             return
-        ent = self.sketch.entities[eid]
-        a = self.sketch.points[ent.points[0]]
-        b = self.sketch.points[ent.points[1]]
-        dx, dy = b.x - a.x, b.y - a.y
-        length = math.hypot(dx, dy)
-        if length < 1e-9:
-            self._pending = []
+        chain, closed = held
+        d = self._offset_gap(point)
+        if abs(d) < 1e-9:
             return
-        nx, ny = -dy / length, dx / length
-        side = (point[0] - a.x) * nx + (point[1] - a.y) * ny
-        new = self.sketch.add_line((a.x + nx * side, a.y + ny * side),
-                                   (b.x + nx * side, b.y + ny * side),
-                                   weld=False)
-        self.sketch.add_constraint("parallel", entities=[eid, new])
+        made = self.sketch.add_offset(chain, closed, d)
+        if made is None:
+            self._complain("That is too far in for a copy of the same shape.")
+            return
+        self._offset_made = made
         self._pending = []
+        self._offset_chain = None
         self._touch()
+
+    def _offset_gap(self, cursor) -> float:
+        """The offset the cursor asks for, or the one typed, on its side."""
+        held = getattr(self, "_offset_chain", None)
+        if held is None or self.sketch is None:
+            return 0.0
+        d = self.sketch.offset_distance(held[0], cursor)
+        locked = self.live.locked_values() if self.live.isVisible() else []
+        if locked and locked[0]:
+            try:
+                typed = evaluate(unitlib.for_storage(locked[0], self.units,
+                                                     unitlib.LENGTH),
+                                 self.params.scope() if self.params else {})
+            except (ExpressionError, TypeError):
+                return d
+            return math.copysign(abs(typed), d or 1.0)
+        return d
+
+    def _preview_offset(self, colour) -> None:
+        """The copy as it would be made, riding on the cursor."""
+        held = getattr(self, "_offset_chain", None)
+        if held is None or self.sketch is None:
+            return
+        chain, closed = held
+        s = self.sketch
+        # the loop being copied, so it is plain what was picked
+        for eid, _ in chain:
+            pts = s.entity_polyline(eid)
+            for a, b in zip(pts, pts[1:]):
+                self.viewport.draw_edge(self._to3d(a), self._to3d(b),
+                                        C.sketch_hover, 2.2, preview=True)
+        d = self._offset_gap(self._cursor)
+        layout = s.offset_layout(chain, closed, d) if abs(d) > 1e-9 else None
+        if layout is None:
+            return
+        joints, radii = layout["joints"], layout["radii"]
+        if not joints:
+            centre = s.points[s.entities[chain[0][0]].points[0]].as_tuple()
+            self._preview_circle(centre, radii[0], colour)
+            return
+        for k, (eid, forward) in enumerate(chain):
+            a = joints[k]
+            b = joints[(k + 1) % len(joints)] if closed else joints[k + 1]
+            entity = s.entities[eid]
+            if entity.kind == "line":
+                self.viewport.draw_edge(self._to3d(a), self._to3d(b), colour,
+                                        1.8, preview=True)
+            else:
+                centre = s.points[entity.points[0]].as_tuple()
+                start, end = (a, b) if forward else (b, a)
+                self._preview_arc(centre, radii[k], start, end, colour)
 
     def _tool_fillet2d(self, point, modifiers) -> None:
         eid, _pid = self.pick(*point)
@@ -2211,11 +2323,90 @@ class SketchEditor(QtCore.QObject):
 
     def _apply_new_dimension(self, target: Dict[str, Any],
                              offset: Tuple[float, float], text: str) -> None:
+        factor = self._autoscale_factor(target, text)
+        if factor is not None:
+            self._apply_scaled_dimension(target, offset, text, factor)
+            return
         cid = self._add_dimension(target["kind"], target["points"],
                                   target["entities"], target["current"], text)
         if cid is not None:
             self.sketch.constraints[cid].label_offset = offset
             self._touch()
+
+    # dimensions that are a length, the kind a first one can size a sketch by
+    AUTOSCALE_KINDS = ("distance", "distance_x", "distance_y", "distance_pl",
+                       "radius", "diameter", "radial_gap")
+
+    def _autoscale_factor(self, target: Dict[str, Any],
+                          text: str) -> Optional[float]:
+        """How much the first dimension of a fresh sketch scales it by.
+
+        Inventor's way: a first sketch is drawn at whatever size the screen
+        happened to show, so the first length typed into it says what size
+        it was meant to be, and the whole sketch grows or shrinks to that,
+        keeping its shape.  A 10 m wall typed onto a 40 mm square then
+        comes out a 10 m square, framed on the screen, instead of one line
+        stretched out of sight.  Only the first dimension, only while there
+        is no body yet to keep in proportion with, and never a sketch with
+        anything held in place.
+        """
+        s = self.sketch
+        if (s is None or not self.autoscale
+                or target.get("kind") not in self.AUTOSCALE_KINDS):
+            return None
+        current = float(target.get("current") or 0.0)
+        if current <= 1e-9:
+            return None
+        if any(c.is_dimension for c in s.constraints.values()):
+            return None
+        if s.projected_entities() or s.projections:
+            return None
+        if any(p.fixed and not p.origin for p in s.points.values()):
+            return None
+        try:
+            value, _ = self._typed(target["kind"], (text or "").strip())
+        except (ExpressionError, TypeError, ValueError):
+            return None
+        if value <= 1e-9:
+            return None
+        factor = value / current
+        return None if abs(factor - 1.0) < 1e-6 else factor
+
+    def _scale_sketch(self, factor: float) -> None:
+        """Grow or shrink the whole sketch about its origin."""
+        s = self.sketch
+        for point in s.points.values():
+            if not point.origin:
+                point.x *= factor
+                point.y *= factor
+        for entity in s.entities.values():
+            if entity.kind in ("circle", "arc"):
+                entity.radius *= factor
+        for c in s.constraints.values():
+            c.label_offset = (c.label_offset[0] * factor,
+                              c.label_offset[1] * factor)
+
+    def _apply_scaled_dimension(self, target: Dict[str, Any],
+                                offset: Tuple[float, float], text: str,
+                                factor: float) -> None:
+        """Scale the sketch to its first dimension, then put that on."""
+        self.begin_change()              # one undo takes both back
+        self._scale_sketch(factor)
+        cid = self._add_dimension(target["kind"], target["points"],
+                                  target["entities"],
+                                  target["current"] * factor, text)
+        if cid is None:
+            self._scale_sketch(1.0 / factor)
+            self.discard_change()
+            self.render()
+            return
+        self.discard_change()            # the dimension's own step
+        self.sketch.constraints[cid].label_offset = (offset[0] * factor,
+                                                     offset[1] * factor)
+        self._touch()
+        self.viewport.fit_all()
+        self.viewport.refresh_grid()
+        self.render()
 
     def _add_dimension(self, kind: str, points, entities, current: float,
                        text: str) -> Optional[int]:
@@ -2434,17 +2625,21 @@ class SketchEditor(QtCore.QObject):
             return
         if self._selection_satisfies(kind):
             self.apply_constraint(kind)
-            self._pending_constraint = None
-            self.hint_changed.emit(TOOL_HINTS.get(self.tool, ""))
-            return
+            self.clear_selection()
 
+        # it stays armed for the next pair and the one after, until Esc,
+        # because a sketch wants the same constraint a dozen times over
         self._pending_constraint = kind
         self.set_tool("select")
         self._pending_constraint = kind      # set_tool clears it, so re-arm
-        description, _e, _p = self.NEEDS[kind]
-        self.hint_changed.emit("%s: select %s. Esc to cancel."
-                               % (kind.replace("_", " ").title(), description))
+        self._constraint_hint(kind)
         self.constraint_armed.emit(kind)
+
+    def _constraint_hint(self, kind: str) -> None:
+        description, _e, _p = self.NEEDS[kind]
+        self.hint_changed.emit("%s: select %s. It stays on for the next; "
+                               "Esc when done."
+                               % (kind.replace("_", " ").title(), description))
 
     def _selection_satisfies(self, kind: str) -> bool:
         need_entities, need_points = self.NEEDS[kind][1], self.NEEDS[kind][2]
@@ -2476,11 +2671,11 @@ class SketchEditor(QtCore.QObject):
         if kind is None:
             return
         if self._selection_satisfies(kind):
-            self._pending_constraint = None
             self.apply_constraint(kind)
             self.clear_selection()
-            self.hint_changed.emit(TOOL_HINTS.get(self.tool, ""))
-            self.constraint_armed.emit("")
+            # still armed: the next pick starts the next one
+            self._pending_constraint = kind
+            self._constraint_hint(kind)
 
     def apply_constraint(self, kind: str) -> None:
         """Apply a constraint to the current sketch selection."""
@@ -3110,6 +3305,8 @@ class SketchEditor(QtCore.QObject):
                 self._preview_slot(p1, p2, width, colour)
         elif self.tool in VARIANT_PREVIEWS and self._pending:
             self._preview_variant(cur, colour)
+        elif self.tool == "offset" and self._pending:
+            self._preview_offset(colour)
         elif self.tool == "spline" and self._pending:
             pts = self._pending + [cur]
             for i in range(len(pts) - 1):

@@ -60,12 +60,18 @@ class C:
     sketch_preview = "#aebbc9"
 
     # 3d
-    bg_top = (0.168, 0.188, 0.208)
-    bg_bottom = (0.082, 0.090, 0.098)
-    material = (0.620, 0.667, 0.718)
-    material_edge = (0.129, 0.145, 0.161)
+    # a dark grey backdrop, a part in an off-white grey with its edges in
+    # black, the way Inventor shows a part nobody has painted yet.  These
+    # are linear light, which OCCT brightens on the way to the screen: the
+    # backdrop comes out about #424852 at the top and #1e2126 at the foot,
+    # a grey with only a breath of blue in it, as Inventor's is
+    bg_top = (0.0545, 0.0648, 0.0844)
+    bg_bottom = (0.0130, 0.0152, 0.0194)
+    material = (0.835, 0.839, 0.843)
+    material_edge = (0.0, 0.0, 0.0)
     highlight = (1.000, 0.812, 0.302)
-    preselect = (0.761, 0.800, 0.847)
+    # a clear blue: the old pale grey vanished against a white part
+    preselect = (0.050, 0.350, 1.000)
 
     # what a picked thing turns on a sheet of paper, where the background
     # is white and the silver of the chrome would vanish

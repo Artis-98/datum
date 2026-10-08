@@ -57,7 +57,10 @@ PLACE_GAP = 20.0
 
 # first pick, then second.  Two colours rather than one because when the
 # arrows end up nose to nose there is otherwise no telling them apart.
-ARROW_COLOURS = (C.ok, C.accent)
+# the first pick blue and the second purple, on the part, on its arrow
+# and under its button in the dialog, the way Inventor tells them apart
+PICK_COLOURS = ("#3d8bff", "#b05cff")
+ARROW_COLOURS = PICK_COLOURS
 
 
 class ConstraintDialog(QtWidgets.QDialog):
@@ -134,12 +137,14 @@ class ConstraintDialog(QtWidgets.QDialog):
         self.solution_row = self.form.add("Solution", self.solution)
 
         self.first = SelectionField("First")
+        self.first.set_mark(PICK_COLOURS[0])
         self.first.pick_toggled.connect(
             lambda on: self.arm(self.first if on else None))
         self.first.cleared.connect(lambda: self._clear(0))
         self.form.add("", self.first)
 
         self.second = SelectionField("Second")
+        self.second.set_mark(PICK_COLOURS[1])
         self.second.pick_toggled.connect(
             lambda on: self.arm(self.second if on else None))
         self.second.cleared.connect(lambda: self._clear(1))
@@ -256,7 +261,7 @@ class ConstraintDialog(QtWidgets.QDialog):
         if kind not in SOLUTIONS:
             return KIND_HINTS.get(kind, "")
         if self.constraint.a and self.constraint.a.valid:
-            return ("The green arrow is which way the first face looks; "
+            return ("The blue arrow is which way the first face looks; "
                     + ("the next face will be turned to meet it."
                        if kind == MATE else
                        "the next face will be turned the same way."))
@@ -347,9 +352,10 @@ class ConstraintDialog(QtWidgets.QDialog):
         if self._closed:
             return
         arrows = []
-        for attachment in (self.constraint.a, self.constraint.b):
+        for index, attachment in enumerate((self.constraint.a,
+                                            self.constraint.b)):
             if attachment and attachment.valid:
-                arrows.append((attachment, ARROW_COLOURS[len(arrows)]))
+                arrows.append((attachment, PICK_COLOURS[index]))
         self.controller.show_arrows(arrows)
 
     # ------------------------------------------------------------- applying
@@ -723,6 +729,11 @@ class AssemblyController(QtCore.QObject):
         if doc is None or not self._arrows:
             return
         for attachment, colour in self._arrows:
+            # the face or edge itself lit up in its colour, so it is plain
+            # which is first and which is second
+            shape = doc.world_shape(attachment)
+            if shape is not None:
+                self.viewport.draw_tint(shape, colour)
             frame = doc.world_frame(attachment)
             if frame is None:
                 continue

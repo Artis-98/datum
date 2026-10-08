@@ -234,6 +234,8 @@ def project(shape: Optional[TopoDS_Shape],
     if shape is None or shape.IsNull():
         return Projection(error="there is no geometry to draw")
 
+    # an unmarked seam would be drawn as a line down every cylinder
+    kernel.mark_seams(shape)
     frame = camera(direction, up)
     try:
         algo = HLRBRep_Algo()

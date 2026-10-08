@@ -114,6 +114,48 @@ jobs:
           cat selftest.txt
           grep -q "PASS" selftest.txt
 
+      - name: The 3D view opens, on this runner
+        run: |
+          xvfb-run -a -s "-screen 0 1600x1000x24" dist/DATUM/DATUM --glcheck glcheck.txt || true
+          cat glcheck.txt
+          grep -q "PASS" glcheck.txt
+
+      # Ubuntu 22.04 is what it was built on, so it proves little about a
+      # newer distribution: a build that carried its own copies of the
+      # system's libraries opened fine here and could not get OpenGL on
+      # CachyOS (GitHub #3).  Arch is as new as any, so the window is
+      # opened there too, with Arch's own Mesa.
+      - name: The 3D view opens, on a current distribution (Arch)
+        run: |
+          docker run --rm -v "$PWD/dist:/dist" archlinux:latest bash -c '
+            pacman -Syu --noconfirm --needed xorg-server-xvfb xorg-xauth mesa \
+              libglvnd libxkbcommon-x11 xcb-util-cursor xcb-util-wm \
+              xcb-util-image xcb-util-keysyms xcb-util-renderutil libxi libsm \
+              fontconfig ttf-dejavu dbus > /dev/null
+            cd /tmp
+            LIBGL_DEBUG=verbose xvfb-run -a -s "-screen 0 1600x1000x24" \
+              /dist/DATUM/DATUM --glcheck /tmp/glcheck.txt || true
+            cat /tmp/glcheck.txt
+            grep -q PASS /tmp/glcheck.txt'
+
+      - name: The published build, on Arch (for information)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.2.7 -p "*linux*" -D old || exit 0
+          mkdir -p oldbuild && tar -xzf old/*.tar.gz -C oldbuild
+          docker run --rm -v "$PWD/oldbuild:/old" archlinux:latest bash -c '
+            pacman -Syu --noconfirm --needed xorg-server-xvfb xorg-xauth mesa \
+              libglvnd libxkbcommon-x11 xcb-util-cursor xcb-util-wm \
+              xcb-util-image xcb-util-keysyms xcb-util-renderutil libxi libsm \
+              fontconfig ttf-dejavu dbus > /dev/null
+            cd /tmp
+            LIBGL_DEBUG=verbose timeout 40 xvfb-run -a -s "-screen 0 1600x1000x24" \
+              /old/DATUM/DATUM > /tmp/old.txt 2>&1
+            grep -iE "GL rendering|MESA|libstdc|GLIBCXX|failed to load|error" /tmp/old.txt | head -30'
+
       - name: Pack
         id: pack
         run: |

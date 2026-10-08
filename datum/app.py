@@ -174,6 +174,49 @@ def selftest(report_path: str = "") -> int:
         return 1
 
 
+def glcheck(app, window_class, report_path: str = "") -> int:
+    """Open the real window and say whether the 3D view got OpenGL.
+
+    The self test proves the build runs; this proves it can draw.  A
+    Linux build carrying its own copies of the system's graphics
+    libraries, or of the C++ runtime under them, starts, works headless,
+    and then cannot get an OpenGL window on any desktop newer than the
+    one it was built on.  Run on a current distribution, this catches
+    that before anyone downloads it.
+    """
+    import time
+
+    errors = []
+    sys.excepthook = lambda kind, value, tb: errors.append(
+        "%s: %s" % (kind.__name__, value))
+    window = window_class()
+    window.resize(1200, 800)
+    window.show()
+    app.processEvents()
+    # the start page hides the 3D view: a new part puts it on screen
+    window.new_document(prompt=False)
+    deadline = time.monotonic() + 4.0
+    while time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    drawn = bool(getattr(window.viewport, "_ready", False))
+    ok = drawn and not errors
+    lines = ["glcheck %s" % __version__,
+             "platform %s, session %s" % (app.platformName(),
+                                          os.environ.get("XDG_SESSION_TYPE",
+                                                         "?")),
+             "3D view ready: %s" % drawn]
+    lines += errors
+    lines.append("PASS" if ok else "FAIL")
+    text = "".join(line + chr(10) for line in lines)
+    if report_path:
+        with open(report_path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    else:
+        sys.stdout.write(text)
+    return 0 if ok else 1
+
+
 def main(argv=None) -> int:
     argv = list(sys.argv if argv is None else argv)
 
@@ -229,6 +272,11 @@ def main(argv=None) -> int:
     app.setStyleSheet(stylesheet())
     app.setStyle("Fusion")
     app.setStyleSheet(stylesheet())
+
+    if "--glcheck" in argv:
+        where = argv.index("--glcheck")
+        report = argv[where + 1] if len(argv) > where + 1 else ""
+        return glcheck(app, MainWindow, report)
 
     sys.excepthook = _excepthook
 

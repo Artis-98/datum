@@ -62,6 +62,38 @@ a = Analysis(
     noarchive=False,
 )
 
+# The machine's own graphics stack, and everything a current Mesa driver
+# pulls in under it, must come from the machine.  Bundled from the Ubuntu
+# 22.04 builder, an older libstdc++, libdrm, zlib or zstd sits first on the
+# library path, and the radeonsi or iris driver of a newer distribution
+# fails to load against it: the window then has no OpenGL and the 3D view
+# cannot start, which is what CachyOS reported (GitHub #3).  These are all
+# present wherever there is a desktop with OpenGL, and they only ever grow
+# newer symbols, never lose old ones, so the system's copy always serves.
+SYSTEM_LIBS = (
+    "libGL.so", "libGLX", "libGLdispatch", "libEGL", "libOpenGL",
+    "libGLU", "libgbm", "libdrm", "libglapi",
+    "libstdc++.so", "libgcc_s.so",
+    "libz.so", "libzstd.so", "libexpat.so", "libelf",
+    "libX11.so", "libX11-xcb", "libXext", "libXfixes", "libXxf86vm",
+    "libXrender", "libXdamage", "libXrandr", "libxshmfence",
+    "libxcb.so", "libxcb-dri", "libxcb-glx", "libxcb-present",
+    "libxcb-sync", "libxcb-xfixes", "libxcb-randr", "libxcb-shm",
+    "libwayland-",
+)
+
+
+def _from_the_system(entry) -> bool:
+    name = os.path.basename(entry[0])
+    return name.startswith(SYSTEM_LIBS)
+
+
+dropped = sorted(os.path.basename(e[0]) for e in a.binaries
+                 if _from_the_system(e))
+print("left to the system: %s" % ", ".join(dropped) if dropped
+      else "left to the system: nothing was bundled")
+a.binaries = [e for e in a.binaries if not _from_the_system(e)]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(

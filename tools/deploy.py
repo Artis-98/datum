@@ -50,8 +50,10 @@ from __future__ import annotations
 
 import argparse
 import ftplib
+import hashlib
 import json
 import os
+import re
 import ssl
 import sys
 import time
@@ -364,8 +366,44 @@ def do_release(version: str, force: bool = False) -> int:
     return do_check(version)
 
 
+def stamp_css(site: str) -> int:
+    """Point every page at style.css?v=<hash of the stylesheet>.
+
+    The host has nginx in front of Apache, and nginx serves static files
+    itself with a 30 day cache that .htaccess never sees. A stylesheet
+    changed under the same name would sit in visitors' browsers for a month.
+    The pages themselves are revalidated on every visit (.htaccess, no-cache),
+    so giving the stylesheet a new address whenever its content changes is
+    enough for a change to show at once. Pages are rewritten in place, so the
+    repository always shows what is live. Returns how many pages changed.
+    """
+    css = os.path.join(site, "style.css")
+    if not os.path.exists(css):
+        return 0
+    with open(css, "rb") as handle:
+        tag = hashlib.sha256(handle.read()).hexdigest()[:10]
+    pattern = re.compile(r'href="style\.css(?:\?v=[0-9a-f]*)?"')
+    wanted = 'href="style.css?v=%s"' % tag
+    changed = 0
+    for name in sorted(os.listdir(site)):
+        if not name.endswith(".html"):
+            continue
+        path = os.path.join(site, name)
+        with open(path, encoding="utf-8", newline="") as handle:
+            text = handle.read()
+        new = pattern.sub(wanted, text)
+        if new != text:
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                handle.write(new)
+            changed += 1
+    return changed
+
+
 def do_site() -> int:
     """Upload the website: every file under site/, bar the zip."""
+    stamped = stamp_css(SITE)
+    if stamped:
+        say("pointed %d page(s) at the current style.css" % stamped)
     pairs = []
     for base, _dirs, files in os.walk(SITE):
         for name in sorted(files):

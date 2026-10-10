@@ -538,6 +538,42 @@ footer {
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
+/* three groups by how soon: a coloured dot on the heading and the same
+ * colour down the edge of each card */
+.upcoming-group { --level: var(--silver-deep); }
+.upcoming-group.level-urgent { --level: var(--green); }
+.upcoming-group.level-high { --level: var(--amber); }
+.upcoming-group + .upcoming-group { margin-top: 28px; }
+.upcoming-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 4px;
+  font-size: 15px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.upcoming-head::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--level);
+  flex: none;
+}
+.upcoming-head .count {
+  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.upcoming-note {
+  margin: 0 0 12px;
+  color: var(--dim);
+  font-size: 14px;
+}
+.upcoming-group .upcoming-list li { border-left: 3px solid var(--level); }
+
 .upcoming-list .doing {
   display: inline-block;
   margin-left: 8px;
